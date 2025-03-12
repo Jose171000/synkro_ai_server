@@ -8,13 +8,19 @@ export class User {
     @Column({ unique: false, nullable: false })
     name: string;
 
+    @CreateDateColumn({ nullable: false })
+    nameCompany: string
+
+    @Column({nullable: false, unique: true})
+    cellphone: string;
+    
+    @Column({nullable: false})
+    country: string;
+
     @Column({nullable: false})
     lastName: string;
 
-    @Column({nullable: false})
-    cellphone: string;
-
-    @Column({nullable: false, unique: true})
+    @Column({nullable: false, unique: false})
     url: string;
 
     @Column({ unique: true })
@@ -29,6 +35,4 @@ export class User {
     @CreateDateColumn()
     createdAt: Date;
 
-    @CreateDateColumn({ nullable: false })
-    nameCompany: string
 }
