@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
 
-@Entity()
+@Entity("Users")
 export class User {
     @PrimaryGeneratedColumn()
     id: number;
@@ -12,7 +12,7 @@ export class User {
     nameCompany: string
 
     @Column({nullable: false, unique: true})
-    cellphone: string;
+    cellPhone: string;
     
     @Column({nullable: false})
     country: string;
