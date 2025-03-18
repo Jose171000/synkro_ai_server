@@ -16,4 +16,11 @@ export class AuthController {
     login(@Body() LoginDto: LoginDto) {
         return this.authService.login(LoginDto);
     }
+
+    @Post('logout')
+    logout() {
+        
+        return { message: 'Sesión cerrada' };
+    }
+    
 }
