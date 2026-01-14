@@ -1,17 +1,20 @@
-import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards } from "@nestjs/common";
+// user.controller.ts - CORREGIDO
+
+import { Controller, Get, Post, Body, Param, Delete, UseGuards, ParseUUIDPipe } from "@nestjs/common";
 import { UserService } from "./user.service";
 import { CreateUserDto } from "./dto/create-user.dto";
-import { Roles } from "src/common/decorators/roles.decoratos";
+import { Roles } from "src/common/decorators/roles.decorator"; // ← Corregido typo
 import { JwtAuthGuard } from "src/common/guards/jwt-auth.guard";
 import { RolesGuard } from "src/common/guards/roles.guard";
+import { UserRole } from "src/users/user-role";
 
 @Controller("users")
 export class UserController {
-    constructor(private readonly userService: UserService){}
+    constructor(private readonly userService: UserService) {}
 
     @Get()
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles('admin')
+    @Roles(UserRole.ADMIN)
     async findAll() {
         return this.userService.findAll();
     }
@@ -23,14 +26,14 @@ export class UserController {
 
     @Post()
     async createUser(@Body() createUserDto: CreateUserDto) {
-        const { id, email, password, name, nameCompany, cellPhone, country, lastName, url, role } = createUserDto;
-        return this.userService.createUser(id, email, password, name, nameCompany, cellPhone, country, lastName, url, role);
+        // Pasar el DTO completo, no parámetros individuales
+        return this.userService.createUser(createUserDto);
     }
 
-    @Delete()
+    @Delete(':id')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles('admin')
-    async deleteUser(@Query('id') id: number, @Query('email') email: string) {
-        return this.userService.deleteUser(id, email);
+    @Roles(UserRole.ADMIN)
+    async deleteUser(@Param('id', ParseUUIDPipe) id: string) {
+        return this.userService.deleteUser(id);
     }
 }
