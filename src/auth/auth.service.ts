@@ -30,13 +30,12 @@ export class AuthService {
       throw new ConflictException('El email ya está registrado');
     }
     
-    const hashedPassword = await bcrypt.hash(registerDto.password, 12);
     
     const user = await this.userService.createUser({
       name: registerDto.name,
       lastName: registerDto.lastName,
       email: registerDto.email,
-      password: hashedPassword,
+      password: registerDto.password,
       nameCompany: registerDto.nameCompany,
       cellPhone: registerDto.cellPhone,
       country: registerDto.country,
