@@ -1,7 +1,8 @@
-import {Injectable, NotFoundException} from '@nestjs/common';
-import {InjectRepository} from '@nestjs/typeorm';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
+import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { AIService } from 'src/ai/ai.service';
 
@@ -11,34 +12,37 @@ export class ProductsService {
         @InjectRepository(Product)
         private productRepository: Repository<Product>,
         private aiService: AIService,
-    ){}
+    ) { }
 
-    async create(createProductDto: CreateProductDto, userId: string){
+    async create(createProductDto: CreateProductDto, userId: string) {
+        const { images = [], ...productDetails } = createProductDto;
+
         const product = this.productRepository.create({
-            ...createProductDto,
-            owner: { id: userId}
+            ...productDetails,
+            owner: { id: userId },
+            images: images.map(url => this.productRepository.manager.create(ProductImage, { url }))
         });
         return this.productRepository.save(product);
     }
 
-    async findAll(userId: string){
+    async findAll(userId: string) {
         return this.productRepository.find({
             where: { owner: { id: userId } },
-            order: { createdAt: 'DESC'},
+            order: { createdAt: 'DESC' },
         });
     }
 
-    async findOne(id: string, userId: string){
+    async findOne(id: string, userId: string) {
         const product = await this.productRepository.findOne({
-            where: { id, owner: { id: userId}},
+            where: { id, owner: { id: userId } },
         });
-        if(!product){
+        if (!product) {
             throw new NotFoundException('Producto no encontrado');
         }
         return product;
     }
 
-    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[]}){
+    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }) {
         const product = await this.findOne(productId, userId);
 
         const aiContent = await this.aiService.generateProductContent({
@@ -58,13 +62,13 @@ export class ProductsService {
         return this.productRepository.save(product);
     };
 
-    async update(id: string, updateDto: Partial<CreateProductDto>, userId: string){
+    async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {
         const product = await this.findOne(id, userId);
         Object.assign(product, updateDto);
         return this.productRepository.save(product);
     }
 
-    async remove(id: string, userId: string){
+    async remove(id: string, userId: string) {
         const product = await this.findOne(id, userId);
         return this.productRepository.remove(product);
     }

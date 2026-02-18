@@ -1,5 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany } from "typeorm";
 import { User } from "src/users/entities/user.entity";
+import { ProductImage } from "./product-image.entity";
 
 @Entity('products')
 export class Product {
@@ -51,8 +52,8 @@ export class Product {
     stock: number;
 
     // Imágenes
-    @Column('simple-array', { nullable: true })
-    images: string[];
+    @OneToMany(() => ProductImage, (productImage) => productImage.product, { cascade: true, eager: true })
+    images: ProductImage[];
 
     // Marketplace sincronizados
     // @Column('jsonb', { nullable: true })
