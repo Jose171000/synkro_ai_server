@@ -4,14 +4,14 @@ import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
-import { AIService } from 'src/ai/ai.service';
+import { AiService } from 'src/ai/ai.service';
 
 @Injectable()
 export class ProductsService {
     constructor(
         @InjectRepository(Product)
         private productRepository: Repository<Product>,
-        private aiService: AIService,
+        private aiService: AiService,
     ) { }
 
     async create(createProductDto: CreateProductDto, userId: string) {
@@ -50,21 +50,47 @@ export class ProductsService {
             description: product.description,
             category: product.category,
             subcategory: product.subCategory,
-            targetMarketplaces: options?.marketplaces || product.targetMarketplaces,
+            targetMarketplaces: options?.marketplaces || product.targetMarketplaces || ['amazon', 'mercadolibre'],
             tone: options?.tone || 'professional',
         });
 
-        product.aiTitle = aiContent.title;
-        product.aiDescription = aiContent.description;
-        product.aiKeywords = aiContent.keywords;
-        product.aiAttributes = aiContent.attributes;
+        // El backend de DeepSeek envía la resputesta anidada por marketplace (e.g. { amazon: { title: "..." }, mercadolibre: {...} }
+        // Para simplificar la demo, guardaremos el payload completo de la IA como un JSON string en un campo genérico si lo deseas, 
+        // o mapearemos el primer marketplace devuelto a los campos genéricos del producto.
+        const firstMarketplaceData = Object.values(aiContent)[0] as any;
+
+        if (firstMarketplaceData) {
+            product.aiTitle = firstMarketplaceData.title || product.aiTitle;
+            product.aiDescription = firstMarketplaceData.description || product.aiDescription;
+            const bulletPoints = typeof firstMarketplaceData.bullet_points === 'string'
+                ? [firstMarketplaceData.bullet_points]
+                : firstMarketplaceData.bullet_points;
+
+            product.aiKeywords = bulletPoints || product.aiKeywords;
+
+            // The entity uses a transformer so we can assign an object directly
+            product.aiAttributes = typeof firstMarketplaceData.attributes === 'object'
+                ? firstMarketplaceData.attributes
+                : (typeof firstMarketplaceData === 'object' ? firstMarketplaceData : product.aiAttributes);
+        }
 
         return this.productRepository.save(product);
-    };
+    }
 
     async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {
         const product = await this.findOne(id, userId);
-        Object.assign(product, updateDto);
+
+        const { images, ...productDetails } = updateDto;
+        Object.assign(product, productDetails);
+
+        if (images && images.length > 0) {
+            product.images = images.map(url => this.productRepository.manager.create(ProductImage, { url }));
+        }
+
+        return this.productRepository.save(product);
+    }
+
+    async save(product: Product) {
         return this.productRepository.save(product);
     }
 

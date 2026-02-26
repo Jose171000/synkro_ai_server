@@ -1,10 +1,100 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { GenerateListingsDto } from './dto/generate-listings.dto';
 import { MARKETPLACE_PROMPT_RULES } from './marketplace.constants';
 import { MOCK_CATEGORY_TREE } from './marketplace-categories.constants';
+import OpenAI from 'openai';
 
 @Injectable()
+@Injectable()
 export class AiService {
+  private openai: OpenAI;
+
+  constructor() {
+    this.openai = new OpenAI({
+      baseURL: 'https://api.deepseek.com',
+      apiKey: process.env.DEEPSEEK_API_KEY,
+    });
+  }
+
+  /**
+   * ORCHESTRATOR: generateProductContent
+   * Orchestrates Phase A and Phase B to generate the final listings using DeepSeek.
+   */
+  public async generateProductContent(dto: { name: string, description: string, category?: string, subcategory?: string, targetMarketplaces: string[], tone?: string }) {
+    // 1. PHASE A: Ask DeepSeek to categorize the product
+    const categorizationPrompt = this.buildCategorizationPrompt(dto.name, dto.description, dto.targetMarketplaces);
+
+    let categoryRequirements: Record<string, string[]> = {};
+    let catJson: any = {};
+
+    try {
+      const catResponse = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
+          { role: 'user', content: categorizationPrompt }
+        ]
+      });
+
+      catJson = JSON.parse(catResponse.choices[0].message.content || '{}');
+
+      // Extract the required attributes from our MOCK_CATEGORY_TREE based on what the AI decided
+      dto.targetMarketplaces.forEach(marketplace => {
+        const electedId = catJson[`${marketplace.toLowerCase()}_category_id`];
+        const treeNodes = MOCK_CATEGORY_TREE[marketplace.toLowerCase()];
+
+        if (treeNodes && electedId) {
+          // Find the subcategory that matches the ID chosen by DeepSeek
+          for (const mainCat of treeNodes) {
+            const sub = mainCat.subcategories.find(s => s.id === electedId);
+            if (sub) {
+              categoryRequirements[marketplace.toLowerCase()] = sub.requiredAttributes;
+              break;
+            }
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('[AiService] Failed during Phase A Categorization:', error);
+      // Fallback: If category extraction fails, we just send empty requirements instead of crashing
+      categoryRequirements = {};
+    }
+
+    // 2. PHASE B: Construct and send the final prompt using the discovered requirements
+    const generatorDto: GenerateListingsDto = {
+      productName: dto.name,
+      description: dto.description,
+      targetMarketplaces: dto.targetMarketplaces,
+      categoryRequirements
+    };
+
+    const generationPrompt = this.buildDynamicPrompt(generatorDto);
+
+    try {
+      const finalResponse = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          { role: 'user', content: generationPrompt }
+        ]
+      });
+
+      const finalJson = JSON.parse(finalResponse.choices[0].message.content || '{}');
+
+      // Bundle the results from Phase A (Categorization) and Phase B (Generation) together
+      return {
+        categorizedAs: catJson,
+        generatedListings: finalJson
+      };
+
+    } catch (error) {
+      console.error('[AiService] Failed during Phase B Generation:', error);
+      throw new InternalServerErrorException('Failed to generate product content via AI.');
+    }
+  }
 
   /**
    * PHASE A: The Categorizer

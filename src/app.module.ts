@@ -6,6 +6,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/user.module';
 import { ProductModule } from './products/products.module';
 import { AiModule } from './ai/ai.module';
+import { BullModule } from '@nestjs/bullmq';
+import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
 
 @Module({
   imports: [
@@ -42,7 +44,14 @@ import { AiModule } from './ai/ai.module';
     AuthModule,
     UsersModule,
     ProductModule,
-    AiModule
+    AiModule,
+    BullModule.forRoot({
+      connection: {
+        host: '127.0.0.1',
+        port: 6379,
+      },
+    }),
+    BulkUploadModule
   ],
 })
 export class AppModule { }
