@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, Unique } from "typeorm";
 import { User } from "src/users/entities/user.entity";
 import { ProductImage } from "./product-image.entity";
 
 @Entity('products')
+@Unique('UQ_product_sku_owner', ['sku', 'owner'])
 export class Product {
     @PrimaryGeneratedColumn('uuid')
     id: string;
@@ -10,7 +11,7 @@ export class Product {
     @Column()
     name: string;
 
-    @Column({ unique: true })
+    @Column()
     sku: string;
 
     @Column('text')
@@ -26,15 +27,7 @@ export class Product {
     @Column('simple-array', { nullable: true })
     aiKeywords: string[];
 
-    @Column({
-        type: 'nvarchar',
-        length: 'MAX',
-        nullable: true,
-        transformer: {
-            to: (value: any) => value ? JSON.stringify(value) : null,
-            from: (value: string) => value ? JSON.parse(value) : null,
-        }
-    })
+    @Column({ type: 'jsonb', nullable: true })
     aiAttributes: Record<string, any>;
 
     // Categorización
@@ -59,15 +52,7 @@ export class Product {
     // @Column('jsonb', { nullable: true })
     // marketplaceIds: Record<string, string>;  // { mercadolibre: 'MLA123', amazon: 'ASIN456' }
 
-    @Column({
-        type: 'nvarchar',
-        length: 'MAX',
-        nullable: true,
-        transformer: {
-            to: (value: any) => value ? JSON.stringify(value) : null,
-            from: (value: string) => value ? JSON.parse(value) : null,
-        }
-    })
+    @Column({ type: 'jsonb', nullable: true })
     marketplaceIds: Record<string, string>;
 
 

@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
+import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { AiService } from 'src/ai/ai.service';
 
 @Injectable()
@@ -16,6 +17,16 @@ export class ProductsService {
 
     async create(createProductDto: CreateProductDto, userId: string) {
         const { images = [], ...productDetails } = createProductDto;
+
+        // Check for duplicate SKU within same user
+        const existing = await this.productRepository.findOne({
+            where: { sku: createProductDto.sku, owner: { id: userId } },
+        });
+        if (existing) {
+            throw new ConflictException(
+                `El SKU "${createProductDto.sku}" ya está en uso por el producto "${existing.name}". Por favor usa un SKU diferente.`
+            );
+        }
 
         const product = this.productRepository.create({
             ...productDetails,
@@ -75,6 +86,64 @@ export class ProductsService {
         }
 
         return this.productRepository.save(product);
+    }
+
+    async createWithAI(dto: CreateProductWithAiDto, userId: string) {
+        // Step 1: Check for duplicate SKU within same user BEFORE calling DeepSeek
+        const existing = await this.productRepository.findOne({
+            where: { sku: dto.sku, owner: { id: userId } },
+        });
+        if (existing) {
+            throw new ConflictException(
+                `El SKU "${dto.sku}" ya está en uso por el producto "${existing.name}". Por favor usa un SKU diferente.`
+            );
+        }
+
+        const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
+
+        const product = this.productRepository.create({
+            ...productDetails,
+            owner: { id: userId },
+            images: images.map(url => this.productRepository.manager.create(ProductImage, { url })),
+            status: 'pending',
+        });
+        const savedProduct = await this.productRepository.save(product);
+
+        // Step 2: Call DeepSeek (Phase A + Phase B)
+        const aiContent = await this.aiService.generateProductContent({
+            name: dto.name,
+            description: dto.description,
+            category: dto.category,
+            subcategory: dto.subCategory,
+            targetMarketplaces: targetMarketplaces || ['amazon', 'mercadolibre'],
+            tone: tone || 'professional',
+        });
+
+        // Step 3: Map AI results to product fields
+        const firstMarketplaceData = Object.values(aiContent.generatedListings || aiContent)[0] as any;
+
+        if (firstMarketplaceData) {
+            savedProduct.aiTitle = firstMarketplaceData.title || savedProduct.aiTitle;
+            savedProduct.aiDescription = firstMarketplaceData.description || savedProduct.aiDescription;
+
+            const bulletPoints = typeof firstMarketplaceData.bullet_points === 'string'
+                ? [firstMarketplaceData.bullet_points]
+                : firstMarketplaceData.bullet_points;
+
+            savedProduct.aiKeywords = bulletPoints || savedProduct.aiKeywords;
+            savedProduct.aiAttributes = typeof firstMarketplaceData.attributes === 'object'
+                ? firstMarketplaceData.attributes
+                : savedProduct.aiAttributes;
+        }
+
+        if (aiContent.categorizedAs) {
+            savedProduct.marketplaceIds = aiContent.categorizedAs;
+        }
+
+        savedProduct.status = 'synced';
+
+        // Step 4: Return the fully enriched product
+        return this.productRepository.save(savedProduct);
     }
 
     async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {

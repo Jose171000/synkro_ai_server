@@ -15,7 +15,7 @@ import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
       isGlobal: true,
       validationSchema: Joi.object({
         DB_HOST: Joi.string().required(),
-        DB_PORT: Joi.number().default(1433),
+        DB_PORT: Joi.number().default(5432),
         DB_USERNAME: Joi.string().required(),
         DB_PASSWORD: Joi.string().required(),
         DB_NAME: Joi.string().required(),
@@ -26,16 +26,12 @@ import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        type: 'mssql',
+        type: 'postgres',
         host: process.env.DB_HOST,
-        port: parseInt(process.env.DB_PORT || '1433'),
+        port: parseInt(process.env.DB_PORT || '5432'),
         username: process.env.DB_USERNAME,
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
-        options: {
-          encrypt: false,
-          trustServerCertificate: true,
-        },
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: configService.get('NODE_ENV') !== 'production',
       }),
