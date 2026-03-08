@@ -1,15 +1,19 @@
 import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { GenerateListingsDto } from './dto/generate-listings.dto';
 import { MARKETPLACE_PROMPT_RULES } from './marketplace.constants';
-import { MOCK_CATEGORY_TREE } from './marketplace-categories.constants';
+import { VectorSearchService } from '../categories/vector-search.service';
+import { CategorySeederService } from '../categories/category-seeder.service';
+import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/marketplace-category.entity';
 import OpenAI from 'openai';
 
-@Injectable()
 @Injectable()
 export class AiService {
   private openai: OpenAI;
 
-  constructor() {
+  constructor(
+    private readonly vectorSearchService: VectorSearchService,
+    private readonly categorySeederService: CategorySeederService,
+  ) {
     this.openai = new OpenAI({
       baseURL: 'https://api.deepseek.com',
       apiKey: process.env.DEEPSEEK_API_KEY,
@@ -21,13 +25,34 @@ export class AiService {
    * Orchestrates Phase A and Phase B to generate the final listings using DeepSeek.
    */
   public async generateProductContent(dto: { name: string, description: string, category?: string, subcategory?: string, targetMarketplaces: string[], tone?: string }) {
-    // 1. PHASE A: Ask DeepSeek to categorize the product
-    const categorizationPrompt = this.buildCategorizationPrompt(dto.name, dto.description, dto.targetMarketplaces);
-
-    let categoryRequirements: Record<string, string[]> = {};
+    let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
 
     try {
+      // PHASE A: Vector Search + LLM Categorization
+      // Step 1: Get the embedding for the product text
+      const productText = `${dto.name} ${dto.description}`;
+      const productEmbedding = await this.categorySeederService.generateEmbedding(productText);
+
+      // Step 2: For each marketplace, find the top 5 most semantically similar categories
+      const categoriesPerMarketplace: Record<string, MarketplaceCategory[]> = {};
+      for (const marketplace of dto.targetMarketplaces) {
+        const topCategories = await this.vectorSearchService.findSimilarCategories(
+          productEmbedding,
+          marketplace,
+          5,
+        );
+        categoriesPerMarketplace[marketplace.toLowerCase()] = topCategories;
+      }
+
+      // Step 3: Build the categorization prompt with only the relevant top-5 categories
+      const categorizationPrompt = this.buildCategorizationPrompt(
+        dto.name,
+        dto.description,
+        dto.targetMarketplaces,
+        categoriesPerMarketplace,
+      );
+
       const catResponse = await this.openai.chat.completions.create({
         model: 'deepseek-chat',
         response_format: { type: 'json_object' },
@@ -39,26 +64,18 @@ export class AiService {
 
       catJson = JSON.parse(catResponse.choices[0].message.content || '{}');
 
-      // Extract the required attributes from our MOCK_CATEGORY_TREE based on what the AI decided
+      // Step 4: Extract requiredAttributes from the matched category objects (already in memory)
       dto.targetMarketplaces.forEach(marketplace => {
         const electedId = catJson[`${marketplace.toLowerCase()}_category_id`];
-        const treeNodes = MOCK_CATEGORY_TREE[marketplace.toLowerCase()];
-
-        if (treeNodes && electedId) {
-          // Find the subcategory that matches the ID chosen by DeepSeek
-          for (const mainCat of treeNodes) {
-            const sub = mainCat.subcategories.find(s => s.id === electedId);
-            if (sub) {
-              categoryRequirements[marketplace.toLowerCase()] = sub.requiredAttributes;
-              break;
-            }
-          }
+        const topCats = categoriesPerMarketplace[marketplace.toLowerCase()] || [];
+        const matched = topCats.find(c => c.categoryId === electedId);
+        if (matched?.requiredAttributes) {
+          categoryRequirements[marketplace.toLowerCase()] = matched.requiredAttributes;
         }
       });
 
     } catch (error) {
       console.error('[AiService] Failed during Phase A Categorization:', error);
-      // Fallback: If category extraction fails, we just send empty requirements instead of crashing
       categoryRequirements = {};
     }
 
@@ -100,49 +117,48 @@ export class AiService {
    * PHASE A: The Categorizer
    * Builds a prompt asking the LLM to read the product and map it to our known Category IDs.
    */
-  public buildCategorizationPrompt(productName: string, description: string, targetMarketplaces: string[]): string {
+  public buildCategorizationPrompt(
+    productName: string,
+    description: string,
+    targetMarketplaces: string[],
+    categoriesPerMarketplace: Record<string, MarketplaceCategory[]>,
+  ): string {
     if (!targetMarketplaces || targetMarketplaces.length === 0) {
       throw new BadRequestException('At least one target marketplace must be specified.');
     }
 
     let prompt = `
 Eres un experto clasificador de catálogo e-commerce.
-Tu tarea es analizar el siguiente producto y asignarle la categoría MÁS ADECUADA dentro de nuestro árbol de categorías predefinido para cada marketplace solititado.
+Tu tarea es analizar el siguiente producto y asignarle la categoría MÁS ADECUADA de la lista pre-seleccionada para cada marketplace.
+Las categorías ya fueron pre-filtradas semánticamente, elige la que mejor encaje.
 
 **PRODUCTO:**
 - Nombre: ${productName}
 - Descripción: ${description}
 
-**ÁRBOL DE CATEGORÍAS DISPONIBLE:**
+**CATEGORÍAS CANDIDATAS (pre-filtradas por similitud semántica):**
 `;
 
-    // Inyectar solo las subcategorías de los marketplaces solicitados
     let jsonStructureExpected = '';
 
-    targetMarketplaces.forEach((marketplace, index) => {
-      const tree = MOCK_CATEGORY_TREE[marketplace.toLowerCase()];
-      if (tree) {
+    targetMarketplaces.forEach((marketplace) => {
+      const candidates = categoriesPerMarketplace[marketplace.toLowerCase()] || [];
+      if (candidates.length > 0) {
         prompt += `\n--- TARGET MARKETPLACE: ${marketplace.toUpperCase()} ---\n`;
-        tree.forEach((mainCat) => {
-          prompt += `Familia: ${mainCat.name}\n`;
-          mainCat.subcategories.forEach((sub) => {
-            prompt += `  ID: "${sub.id}" -> Nombre: ${sub.name}\n`;
-          });
+        candidates.forEach((cat) => {
+          prompt += `  ID: "${cat.categoryId}" -> Nombre: ${cat.name}\n`;
         });
-
-        jsonStructureExpected += `"${marketplace.toLowerCase()}_category_id": "STRING_ID"`;
-        if (index < targetMarketplaces.length - 1) jsonStructureExpected += ', ';
+        jsonStructureExpected += `  "${marketplace.toLowerCase()}_category_id": "<ID_elegido_de_la_lista_de_${marketplace}>",\n`;
       }
     });
 
     prompt += `
---------------------------------------------------------------------------------------
-**== FORMATO EXACTO DE RESPUESTA ==**
-Debes devolver ÚNICA Y OBLIGATORIAMENTE un JSON válido con los IDs exactos que elegiste (no inventes IDs que no estén en la lista de arriba):
-
+**INSTRUCCIÓN:**
+Responde ÚNICAMENTE con un objeto JSON con esta estructura exacta:
 {
-  ${jsonStructureExpected}
-}
+${jsonStructureExpected}}
+
+Elige el ID de categoría más apropiado de la lista. Si ninguna encaja, elige el más cercano.
 `;
 
     return prompt;
@@ -186,13 +202,33 @@ ${extractedAttributes ? '- Atributos extraídos: ' + JSON.stringify(extractedAtt
         const reqsForMarketplace = categoryRequirements?.[marketplace.toLowerCase()];
 
         if (reqsForMarketplace && reqsForMarketplace.length > 0) {
+          const required = reqsForMarketplace.filter((a: CategoryAttribute) => a.isRequired);
+          const optional = reqsForMarketplace.filter((a: CategoryAttribute) => !a.isRequired);
+
+          // Build structured attribute blocks for the LLM
+          let attributeBlock = '';
+          if (required.length > 0) {
+            attributeBlock += `\n    [OBLIGATORIOS — DEBES completar estos campos sin excepción]:\n`;
+            attributeBlock += required.map((a: CategoryAttribute) =>
+              `      • "${a.name}": ${a.description} (ejemplo: "${a.example}")`
+            ).join('\n');
+          }
+          if (optional.length > 0) {
+            attributeBlock += `\n    [OPCIONALES — completa si puedes inferirlos del producto]:\n`;
+            attributeBlock += optional.map((a: CategoryAttribute) =>
+              `      ◦ "${a.name}": ${a.description} (ejemplo: "${a.example}")`
+            ).join('\n');
+          }
+
           dynamicInstructions += rules.instructions + `
-      - REQUERIMIENTOS OBLIGATORIOS DE CATEGORÍA:
-    ATENCIÓN: Debes inferir de los datos extraídos y devolver estructurados OBLIGATORIAMENTE los siguientes atributos: ${reqsForMarketplace.join(', ')}.
+      - ATRIBUTOS DE CATEGORÍA:${attributeBlock}
     `;
 
-          // Construimos dinámicamente el objeto "attributes" en el JSON
-          const dynamicAttributesKeys = reqsForMarketplace.map(req => `"${req}": "string"`).join(', ');
+          // Build JSON schema: required attrs always included, optional marked with nullable hint
+          const requiredKeys = required.map((a: CategoryAttribute) => `"${a.name}": "${a.example}"`).join(', ');
+          const optionalKeys = optional.map((a: CategoryAttribute) => `"${a.name}": "${a.example} (opcional)"`).join(', ');
+          const allKeys = [requiredKeys, optionalKeys].filter(Boolean).join(', ');
+          const dynamicAttributesKeys = allKeys;
 
           // Inyectamos el nodo "attributes" justo antes de cerrar la llave final del esquema de este marketplace
           const modifiedJsonStructure = rules.jsonStructure.replace(

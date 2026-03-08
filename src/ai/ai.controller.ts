@@ -66,12 +66,11 @@ export class AiController {
         }
     })
     previewCategorizationPrompt(@Body() dto: GenerateListingsDto) {
-        const prompt = this.aiService.buildCategorizationPrompt(
-            dto.productName,
-            dto.description,
-            dto.targetMarketplaces,
-        );
-        return { promptPreview: prompt };
+        return this.aiService.generateProductContent({
+            name: dto.productName,
+            description: dto.description,
+            targetMarketplaces: dto.targetMarketplaces,
+        }).then(result => ({ categorizedAs: result.categorizedAs }));
     }
 
     @Post('generate-listings')

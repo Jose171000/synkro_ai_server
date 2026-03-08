@@ -1,5 +1,6 @@
 import { IsArray, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { CategoryAttribute } from '../../categories/entities/marketplace-category.entity';
 
 export class GenerateListingsDto {
     @ApiProperty({
@@ -43,5 +44,5 @@ export class GenerateListingsDto {
     })
     @IsObject()
     @IsOptional()
-    categoryRequirements?: Record<string, string[]>;
+    categoryRequirements?: Record<string, CategoryAttribute[]>;
 }

@@ -8,6 +8,8 @@ import { ProductModule } from './products/products.module';
 import { AiModule } from './ai/ai.module';
 import { BullModule } from '@nestjs/bullmq';
 import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
+import { CategoryModule } from './categories/category.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
@@ -41,13 +43,15 @@ import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
     UsersModule,
     ProductModule,
     AiModule,
+    CategoryModule,
     BullModule.forRoot({
       connection: {
         host: '127.0.0.1',
         port: 6379,
       },
     }),
-    BulkUploadModule
+    BulkUploadModule,
+    RedisModule,
   ],
 })
 export class AppModule { }
