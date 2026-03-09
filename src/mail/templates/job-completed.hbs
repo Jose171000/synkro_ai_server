@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procesamiento completado</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .header { background: #1a1a2e; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .header span { color: #6c63ff; }
+        .body { padding: 40px 32px; }
+        .body p { color: #444; line-height: 1.7; font-size: 15px; }
+        .stats { display: flex; gap: 16px; margin: 24px 0; }
+        .stat-box { flex: 1; border-radius: 8px; padding: 20px; text-align: center; }
+        .stat-box.success { background: #f0f0ff; border: 2px solid #6c63ff; }
+        .stat-box.failed  { background: #fff0f0; border: 2px solid #e55353; }
+        .stat-box .number { font-size: 48px; font-weight: bold; line-height: 1; }
+        .stat-box.success .number { color: #6c63ff; }
+        .stat-box.failed  .number { color: #e55353; }
+        .stat-box .label { font-size: 13px; color: #666; margin-top: 8px; }
+        .stat-single { background: #f0f0ff; border: 2px solid #6c63ff; border-radius: 8px; padding: 24px; text-align: center; margin: 24px 0; }
+        .stat-single .number { font-size: 48px; font-weight: bold; color: #6c63ff; line-height: 1; }
+        .stat-single .label  { font-size: 14px; color: #666; margin-top: 8px; }
+        .btn { display: inline-block; margin: 24px 0; padding: 14px 32px; background: #6c63ff; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #999; border-top: 1px solid #eee; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Synkro <span>AI</span></h1>
+        </div>
+        <div class="body">
+            <p>¡Hola, <strong>{{name}}</strong>! ✅</p>
+            <p>Tu carga masiva de <strong>{{jobType}}</strong> ha terminado de procesarse:</p>
+
+            {{#if hasFailed}}
+            <!-- Show two boxes when there are failures -->
+            <div class="stats">
+                <div class="stat-box success">
+                    <div class="number">{{totalProcessed}}</div>
+                    <div class="label">procesados correctamente</div>
+                </div>
+                <div class="stat-box failed">
+                    <div class="number">{{totalFailed}}</div>
+                    <div class="label">fallaron</div>
+                </div>
+            </div>
+            <p>Algunos registros no pudieron procesarse. Puedes revisar los detalles en tu dashboard y volver a intentarlo.</p>
+            {{else}}
+            <!-- All succeeded -->
+            <div class="stat-single">
+                <div class="number">{{totalProcessed}}</div>
+                <div class="label">registros procesados exitosamente</div>
+            </div>
+            <p>¡Todo salió perfecto! Puedes revisar tus productos desde el dashboard.</p>
+            {{/if}}
+
+            <p style="text-align: center;">
+                <a href="{{dashboardUrl}}" class="btn">Ver en Dashboard</a>
+            </p>
+        </div>
+        <div class="footer">
+            &copy; 2026 Synkro AI — Este es un email automático, por favor no respondas.
+        </div>
+    </div>
+</body>
+</html>

@@ -41,7 +41,7 @@ export class VectorSearchService {
                 embedding::text,
                 "createdAt",
                 "updatedAt",
-                (embedding <=> $1::vector) AS distance
+                (embedding::vector <=> $1::vector) AS distance
              FROM marketplace_categories
              WHERE marketplace = $2
                AND embedding IS NOT NULL

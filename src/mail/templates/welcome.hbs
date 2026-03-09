@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bienvenido a Synkro AI</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .header { background: #1a1a2e; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .header span { color: #6c63ff; }
+        .body { padding: 40px 32px; }
+        .body p { color: #444; line-height: 1.7; font-size: 15px; }
+        .features { display: flex; flex-direction: column; gap: 12px; margin: 24px 0; }
+        .feature { background: #f8f7ff; border-left: 4px solid #6c63ff; padding: 12px 16px; border-radius: 4px; font-size: 14px; color: #333; }
+        .btn { display: inline-block; margin: 24px 0; padding: 14px 32px; background: #6c63ff; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #999; border-top: 1px solid #eee; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Synkro <span>AI</span></h1>
+        </div>
+        <div class="body">
+            <p>¡Hola, <strong>{{name}}</strong>! 👋</p>
+            <p>Tu cuenta ha sido creada exitosamente. Ya puedes comenzar a generar listings optimizados para tus productos usando inteligencia artificial.</p>
+            <div class="features">
+                <div class="feature">🤖 <strong>IA generativa</strong> — Títulos, descripciones y bullet points optimizados para cada marketplace</div>
+                <div class="feature">📦 <strong>Carga masiva</strong> — Procesa cientos de productos en lote desde un archivo Excel</div>
+                <div class="feature">🏷️ <strong>Categorización RAG</strong> — Categorización semántica automática con vectores</div>
+            </div>
+            <p style="text-align: center;">
+                <a href="{{loginUrl}}" class="btn">Iniciar sesión</a>
+            </p>
+        </div>
+        <div class="footer">
+            &copy; 2026 Synkro AI — Este es un email automático, por favor no respondas.
+        </div>
+    </div>
+</body>
+</html>

@@ -11,6 +11,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { PasswordReset } from './entities/password-reset.entity';
 import { ConfigService } from '@nestjs/config';
 import { User } from '../users/entities/user.entity';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -18,6 +19,7 @@ export class AuthService {
     private userService: UserService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private mailService: MailService,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(PasswordReset)
@@ -44,6 +46,11 @@ export class AuthService {
     });
 
     const tokens = await this.generateTokens(user);
+
+    // Send welcome email (non-blocking — don't fail registration if email fails)
+    this.mailService.sendWelcome(user.email, user.name).catch(err =>
+      console.error('[AuthService] Failed to send welcome email:', err.message),
+    );
 
     return {
       user: this.sanitizeUser(user),
@@ -124,14 +131,13 @@ export class AuthService {
       user,
     });
 
-    // TODO: Enviar email con el token
-    // await this.emailService.sendPasswordResetEmail(user.email, token);
+    // Send password reset email
+    await this.mailService.sendPasswordReset(user.email, token);
 
     return {
       message: 'Si el email existe, se ha enviado un enlace de restablecimiento de contraseña',
-      // Solo para desarrollo, eliminar en producción
+      // Solo para desarrollo — muestra el token si el email falla o no está configurado
       ...(this.configService.get('NODE_ENV') !== 'production' && { resetToken: token }),
-
     };
   }
 

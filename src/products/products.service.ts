@@ -5,6 +5,7 @@ import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
+import { QueryProductsDto } from './dto/query-products.dto';
 import { AiService } from 'src/ai/ai.service';
 
 @Injectable()
@@ -36,11 +37,81 @@ export class ProductsService {
         return this.productRepository.save(product);
     }
 
-    async findAll(userId: string) {
-        return this.productRepository.find({
-            where: { owner: { id: userId } },
-            order: { createdAt: 'DESC' },
-        });
+    async findAll(userId: string, query: QueryProductsDto) {
+        const {
+            page = 1, limit = 20,
+            search, marketplace, category, subCategory,
+            minPrice, maxPrice, inStock,
+            sortBy = 'createdAt', order = 'desc',
+        } = query;
+
+        // Whitelist sortBy to prevent SQL injection via column name
+        const allowedSortFields: Record<string, string> = {
+            createdAt: 'product.createdAt',
+            name:      'product.name',
+            price:     'product.price',
+            stock:     'product.stock',
+            sku:       'product.sku',
+        };
+        const sortColumn = allowedSortFields[sortBy] ?? 'product.createdAt';
+
+        const qb = this.productRepository
+            .createQueryBuilder('product')
+            .leftJoinAndSelect('product.images', 'image')
+            .where('product.ownerId = :userId', { userId })
+            .orderBy(sortColumn, order.toUpperCase() as 'ASC' | 'DESC')
+            .skip((page - 1) * limit)
+            .take(limit);
+
+        // Full-text search across name, SKU and description
+        if (search) {
+            qb.andWhere(
+                '(product.name ILIKE :q OR product.sku ILIKE :q OR product.description ILIKE :q)',
+                { q: `%${search}%` },
+            );
+        }
+
+        // Marketplace filter — targetMarketplaces is a JSON/text[] column
+        if (marketplace) {
+            qb.andWhere(
+                `product.targetMarketplaces::text ILIKE :mp`,
+                { mp: `%${marketplace.toLowerCase()}%` },
+            );
+        }
+
+        if (category) {
+            qb.andWhere('product.category ILIKE :category', { category: `%${category}%` });
+        }
+
+        if (subCategory) {
+            qb.andWhere('product.subCategory ILIKE :subCategory', { subCategory: `%${subCategory}%` });
+        }
+
+        if (minPrice !== undefined) {
+            qb.andWhere('product.price >= :minPrice', { minPrice });
+        }
+
+        if (maxPrice !== undefined) {
+            qb.andWhere('product.price <= :maxPrice', { maxPrice });
+        }
+
+        if (inStock) {
+            qb.andWhere('product.stock > 0');
+        }
+
+        const [data, total] = await qb.getManyAndCount();
+
+        return {
+            data,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+                hasNextPage:     page < Math.ceil(total / limit),
+                hasPreviousPage: page > 1,
+            },
+        };
     }
 
     async findOne(id: string, userId: string) {

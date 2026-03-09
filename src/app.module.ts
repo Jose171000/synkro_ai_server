@@ -10,6 +10,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
 import { CategoryModule } from './categories/category.module';
 import { RedisModule } from './redis/redis.module';
+import { MailModule } from './mail/mail.module';
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
@@ -23,6 +25,15 @@ import { RedisModule } from './redis/redis.module';
         DB_NAME: Joi.string().required(),
         JWT_SECRET: Joi.string().required(),
         NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+        MAIL_HOST: Joi.string().default('smtp.gmail.com'),
+        MAIL_PORT: Joi.number().default(587),
+        MAIL_USER: Joi.string().required(),
+        MAIL_PASS: Joi.string().required(),
+        MAIL_FROM: Joi.string().required(),
+        FRONTEND_URL: Joi.string().default('http://localhost:3000'),
+        CLOUDINARY_CLOUD_NAME: Joi.string().required(),
+        CLOUDINARY_API_KEY: Joi.string().required(),
+        CLOUDINARY_API_SECRET: Joi.string().required(),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -52,6 +63,8 @@ import { RedisModule } from './redis/redis.module';
     }),
     BulkUploadModule,
     RedisModule,
+    MailModule,
+    UploadModule,
   ],
 })
 export class AppModule { }

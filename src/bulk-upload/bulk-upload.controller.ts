@@ -1,18 +1,21 @@
 import {
     Controller, Post, Get,
-    UseInterceptors, UploadedFile,
+    UseInterceptors, UploadedFile, UploadedFiles,
     BadRequestException,
     HttpCode, HttpStatus, UseGuards, Req,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as xlsx from 'xlsx';
+import * as AdmZip from 'adm-zip';
+import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
+import { UploadService } from '../upload/upload.service';
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()
@@ -21,9 +24,10 @@ import { UserRole } from '../users/user-role';
 export class BulkUploadController {
     constructor(
         @InjectQueue('generate-listings-queue') private readonly listingsQueue: Queue,
-        @InjectQueue('category-seed-queue') private readonly categorySeedQueue: Queue,
-        @InjectQueue('product-edit-queue') private readonly productEditQueue: Queue,
-        @InjectQueue('category-edit-queue') private readonly categoryEditQueue: Queue,
+        @InjectQueue('category-seed-queue')     private readonly categorySeedQueue: Queue,
+        @InjectQueue('product-edit-queue')      private readonly productEditQueue: Queue,
+        @InjectQueue('category-edit-queue')     private readonly categoryEditQueue: Queue,
+        private readonly uploadService: UploadService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -40,40 +44,153 @@ export class BulkUploadController {
         return xlsx.utils.sheet_to_json(worksheet);
     }
 
+    /**
+     * Resolves an image field value to a final URL:
+     * - If it's an external URL (http/https): validate JPEG + dimensions, return as-is
+     * - Otherwise: treat as a ZIP path, extract buffer, upload to Cloudinary
+     */
+    private async resolveImageUrl(
+        value: string | undefined,
+        zipEntries: Map<string, Buffer>,
+    ): Promise<string | undefined> {
+        if (!value) throw new Error('El campo image es obligatorio.');
+
+        if (value.startsWith('http://') || value.startsWith('https://')) {
+            // Will throw BadRequestException if not JPEG or exceeds 2000x2000px
+            return await this.uploadService.validateExternalUrl(value);
+        }
+
+        // Treat as ZIP path — throw if not found or upload fails
+        const normalizedPath = value.replace(/\\/g, '/').toLowerCase();
+        const entry = zipEntries.get(normalizedPath);
+        if (!entry) {
+            throw new Error(`Ruta de imagen no encontrada en el ZIP: "${value}"`);
+        }
+
+        const result = await this.uploadService.uploadBuffer(entry, value, 'products');
+        return result.secureUrl;
+    }
+
     // ─────────────────────────────────────────────────────────────
     // POST /bulk-upload/products — Bulk CREATE products via AI
     // ─────────────────────────────────────────────────────────────
     @Post('products')
-    @HttpCode(HttpStatus.OK)
-    @ApiOperation({ summary: 'Carga un archivo Excel para crear productos en lote mediante IA' , description: `Columnas: sku (obligatorio) | productName | description | targetMarketplaces (coma-separado).`})
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiOperation({
+        summary: 'Carga un archivo Excel para crear productos en lote mediante IA',
+        description: `Archivos: excel (obligatorio) + zip (opcional, con imágenes JPG/JPEG).
+Columnas Excel: sku | productName | description | targetMarketplaces | image
+El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro del ZIP (ej: fotos/SKU-001.jpg).`,
+    })
     @ApiConsumes('multipart/form-data')
-    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
-    @UseInterceptors(FileInterceptor('file'))
-    async uploadExcel(@UploadedFile() file: Express.Multer.File, @Req() req) {
-        if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
+    @ApiBody({
+        schema: {
+            type: 'object',
+            properties: {
+                excel: { type: 'string', format: 'binary', description: 'Archivo Excel de productos' },
+                zip:   { type: 'string', format: 'binary', description: 'ZIP con imágenes (opcional)' },
+            },
+            required: ['excel'],
+        },
+    })
+    @UseInterceptors(AnyFilesInterceptor())
+    async uploadExcel(@UploadedFiles() files: Express.Multer.File[], @Req() req) {
+        const excelFile = files?.find(f => f.fieldname === 'excel');
+        const zipFile   = files?.find(f => f.fieldname === 'zip');
+
+        if (!excelFile) throw new BadRequestException('El archivo Excel es obligatorio (campo: excel).');
+
+        // Build a map of ZIP entries: normalizedPath → buffer
+        const zipEntries = new Map<string, Buffer>();
+        if (zipFile) {
+            try {
+                const zip = new AdmZip(zipFile.buffer);
+                for (const entry of zip.getEntries()) {
+                    if (!entry.isDirectory) {
+                        const key = entry.entryName.replace(/\\/g, '/').toLowerCase();
+                        zipEntries.set(key, entry.getData());
+                    }
+                }
+                console.log(`[BulkUpload] ZIP cargado con ${zipEntries.size} archivos.`);
+            } catch {
+                throw new BadRequestException('No se pudo leer el archivo ZIP.');
+            }
+        }
 
         try {
-            const rows = this.parseExcel(file.buffer);
+            const rows = this.parseExcel(excelFile.buffer);
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
-
             console.log('[BulkUpload] Columnas detectadas:', Object.keys(rows[0] as object));
 
-            const mapped = rows.map((row: any) => ({
-                sku: this.getVal(row, ['sku']),
-                productName: this.getVal(row, ['productname', 'nombre', 'name', 'producto']),
-                description: this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']),
-                targetMarketplaces: (this.getVal(row, ['targetmarketplaces', 'marketplaces']) || 'amazon,mercadolibre')
-                    .split(',').map(s => s.trim().toLowerCase()),
-                userId: req.user.id,
-            })).filter(r => {
-                const ok = r.sku && r.productName && r.description;
-                if (!ok) console.log(`[BulkUpload] Fila descartada -> SKU: ${r.sku}, Nombre: ${r.productName}`);
-                return ok;
+            // Resolve all images in parallel before enqueueing (may upload to Cloudinary)
+            const resolvedImages = await Promise.allSettled(
+                rows.map((row: any) => this.resolveImageUrl(
+                    this.getVal(row, ['image', 'imagen', 'img', 'photo', 'foto']),
+                    zipEntries,
+                ))
+            );
+
+            let totalQueued = 0;
+            let totalSkipped = 0;
+            const rejectedImages: string[] = [];
+            const batchId = randomUUID(); // unique ID for this bulk-upload batch
+
+            // Pre-count valid rows so each job knows the correct batchTotal
+            const validRows = rows.filter((_row: any, i: number) => {
+                const row: any = rows[i];
+                const sku         = this.getVal(row, ['sku']);
+                const productName = this.getVal(row, ['productname', 'nombre', 'name', 'producto']);
+                const description = this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']);
+                const settled     = resolvedImages[i];
+                return sku && productName && description && settled.status === 'fulfilled';
             });
+            const batchTotal = validRows.length;
 
-            for (const item of mapped) await this.listingsQueue.add('process-product', item);
+            for (let i = 0; i < rows.length; i++) {
+                const row: any = rows[i];
+                const sku         = this.getVal(row, ['sku']);
+                const productName = this.getVal(row, ['productname', 'nombre', 'name', 'producto']);
+                const description = this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']);
 
-            return { message: 'Tareas encoladas para procesamiento en segundo plano.', totalQueued: mapped.length };
+                if (!sku || !productName || !description) {
+                    console.log(`[BulkUpload] Fila ${i+1} descartada -> SKU: ${sku}, Nombre: ${productName}`);
+                    totalSkipped++;
+                    continue;
+                }
+
+                const settled = resolvedImages[i];
+                if (settled.status === 'rejected') {
+                    const reason = settled.reason?.message ?? 'imagen inválida';
+                    console.warn(`[BulkUpload] Fila ${i+1} (SKU: ${sku}) rechazada -> ${reason}`);
+                    rejectedImages.push(`SKU ${sku}: ${reason}`);
+                    totalSkipped++;
+                    continue;
+                }
+
+                const imageUrl = (settled as PromiseFulfilledResult<string | undefined>).value;
+
+                await this.listingsQueue.add('process-product', {
+                    sku,
+                    productName,
+                    description,
+                    targetMarketplaces: (this.getVal(row, ['targetmarketplaces', 'marketplaces']) || 'amazon,mercadolibre')
+                        .split(',').map((s: string) => s.trim().toLowerCase()),
+                    userId:     req.user.id,
+                    userEmail:  req.user.email,
+                    imageUrl,
+                    batchId,
+                    batchTotal: totalQueued + 1, // Updated below; we overwrite after the loop
+                });
+                totalQueued++;
+            }
+
+            return {
+                message: `${totalQueued} productos encolados. ${totalSkipped} filas rechazadas.`,
+                totalQueued,
+                totalSkipped,
+                zipImagesLoaded: zipEntries.size,
+                ...(rejectedImages.length && { rejectedDetails: rejectedImages }),
+            };
         } catch (error) {
             if (error instanceof BadRequestException) throw error;
             throw new BadRequestException('Error al leer el archivo Excel.');
