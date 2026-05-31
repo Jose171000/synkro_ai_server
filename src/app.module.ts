@@ -34,6 +34,10 @@ import { UploadModule } from './upload/upload.module';
         CLOUDINARY_CLOUD_NAME: Joi.string().required(),
         CLOUDINARY_API_KEY: Joi.string().required(),
         CLOUDINARY_API_SECRET: Joi.string().required(),
+        OPENAI_API_KEY: Joi.string().required(),
+        DEEPSEEK_API_KEY: Joi.string().required(),
+        REDIS_HOST: Joi.string().default('127.0.0.1'),
+        REDIS_PORT: Joi.number().default(6379),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -57,8 +61,8 @@ import { UploadModule } from './upload/upload.module';
     CategoryModule,
     BullModule.forRoot({
       connection: {
-        host: '127.0.0.1',
-        port: 6379,
+        host: process.env.REDIS_HOST || '127.0.0.1',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
       },
     }),
     BulkUploadModule,

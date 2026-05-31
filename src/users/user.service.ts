@@ -44,11 +44,23 @@ export class UserService {
 
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
     const user = await this.findById(userId);
-    if (!user) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
-    
-    await this.userRepository.update(userId, { password: hashedPassword });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    user.password = hashedPassword;
+    await this.userRepository.save(user);
+  }
+
+  async updateProfile(
+    userId: string,
+    data: { name?: string; lastName?: string },
+  ): Promise<User> {
+    const user = await this.findById(userId);
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // Aplica solo los campos que vienen definidos
+    if (data.name     !== undefined) user.name     = data.name;
+    if (data.lastName !== undefined) user.lastName = data.lastName;
+
+    return this.userRepository.save(user);
   }
 
   async deleteUser(id: string): Promise<void> {
@@ -57,4 +69,4 @@ export class UserService {
       throw new NotFoundException('Usuario no encontrado');
     }
   }
-}
+}

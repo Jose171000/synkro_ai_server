@@ -1,21 +1,28 @@
-import { Controller, Post, Body, UseGuards, Get, Req } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Req, Patch } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
-import { ApiBearerAuth, ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { ApiStandardResponse } from 'src/common/decorators/api-standard-response.decorator';
 import { AuthResponseDto, TokenResponseDto, UserResponseDto } from './dto/auth-response.dto';
 import { MessageResponseDto } from './dto/message-response.dto';
+import { MailService } from 'src/mail/mail.service';
+import { SendTestEmailDto } from './dto/send-test-email.dto';
 
 @ApiTags('auth')
 @ApiBearerAuth()
 @Controller('auth')
 export class AuthController {
-    constructor(private authService: AuthService) { }
+    constructor(
+        private authService: AuthService,
+        private mailService: MailService,
+    ) { }
 
     @Post('register')
     @ApiOperation({ summary: 'Register a new user' })
@@ -69,5 +76,32 @@ export class AuthController {
     @ApiStandardResponse(UserResponseDto)
     getProfile(@Req() req) {
         return req.user;
+    }
+
+    @Patch('profile')
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: 'Update name and last name' })
+    @ApiStandardResponse(UserResponseDto)
+    updateProfile(@Req() req, @Body() updateProfileDto: UpdateProfileDto) {
+        return this.authService.updateProfile(req.user.sub, updateProfileDto);
+    }
+
+    @Patch('change-password')
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: 'Change current user password' })
+    @ApiStandardResponse(MessageResponseDto)
+    changePassword(@Req() req, @Body() changePasswordDto: ChangePasswordDto) {
+        return this.authService.changePassword(req.user.sub, changePasswordDto);
+    }
+
+    // ⚠️ Solo para desarrollo — eliminar antes de producción
+    @Post('test-email')
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: '[DEV] Send a test email' })
+    @ApiBody({ type: SendTestEmailDto })
+    @ApiStandardResponse(MessageResponseDto)
+    async sendTestEmail(@Body() dto: SendTestEmailDto) {
+        await this.mailService.sendTestEmail(dto.to, dto.name);
+        return { message: `Email de prueba enviado a ${dto.to}` };
     }
 }

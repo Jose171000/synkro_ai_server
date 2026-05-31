@@ -179,7 +179,7 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
                     userEmail:  req.user.email,
                     imageUrl,
                     batchId,
-                    batchTotal: totalQueued + 1, // Updated below; we overwrite after the loop
+                    batchTotal, // Pre-computed before the loop: always the same correct value for all jobs
                 });
                 totalQueued++;
             }

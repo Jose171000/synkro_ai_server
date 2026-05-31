@@ -12,6 +12,8 @@ import { PasswordReset } from './entities/password-reset.entity';
 import { ConfigService } from '@nestjs/config';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Injectable()
 export class AuthService {
@@ -98,11 +100,13 @@ export class AuthService {
   }
 
   async logout(userId: string) {
-    // Revocar todos los refresh tokens del usuario
-    await this.refreshTokenRepository.update(
-      { user: { id: userId } },
-      { isRevoked: true },
-    );
+    // repository.update({ user: { id } }) no soporta relaciones anidadas en TypeORM
+    await this.refreshTokenRepository
+      .createQueryBuilder()
+      .update(RefreshToken)
+      .set({ isRevoked: true })
+      .where('userId = :userId', { userId })
+      .execute();
 
     return { message: 'Sesión cerrada exitosamente' };
   }
@@ -116,10 +120,12 @@ export class AuthService {
     }
 
     // Invalidar tokens anteriores
-    await this.passwordResetRepository.update(
-      { user: { id: user.id }, isUsed: false },
-      { isUsed: true },
-    );
+    await this.passwordResetRepository
+      .createQueryBuilder()
+      .update(PasswordReset)
+      .set({ isUsed: true })
+      .where('userId = :userId AND isUsed = :isUsed', { userId: user.id, isUsed: false })
+      .execute();
 
     // Crear nuevo token
     const token = crypto.randomBytes(32).toString('hex');
@@ -164,10 +170,12 @@ export class AuthService {
     await this.passwordResetRepository.save(resetEntity);
 
     // Revocar todos los refresh tokens (forzar re-login)
-    await this.refreshTokenRepository.update(
-      { user: { id: resetEntity.user.id } },
-      { isRevoked: true },
-    );
+    await this.refreshTokenRepository
+      .createQueryBuilder()
+      .update(RefreshToken)
+      .set({ isRevoked: true })
+      .where('userId = :userId', { userId: resetEntity.user.id })
+      .execute();
 
     return { message: 'Contraseña actualizada exitosamente' };
   }
@@ -201,4 +209,24 @@ export class AuthService {
     return result;
   }
 
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const user = await this.userService.updateProfile(userId, {
+      name: dto.name,
+      lastName: dto.lastName,
+    });
+    return this.sanitizeUser(user);
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Usuario no encontrado');
+
+    const isValid = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!isValid) throw new BadRequestException('La contraseña actual es incorrecta');
+
+    const hashed = await bcrypt.hash(dto.newPassword, 12);
+    await this.userService.updatePassword(userId, hashed);
+
+    return { message: 'Contraseña actualizada exitosamente' };
+  }
 }

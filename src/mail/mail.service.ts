@@ -61,4 +61,20 @@ export class MailService {
             },
         });
     }
+
+    async sendTestEmail(to: string, name: string): Promise<void>{
+        await this.mailerService.sendMail({
+            to,
+            subject: 'Este es un email de prueba',
+            template: 'job-completed',
+            context:{
+                name,
+                jobType: 'Test',
+                totalProcessed: 1,
+                totalFailed: 0,
+                hasFailed: false,
+                dashboardUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`,
+            }
+        })
+    }
 }

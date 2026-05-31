@@ -136,10 +136,10 @@ export class ProductsService {
             tone: options?.tone || 'professional',
         });
 
-        // El backend de DeepSeek envía la resputesta anidada por marketplace (e.g. { amazon: { title: "..." }, mercadolibre: {...} }
-        // Para simplificar la demo, guardaremos el payload completo de la IA como un JSON string en un campo genérico si lo deseas, 
-        // o mapearemos el primer marketplace devuelto a los campos genéricos del producto.
-        const firstMarketplaceData = Object.values(aiContent)[0] as any;
+        // aiContent has shape { categorizedAs: {...}, generatedListings: { amazon: {...}, mercadolibre: {...} } }
+        // We pick the first marketplace entry from generatedListings to populate the generic AI fields.
+        const generatedListings = aiContent.generatedListings ?? aiContent;
+        const firstMarketplaceData = Object.values(generatedListings)[0] as any;
 
         if (firstMarketplaceData) {
             product.aiTitle = firstMarketplaceData.title || product.aiTitle;
@@ -153,7 +153,7 @@ export class ProductsService {
             // The entity uses a transformer so we can assign an object directly
             product.aiAttributes = typeof firstMarketplaceData.attributes === 'object'
                 ? firstMarketplaceData.attributes
-                : (typeof firstMarketplaceData === 'object' ? firstMarketplaceData : product.aiAttributes);
+                : product.aiAttributes;
         }
 
         return this.productRepository.save(product);
