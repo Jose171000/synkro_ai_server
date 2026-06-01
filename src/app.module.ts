@@ -38,6 +38,7 @@ import { UploadModule } from './upload/upload.module';
         DEEPSEEK_API_KEY: Joi.string().required(),
         REDIS_HOST: Joi.string().default('127.0.0.1'),
         REDIS_PORT: Joi.number().default(6379),
+        REDIS_PASSWORD: Joi.string().optional().allow(''),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -50,7 +51,7 @@ import { UploadModule } from './upload/upload.module';
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV') !== 'production',
+        synchronize: configService.get('NODE_ENV') !== 'productions',
       }),
       inject: [ConfigService],
     }),
@@ -63,6 +64,7 @@ import { UploadModule } from './upload/upload.module';
       connection: {
         host: process.env.REDIS_HOST || '127.0.0.1',
         port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD || "",
       },
     }),
     BulkUploadModule,
