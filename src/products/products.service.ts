@@ -6,6 +6,7 @@ import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
+import { ExportQueryDto } from '../export/dto/export-query.dto';
 import { AiService } from 'src/ai/ai.service';
 
 @Injectable()
@@ -215,6 +216,50 @@ export class ProductsService {
 
         // Step 4: Return the fully enriched product
         return this.productRepository.save(savedProduct);
+    }
+
+    async findAllForExport(userId: string, filters?: ExportQueryDto): Promise<Product[]> {
+        const qb = this.productRepository
+            .createQueryBuilder('product')
+            .leftJoinAndSelect('product.images', 'image')
+            .where('product.ownerId = :userId', { userId })
+            .orderBy('product.createdAt', 'DESC');
+
+        if (filters?.search) {
+            qb.andWhere(
+                '(product.name ILIKE :q OR product.sku ILIKE :q OR product.description ILIKE :q)',
+                { q: `%${filters.search}%` },
+            );
+        }
+
+        if (filters?.marketplace) {
+            qb.andWhere(
+                `product.targetMarketplaces::text ILIKE :mp`,
+                { mp: `%${filters.marketplace.toLowerCase()}%` },
+            );
+        }
+
+        if (filters?.category) {
+            qb.andWhere('product.category ILIKE :category', { category: `%${filters.category}%` });
+        }
+
+        if (filters?.subCategory) {
+            qb.andWhere('product.subCategory ILIKE :subCategory', { subCategory: `%${filters.subCategory}%` });
+        }
+
+        if (filters?.minPrice !== undefined) {
+            qb.andWhere('product.price >= :minPrice', { minPrice: filters.minPrice });
+        }
+
+        if (filters?.maxPrice !== undefined) {
+            qb.andWhere('product.price <= :maxPrice', { maxPrice: filters.maxPrice });
+        }
+
+        if (filters?.inStock) {
+            qb.andWhere('product.stock > 0');
+        }
+
+        return qb.getMany();
     }
 
     async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {

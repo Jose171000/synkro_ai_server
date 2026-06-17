@@ -168,6 +168,24 @@ La documentación Swagger está disponible en `http://localhost:3001/api/docs`.
 | POST | `/image` | Subir una imagen a Cloudinary (multipart) |
 | POST | `/image-from-url` | Validar y registrar imagen externa (JPEG, ≤ 2000×2000px) |
 
+### 📥 Export — `/api/v1/export` *(requiere JWT)*
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| GET | `/products/:format` | Exportar catálogo completo de productos (`json`, `csv`, `xlsx`) |
+| GET | `/ai-content/:format` | Exportar contenido generado por IA (`json`, `csv`, `xlsx`) |
+
+**Formatos soportados:** `json`, `csv`, `xlsx`
+
+**Filtros opcionales (query params):**
+`search`, `marketplace`, `category`, `subCategory`, `minPrice`, `maxPrice`, `inStock`
+
+**Campos exportados en `/products/:format`:**
+`id`, `name`, `sku`, `description`, `category`, `subCategory`, `price`, `stock`, `status`, `targetMarketplaces`, `images`, `createdAt`, `updatedAt`
+
+**Campos exportados en `/ai-content/:format`:**
+`id`, `name`, `sku`, `aiTitle`, `aiDescription`, `aiKeywords`, `aiAttributes`, `marketplaceIds`, `targetMarketplaces`, `status`
+
 ---
 
 ## 📦 Módulos
@@ -180,6 +198,7 @@ src/
 ├── categories/      # Entidad marketplace_categories + vector search + seeder
 ├── common/          # Guards, decorators, interceptors compartidos
 ├── config/          # Swagger config, TypeORM config
+├── export/          # Exportación de productos y contenido IA (JSON, CSV, XLSX)
 ├── mail/            # Templates Handlebars + envío de emails
 ├── products/        # CRUD de productos + integración IA
 ├── redis/           # Módulo ioredis inyectable (caché de embeddings)

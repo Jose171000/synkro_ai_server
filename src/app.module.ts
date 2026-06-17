@@ -12,6 +12,7 @@ import { CategoryModule } from './categories/category.module';
 import { RedisModule } from './redis/redis.module';
 import { MailModule } from './mail/mail.module';
 import { UploadModule } from './upload/upload.module';
+import { ExportModule } from './export/export.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { UploadModule } from './upload/upload.module';
     RedisModule,
     MailModule,
     UploadModule,
+    ExportModule,
   ],
 })
 export class AppModule { }

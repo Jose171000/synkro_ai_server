@@ -9,8 +9,9 @@ dns.setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const frontendURLs = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['*'];
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:8080',
+    origin: frontendURLs,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
