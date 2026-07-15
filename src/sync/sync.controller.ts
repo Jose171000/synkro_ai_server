@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
@@ -33,10 +34,30 @@ export class SyncController {
 
     // Public: Mercado Libre redirects the seller's browser here after authorizing.
     // Identity is resolved via the `state` stored in Redis, not via JWT.
+    // Redirects back to the frontend so the user lands on the dashboard.
     @Get('mercadolibre/callback')
-    @ApiOperation({ summary: 'Callback OAuth de Mercado Libre (público)' })
-    handleMeliCallback(@Query('code') code: string, @Query('state') state: string) {
-        return this.syncService.handleMeliCallback(code, state);
+    @ApiOperation({ summary: 'Callback OAuth de Mercado Libre (público, redirige al frontend)' })
+    async handleMeliCallback(
+        @Query('code') code: string,
+        @Query('state') state: string,
+        @Res() res: Response,
+    ) {
+        const frontend = process.env.FRONTEND_URL || 'http://localhost:8080';
+        try {
+            const result = await this.syncService.handleMeliCallback(code, state);
+            return res.redirect(`${frontend}/?meli=connected&nickname=${encodeURIComponent(result.nickname)}`);
+        } catch (error: any) {
+            const message = error?.response?.message || error?.message || 'Error al conectar con Mercado Libre';
+            return res.redirect(`${frontend}/?meli=error&message=${encodeURIComponent(message)}`);
+        }
+    }
+
+    @Get('listings')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: 'Lista todas las publicaciones del usuario en los marketplaces' })
+    getListings(@Req() req) {
+        return this.syncService.getAllListings(req.user.id);
     }
 
     @Delete('connections/:marketplace')

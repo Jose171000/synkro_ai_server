@@ -424,6 +424,31 @@ export class SyncService {
     // Status
     // ─────────────────────────────────────────────────────────────
 
+    /** All the user's listings across marketplaces, for the Marketplaces UI. */
+    async getAllListings(userId: string) {
+        const links = await this.listingLinkRepository.find({
+            where: { product: { owner: { id: userId } } },
+            relations: { product: true },
+            order: { updatedAt: 'DESC' },
+        });
+        return links.map(l => ({
+            id: l.id,
+            productId: l.product.id,
+            productName: l.product.name,
+            sku: l.product.sku,
+            stock: l.product.stock,
+            price: l.product.price,
+            marketplace: l.marketplace,
+            externalId: l.externalId,
+            permalink: l.permalink,
+            syncStatus: l.syncStatus,
+            lastStockSynced: l.lastStockSynced,
+            lastPriceSynced: l.lastPriceSynced,
+            lastSyncedAt: l.lastSyncedAt,
+            lastError: l.lastError,
+        }));
+    }
+
     async getProductSyncStatus(productId: string, userId: string) {
         const product = await this.productRepository.findOne({
             where: { id: productId, owner: { id: userId } },
