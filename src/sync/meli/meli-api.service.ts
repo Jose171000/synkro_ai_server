@@ -8,8 +8,10 @@ export interface MeliTokens {
     externalUserId: string;
 }
 
+// The modern ML items API takes family_name (+ attributes to build the
+// title server-side) and REJECTS an explicit title field.
 export interface MeliItemPayload {
-    title: string;
+    family_name: string;
     category_id: string;
     price: number;
     currency_id: string;
@@ -17,7 +19,7 @@ export interface MeliItemPayload {
     condition: 'new' | 'used';
     listing_type_id: string;
     pictures: { source: string }[];
-    attributes?: { id: string; value_name: string }[];
+    attributes: { id: string; value_name: string }[];
 }
 
 /**

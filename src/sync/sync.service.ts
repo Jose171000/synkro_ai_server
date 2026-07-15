@@ -253,11 +253,14 @@ export class SyncService {
      * Mercado Libre expects.
      */
     private buildMeliItemPayload(product: Product, categoryId: string): MeliItemPayload {
-        // ML rejects titles over 60 chars — same rule the AI prompt enforces
-        const title = (product.aiTitle || product.name).slice(0, 60);
+        // ML builds the final title from family_name + attributes (max 60 chars)
+        const familyName = (product.aiTitle || product.name).slice(0, 60);
+
+        // BRAND and MODEL are the minimum attributes ML needs to build the title
+        const brand = (product.aiAttributes as any)?.brand || 'Genérica';
 
         return {
-            title,
+            family_name: familyName,
             category_id: categoryId,
             price: Number(product.price),
             currency_id: process.env.MELI_CURRENCY_ID || 'PEN',
@@ -265,6 +268,10 @@ export class SyncService {
             condition: 'new',
             listing_type_id: process.env.MELI_LISTING_TYPE_ID || 'gold_special',
             pictures: (product.images || []).map(img => ({ source: img.url })),
+            attributes: [
+                { id: 'BRAND', value_name: brand },
+                { id: 'MODEL', value_name: product.sku },
+            ],
         };
     }
 
