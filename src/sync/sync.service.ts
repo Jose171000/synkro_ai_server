@@ -191,7 +191,8 @@ export class SyncService {
 
         try {
             const connection = await this.getValidConnection(userId, 'mercadolibre');
-            const payload = this.buildMeliItemPayload(product);
+            const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
+            const payload = this.buildMeliItemPayload(product, categoryId);
             const created = await this.meliApi.createItem(connection.accessToken, payload);
 
             const description = product.aiDescription || product.description;
@@ -222,21 +223,36 @@ export class SyncService {
     }
 
     /**
-     * Maps an internal product (+ its AI-generated content) to the payload
-     * Mercado Libre expects. The category comes from Phase A of the AI
-     * pipeline, which stores `mercadolibre_category_id` in marketplaceIds.
+     * Resolves a REAL category id for the configured site (e.g. MPE for Perú).
+     * Prefers the one stored by AI Phase A; if it's missing or belongs to
+     * another site (e.g. demo seeds with MLA ids), falls back to Mercado
+     * Libre's official category predictor based on the listing title.
      */
-    private buildMeliItemPayload(product: Product): MeliItemPayload {
-        const categoryId =
+    private async resolveMeliCategory(product: Product, accessToken: string): Promise<string> {
+        const site = process.env.MELI_SITE_ID || 'MPE';
+        const stored: string | undefined =
             (product.marketplaceIds as any)?.mercadolibre_category_id ||
             (product.aiAttributes as any)?.mercadolibre_category_id;
 
-        if (!categoryId) {
-            throw new BadRequestException(
-                'El producto no tiene categoría de Mercado Libre. Genera el contenido con IA primero (Fase A de categorización).',
-            );
+        if (stored && stored.startsWith(site)) {
+            return stored;
         }
 
+        const title = (product.aiTitle || product.name).slice(0, 60);
+        const predicted = await this.meliApi.predictCategory(accessToken, title);
+        if (!predicted) {
+            throw new BadRequestException(
+                'No se pudo determinar la categoría de Mercado Libre para este producto. Revisa el título o asigna la categoría manualmente.',
+            );
+        }
+        return predicted;
+    }
+
+    /**
+     * Maps an internal product (+ its AI-generated content) to the payload
+     * Mercado Libre expects.
+     */
+    private buildMeliItemPayload(product: Product, categoryId: string): MeliItemPayload {
         // ML rejects titles over 60 chars — same rule the AI prompt enforces
         const title = (product.aiTitle || product.name).slice(0, 60);
 

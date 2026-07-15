@@ -44,6 +44,7 @@ import { SyncModule } from './sync/sync.module';
         MELI_CLIENT_ID: Joi.string().optional().allow(''),
         MELI_CLIENT_SECRET: Joi.string().optional().allow(''),
         MELI_REDIRECT_URI: Joi.string().optional().allow(''),
+        MELI_SITE_ID: Joi.string().default('MPE'),
         MELI_CURRENCY_ID: Joi.string().default('PEN'),
         MELI_LISTING_TYPE_ID: Joi.string().default('gold_special'),
       }),

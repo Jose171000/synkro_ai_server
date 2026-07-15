@@ -147,6 +147,23 @@ export class MeliApiService {
         );
     }
 
+    /**
+     * Predicts the best real category for a title using Mercado Libre's
+     * official domain discovery API. Used as fallback when the product
+     * has no category id (or a demo/foreign one) at publish time.
+     */
+    async predictCategory(accessToken: string, title: string): Promise<string | undefined> {
+        const site = process.env.MELI_SITE_ID || 'MPE';
+        const { data } = await this.http.get(
+            `/sites/${site}/domain_discovery/search`,
+            {
+                params: { q: title, limit: 1 },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            },
+        );
+        return data?.[0]?.category_id;
+    }
+
     /** Fetches an order (used when processing sale notifications). */
     async getOrder(accessToken: string, orderId: string): Promise<any> {
         const { data } = await this.http.get(`/orders/${orderId}`, {
