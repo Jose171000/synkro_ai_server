@@ -8,6 +8,7 @@ import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
+import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
@@ -22,6 +23,8 @@ export class SyncService {
         private readonly connectionRepository: Repository<MarketplaceConnection>,
         @InjectRepository(ListingLink)
         private readonly listingLinkRepository: Repository<ListingLink>,
+        @InjectRepository(MarketplaceOrder)
+        private readonly orderRepository: Repository<MarketplaceOrder>,
         @InjectRepository(Product)
         private readonly productRepository: Repository<Product>,
         @InjectQueue('marketplace-sync-queue')
@@ -388,6 +391,29 @@ export class SyncService {
         const dedupeKey = `meli:order-applied:${orderId}`;
         const firstTime = await this.redis.set(dedupeKey, '1', 'EX', 60 * 60 * 24 * 30, 'NX');
         if (!firstTime) return;
+
+        // Persist the sale — feeds the client sales report and orders panel
+        try {
+            await this.orderRepository.save(this.orderRepository.create({
+                marketplace: 'mercadolibre',
+                externalId: String(orderId),
+                owner: { id: userId } as any,
+                totalAmount: Number(order.total_amount || 0),
+                currency: order.currency_id || 'PEN',
+                itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
+                items: (order.order_items || []).map((i: any) => ({
+                    sku: i?.item?.seller_sku || null,
+                    title: i?.item?.title,
+                    quantity: Number(i?.quantity || 0),
+                    unitPrice: Number(i?.unit_price || 0),
+                })),
+                status: order.status,
+                orderDate: order.date_closed ? new Date(order.date_closed) : new Date(),
+            }));
+        } catch (error: any) {
+            // UQ violation = ya registrada (carrera entre webhooks) — seguir sin romper
+            console.warn(`[Sync] Orden ${orderId} no persistida: ${error?.message}`);
+        }
 
         for (const orderItem of order.order_items || []) {
             const externalId = orderItem?.item?.id;

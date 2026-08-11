@@ -14,6 +14,8 @@ import { MailModule } from './mail/mail.module';
 import { UploadModule } from './upload/upload.module';
 import { ExportModule } from './export/export.module';
 import { SyncModule } from './sync/sync.module';
+import { AdminModule } from './admin/admin.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -47,6 +49,7 @@ import { SyncModule } from './sync/sync.module';
         MELI_SITE_ID: Joi.string().default('MPE'),
         MELI_CURRENCY_ID: Joi.string().default('PEN'),
         MELI_LISTING_TYPE_ID: Joi.string().default('gold_special'),
+        ADMIN_EMAILS: Joi.string().optional().allow(''),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -81,6 +84,8 @@ import { SyncModule } from './sync/sync.module';
     UploadModule,
     ExportModule,
     SyncModule,
+    AdminModule,
+    ReportsModule,
   ],
 })
 export class AppModule { }
