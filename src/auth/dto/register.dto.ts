@@ -39,8 +39,8 @@ export class RegisterDto{
     @IsOptional()
     url?:string;
 
-    @IsEnum(UserRole)
-    @IsOptional()
-    role?: UserRole = UserRole.USER;
+    // El rol NO se acepta desde el registro público: permitiría que
+    // cualquiera se auto-asigne admin. Se asigna por ADMIN_EMAILS o por
+    // un administrador existente.
 }
 

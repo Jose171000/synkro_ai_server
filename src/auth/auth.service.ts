@@ -5,6 +5,7 @@ import { Repository, MoreThan } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { UserService } from '../users/user.service';
+import { UserRole } from '../users/user-role';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -35,6 +36,16 @@ export class AuthService {
     }
     
     
+    // El rol nunca viene del cliente. Solo los correos declarados en
+    // ADMIN_EMAILS nacen como admin; el resto son usuarios normales.
+    const adminEmails = (process.env.ADMIN_EMAILS || '')
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(Boolean);
+    const role = adminEmails.includes(registerDto.email.trim().toLowerCase())
+      ? UserRole.ADMIN
+      : UserRole.USER;
+
     const user = await this.userService.createUser({
       name: registerDto.name,
       lastName: registerDto.lastName,
@@ -44,7 +55,7 @@ export class AuthService {
       cellPhone: registerDto.cellPhone,
       country: registerDto.country,
       url: registerDto.url,
-      role: registerDto.role,
+      role,
     });
 
     const tokens = await this.generateTokens(user);
