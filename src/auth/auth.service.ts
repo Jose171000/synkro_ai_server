@@ -149,7 +149,12 @@ export class AuthService {
     });
 
     // Send password reset email
-    await this.mailService.sendPasswordReset(user.email, token);
+    // No bloquear la respuesta con el envío: si el proveedor de correo
+    // no responde (p. ej. el hosting bloquea SMTP saliente), el usuario
+    // se quedaría esperando indefinidamente en la pantalla.
+    this.mailService.sendPasswordReset(user.email, token).catch(err =>
+      console.error('[AuthService] Failed to send password reset email:', err.message),
+    );
 
     return {
       message: 'Si el email existe, se ha enviado un enlace de restablecimiento de contraseña',

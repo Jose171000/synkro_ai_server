@@ -17,6 +17,11 @@ import { join } from 'path';
                     // 465 usa SSL directo; 587 (y 25) negocian con STARTTLS.
                     // Fijarlo a mano rompe el envío cuando el puerto no coincide.
                     secure: Number(config.get('MAIL_PORT')) === 465,
+                    // Fallar rápido si el hosting bloquea el SMTP saliente
+                    // (Railway lo hace) en vez de colgarse esperando.
+                    connectionTimeout: 10000,
+                    greetingTimeout: 10000,
+                    socketTimeout: 15000,
                     auth: {
                         user: config.get<string>('MAIL_USER'),
                         pass: config.get<string>('MAIL_PASS'),
