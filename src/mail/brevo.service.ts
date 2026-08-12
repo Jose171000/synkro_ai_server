@@ -74,6 +74,11 @@ export class BrevoService {
             },
         );
 
-        this.logger.log(`Correo "${options.subject}" enviado a ${options.to} vía Brevo`);
+        // Brevo responde 2xx al ACEPTAR el mensaje; la entrega (o el rechazo
+        // por remitente no validado) ocurre después y solo se ve en sus logs.
+        this.logger.log(
+            `Correo "${options.subject}" aceptado por Brevo para ${options.to} — ` +
+            `verificar entrega en Brevo → Transactional → Logs`,
+        );
     }
 }
