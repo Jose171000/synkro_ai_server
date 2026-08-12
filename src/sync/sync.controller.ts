@@ -2,12 +2,14 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
 @ApiTags('sync')
 @Controller('sync')
+@RequireSection('marketplaces')
 export class SyncController {
     constructor(private readonly syncService: SyncService) { }
 
@@ -15,7 +17,7 @@ export class SyncController {
 
     @Get('connections')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({ summary: 'Lista las cuentas de marketplaces conectadas del usuario' })
     getConnections(@Req() req) {
         return this.syncService.getConnections(req.user.id);
@@ -23,7 +25,7 @@ export class SyncController {
 
     @Get('mercadolibre/auth-url')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({
         summary: 'Genera la URL de autorización OAuth de Mercado Libre',
         description: 'El frontend redirige al usuario a esta URL; al autorizar, Mercado Libre llama a /sync/mercadolibre/callback.',
@@ -54,7 +56,7 @@ export class SyncController {
 
     @Get('listings')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({ summary: 'Lista todas las publicaciones del usuario en los marketplaces' })
     getListings(@Req() req) {
         return this.syncService.getAllListings(req.user.id);
@@ -62,7 +64,7 @@ export class SyncController {
 
     @Delete('connections/:marketplace')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({ summary: 'Desconecta una cuenta de marketplace' })
     disconnect(@Param('marketplace') marketplace: string, @Req() req) {
         return this.syncService.disconnect(req.user.id, marketplace);
@@ -73,7 +75,7 @@ export class SyncController {
     @Post('products/:id/publish')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({
         summary: 'Publica un producto en los marketplaces indicados (asíncrono)',
         description: 'Encola un job por marketplace. Requiere cuenta conectada, precio definido y categoría generada por la IA.',
@@ -84,7 +86,7 @@ export class SyncController {
 
     @Patch('products/:id/inventory')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({
         summary: 'Actualiza stock/precio local y lo sincroniza con todos los canales publicados',
     })
@@ -94,7 +96,7 @@ export class SyncController {
 
     @Get('products/:id/status')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({ summary: 'Estado de sincronización del producto en cada marketplace' })
     getStatus(@Param('id') id: string, @Req() req) {
         return this.syncService.getProductSyncStatus(id, req.user.id);

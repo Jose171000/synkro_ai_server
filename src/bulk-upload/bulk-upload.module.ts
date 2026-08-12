@@ -10,6 +10,8 @@ import { AiModule } from '../ai/ai.module';
 import { ProductModule } from '../products/products.module';
 import { CategoryModule } from '../categories/category.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { SectionAccessGuard } from '../common/guards/section-access.guard';
+import { User } from '../users/entities/user.entity';
 import { Product } from '../products/entities/product.entity';
 import { MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
 import { UploadModule } from '../upload/upload.module';
@@ -24,7 +26,7 @@ import { RedisModule } from '../redis/redis.module';
             { name: 'product-edit-queue' },
             { name: 'category-edit-queue' },
         ),
-        TypeOrmModule.forFeature([Product, MarketplaceCategory]),
+        TypeOrmModule.forFeature([Product, MarketplaceCategory, User]),
         AiModule,
         ProductModule,
         CategoryModule,
@@ -38,7 +40,6 @@ import { RedisModule } from '../redis/redis.module';
         CategoryProcessor,
         ProductEditProcessor,
         CategoryEditProcessor,
-        BatchNotificationService,
-    ],
+        BatchNotificationService, SectionAccessGuard],
 })
 export class BulkUploadModule { }

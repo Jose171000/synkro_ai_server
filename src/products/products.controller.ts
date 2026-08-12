@@ -7,6 +7,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { GenerateAIContentDto } from './dto/generate-ai-content.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { QueryProductsDto } from './dto/query-products.dto';
@@ -14,7 +15,8 @@ import { QueryProductsDto } from './dto/query-products.dto';
 @ApiTags('products')
 @ApiBearerAuth()
 @Controller('products')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SectionAccessGuard)
+@RequireSection('products')
 export class ProductsController {
   constructor(
     private readonly productsService: ProductsService,

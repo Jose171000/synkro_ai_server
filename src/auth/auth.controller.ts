@@ -75,7 +75,7 @@ export class AuthController {
     @ApiOperation({ summary: 'Get current user profile' })
     @ApiStandardResponse(UserResponseDto)
     getProfile(@Req() req) {
-        return req.user;
+        return this.authService.getProfile(req.user.id);
     }
 
     @Patch('profile')

@@ -37,6 +37,14 @@ export class User {
     @Column({ default: true})
     isActive: boolean;
 
+    /**
+     * Secciones de la app a las que el usuario tiene acceso.
+     * null / vacío = acceso completo (comportamiento por defecto).
+     * Valores: dashboard | products | ai-products | marketplaces | analytics | settings
+     */
+    @Column('simple-array', { nullable: true })
+    allowedSections: string[] | null;
+
     @OneToMany(() => RefreshToken, refreshToken => refreshToken.user)
     refreshTokens: RefreshToken[];
 

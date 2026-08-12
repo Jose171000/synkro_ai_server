@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -7,6 +7,8 @@ import { UserRole } from '../users/user-role';
 import { AdminService } from './admin.service';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { CreateClientDto } from './dto/create-client.dto';
+import { UpdateAccessDto } from './dto/update-access.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -22,10 +24,34 @@ export class AdminController {
         return this.adminService.getClients();
     }
 
+    @Post('clients')
+    @ApiOperation({
+        summary: 'Crea una cuenta de cliente/usuario con acceso limitado',
+        description: 'El superadmin define la contraseña inicial y las secciones visibles. Sin secciones = acceso completo.',
+    })
+    createClient(@Body() dto: CreateClientDto) {
+        return this.adminService.createClient(dto);
+    }
+
     @Get('clients/:id')
     @ApiOperation({ summary: 'Detalle de un cliente: perfil, pagos y actividad' })
     getClientDetail(@Param('id') id: string) {
         return this.adminService.getClientDetail(id);
+    }
+
+    @Patch('clients/:id/access')
+    @ApiOperation({ summary: 'Define a qué secciones accede el usuario y si su cuenta está activa' })
+    updateAccess(@Param('id') id: string, @Body() dto: UpdateAccessDto) {
+        return this.adminService.updateAccess(id, dto);
+    }
+
+    @Delete('clients/:id')
+    @ApiOperation({
+        summary: 'Elimina una cuenta y todos sus datos',
+        description: 'Borra productos, publicaciones, conexiones, pagos y perfil. No permite borrarse a uno mismo ni al último administrador.',
+    })
+    deleteClient(@Param('id') id: string, @Req() req) {
+        return this.adminService.deleteClient(id, req.user.id);
     }
 
     @Patch('clients/:id/profile')

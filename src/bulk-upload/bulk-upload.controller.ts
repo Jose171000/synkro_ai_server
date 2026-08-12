@@ -12,6 +12,7 @@ import * as xlsx from 'xlsx';
 import * as AdmZip from 'adm-zip';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
@@ -19,7 +20,8 @@ import { UploadService } from '../upload/upload.service';
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SectionAccessGuard)
+@RequireSection('ai-products')
 @Controller('bulk-upload')
 export class BulkUploadController {
     constructor(

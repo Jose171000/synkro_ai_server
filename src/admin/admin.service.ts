@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
+import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
+import { CreateClientDto } from './dto/create-client.dto';
+import { UpdateAccessDto } from './dto/update-access.dto';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/user-role';
 import { Product } from '../products/entities/product.entity';
@@ -20,6 +24,7 @@ export class AdminService implements OnModuleInit {
         @InjectRepository(MarketplaceConnection) private readonly connectionRepository: Repository<MarketplaceConnection>,
         @InjectRepository(ClientProfile) private readonly profileRepository: Repository<ClientProfile>,
         @InjectRepository(Payment) private readonly paymentRepository: Repository<Payment>,
+        private readonly dataSource: DataSource,
     ) { }
 
     /**
@@ -64,6 +69,7 @@ export class AdminService implements OnModuleInit {
 
             const profile = profileByUser.get(user.id);
             const { password, ...safeUser } = user;
+            // allowedSections viaja como array para que la UI marque las casillas
 
             result.push({
                 ...safeUser,
@@ -80,6 +86,95 @@ export class AdminService implements OnModuleInit {
             });
         }
         return result;
+    }
+
+    /**
+     * Crea una cuenta desde el panel: el superadmin define la contraseña
+     * inicial y qué secciones verá el usuario.
+     */
+    async createClient(dto: CreateClientDto) {
+        const email = dto.email.trim().toLowerCase();
+        const existing = await this.userRepository.findOne({ where: { email } });
+        if (existing) {
+            throw new ConflictException(`Ya existe una cuenta con el correo ${email}.`);
+        }
+
+        const user = this.userRepository.create({
+            name: dto.name,
+            lastName: dto.lastName,
+            email,
+            password: await bcrypt.hash(dto.password, 10),
+            nameCompany: dto.nameCompany,
+            cellPhone: dto.cellPhone,
+            role: UserRole.USER,
+            allowedSections: dto.allowedSections?.length ? dto.allowedSections : null,
+        });
+        const saved = await this.userRepository.save(user);
+
+        // Perfil comercial inicial para que aparezca completo en la tabla
+        await this.profileRepository.save(
+            this.profileRepository.create({
+                user: { id: saved.id } as any,
+                businessName: dto.nameCompany,
+                contactName: `${dto.name} ${dto.lastName}`.trim(),
+                contactPhone: dto.cellPhone,
+                clientType: dto.clientType || 'saas',
+                status: 'activo',
+            }),
+        );
+
+        const { password, ...safe } = saved;
+        return safe;
+    }
+
+    /** Cambia las secciones visibles y el estado de la cuenta. */
+    async updateAccess(userId: string, dto: UpdateAccessDto) {
+        const user = await this.userRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('Cliente no encontrado');
+
+        if (dto.allowedSections !== undefined) {
+            user.allowedSections = dto.allowedSections.length ? dto.allowedSections : null;
+        }
+        if (dto.isActive !== undefined) {
+            user.isActive = dto.isActive;
+        }
+
+        const saved = await this.userRepository.save(user);
+        const { password, ...safe } = saved;
+        return safe;
+    }
+
+    /**
+     * Elimina una cuenta y todo lo que cuelga de ella. Va en una
+     * transacción: o se borra todo, o no se borra nada.
+     */
+    async deleteClient(userId: string, requesterId: string) {
+        const user = await this.userRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('Cliente no encontrado');
+
+        if (userId === requesterId) {
+            throw new BadRequestException('No puedes eliminar tu propia cuenta de administrador.');
+        }
+        if (user.role === UserRole.ADMIN) {
+            const admins = await this.userRepository.count({ where: { role: UserRole.ADMIN } });
+            if (admins <= 1) {
+                throw new BadRequestException('No puedes eliminar al único administrador del sistema.');
+            }
+        }
+
+        await this.dataSource.transaction(async (manager) => {
+            // Primero lo que referencia al usuario sin borrado en cascada
+            await manager.delete(Payment, { client: { id: userId } });
+            await manager.delete(MarketplaceOrder, { owner: { id: userId } });
+            await manager.delete(MarketplaceConnection, { owner: { id: userId } });
+            await manager.delete(ClientProfile, { user: { id: userId } });
+            // Los productos arrastran sus imágenes y publicaciones en cascada
+            await manager.delete(Product, { owner: { id: userId } });
+            // El usuario arrastra tokens de sesión y de recuperación
+            await manager.delete(User, { id: userId });
+        });
+
+        return { message: `Cuenta de ${user.email} eliminada junto con todos sus datos.` };
     }
 
     async getClientDetail(userId: string) {

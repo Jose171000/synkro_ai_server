@@ -71,6 +71,22 @@ export class AuthService {
     };
   }
 
+  /**
+   * Perfil real desde la base de datos: el JWT solo lleva id/email/rol,
+   * así que sin esto la app no vería los permisos de sección ni los
+   * cambios que el administrador acabe de hacer.
+   */
+  async getProfile(userId: string) {
+    const user = await this.userService.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('Tu cuenta está desactivada. Contacta al administrador.');
+    }
+    return this.sanitizeUser(user);
+  }
+
   async login(loginDto: LoginDto) {
     const user = await this.userService.findByEmail(loginDto.email);
     if (!user) {
