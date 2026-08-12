@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
+import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateAccessDto } from './dto/update-access.dto';
 import { User } from '../users/entities/user.entity';
@@ -142,6 +143,44 @@ export class AdminService implements OnModuleInit {
         const saved = await this.userRepository.save(user);
         const { password, ...safe } = saved;
         return safe;
+    }
+
+    /**
+     * Asigna una contraseña nueva a un cliente. Pensado para cuando la
+     * persona pierde el acceso y no puede usar el correo de recuperación.
+     * Se cierran sus sesiones abiertas para que el cambio sea efectivo.
+     */
+    async resetClientPassword(userId: string, newPassword?: string) {
+        const user = await this.userRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('Cliente no encontrado');
+
+        const password = newPassword?.trim() || this.generatePassword();
+        if (password.length < 8) {
+            throw new BadRequestException('La contraseña debe tener al menos 8 caracteres.');
+        }
+
+        user.password = await bcrypt.hash(password, 10);
+        await this.userRepository.save(user);
+
+        // Invalida sesiones activas: si alguien más la tenía, queda fuera
+        await this.dataSource
+            .getRepository(RefreshToken)
+            .delete({ user: { id: userId } });
+
+        return {
+            message: `Contraseña actualizada para ${user.email}.`,
+            // Se devuelve para que el admin pueda copiarla y enviarla
+            password,
+        };
+    }
+
+    private generatePassword(): string {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+        let out = '';
+        for (let i = 0; i < 10; i++) {
+            out += chars[Math.floor(Math.random() * chars.length)];
+        }
+        return `${out}!`;
     }
 
     /**

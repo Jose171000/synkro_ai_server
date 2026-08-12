@@ -16,6 +16,7 @@ import { ExportModule } from './export/export.module';
 import { SyncModule } from './sync/sync.module';
 import { AdminModule } from './admin/admin.module';
 import { ReportsModule } from './reports/reports.module';
+import { CrmModule } from './crm/crm.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { ReportsModule } from './reports/reports.module';
     SyncModule,
     AdminModule,
     ReportsModule,
+    CrmModule,
   ],
 })
 export class AppModule { }

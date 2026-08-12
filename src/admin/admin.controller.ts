@@ -8,7 +8,7 @@ import { AdminService } from './admin.service';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateClientDto } from './dto/create-client.dto';
-import { UpdateAccessDto } from './dto/update-access.dto';
+import { UpdateAccessDto, ResetClientPasswordDto } from './dto/update-access.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -43,6 +43,15 @@ export class AdminController {
     @ApiOperation({ summary: 'Define a qué secciones accede el usuario y si su cuenta está activa' })
     updateAccess(@Param('id') id: string, @Body() dto: UpdateAccessDto) {
         return this.adminService.updateAccess(id, dto);
+    }
+
+    @Post('clients/:id/reset-password')
+    @ApiOperation({
+        summary: 'Asigna una contraseña nueva al cliente',
+        description: 'Si no envías newPassword, el sistema genera una y te la devuelve para que se la compartas. Cierra sus sesiones abiertas.',
+    })
+    resetClientPassword(@Param('id') id: string, @Body() dto: ResetClientPasswordDto) {
+        return this.adminService.resetClientPassword(id, dto.newPassword);
     }
 
     @Delete('clients/:id')
