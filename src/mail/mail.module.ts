@@ -13,8 +13,10 @@ import { join } from 'path';
             useFactory: (config: ConfigService) => ({
                 transport: {
                     host: config.get<string>('MAIL_HOST'),
-                    port: config.get<number>('MAIL_PORT'),
-                    secure: true, // true para port 465, false para 587
+                    port: Number(config.get('MAIL_PORT')),
+                    // 465 usa SSL directo; 587 (y 25) negocian con STARTTLS.
+                    // Fijarlo a mano rompe el envío cuando el puerto no coincide.
+                    secure: Number(config.get('MAIL_PORT')) === 465,
                     auth: {
                         user: config.get<string>('MAIL_USER'),
                         pass: config.get<string>('MAIL_PASS'),
