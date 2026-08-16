@@ -21,6 +21,77 @@ export class ReportsService {
     ) { }
 
     /**
+     * Reporte externo configurado por el administrador para este usuario
+     * (AppScript, Looker Studio...). Se sirve aparte del reporte nativo
+     * para que el cliente vea ambos.
+     */
+    async getReportConfig(userId: string) {
+        const profile = await this.profileRepository.findOne({
+            where: { user: { id: userId } },
+        });
+        return {
+            embedUrl: profile?.reportEmbedUrl || null,
+            embedTitle: profile?.reportEmbedTitle || 'Reporte detallado',
+        };
+    }
+
+    /**
+     * Comprueba si una URL puede mostrarse dentro de un iframe.
+     * Google Apps Script responde SAMEORIGIN salvo que el script use
+     * XFrameOptionsMode.ALLOWALL, así que conviene avisar al admin antes
+     * de que el cliente se encuentre un recuadro en blanco.
+     */
+    async checkEmbeddable(url: string) {
+        try {
+            const response = await axios.get(url, {
+                timeout: 12000,
+                maxRedirects: 5,
+                validateStatus: () => true,
+                // Basta con las cabeceras, pero Apps Script no admite HEAD
+                responseType: 'text',
+            });
+
+            const headers = response.headers as Record<string, string>;
+            const xFrame = (headers['x-frame-options'] || '').toUpperCase();
+            const csp = headers['content-security-policy'] || '';
+            const frameAncestors = /frame-ancestors\s+([^;]+)/i.exec(csp)?.[1]?.trim();
+
+            const blockedByXFrame = xFrame.includes('DENY') || xFrame.includes('SAMEORIGIN');
+
+            // frame-ancestors bloquea salvo que permita cualquiera (*) o
+            // nombre explícitamente a nuestro dominio.
+            const allowsUs = frameAncestors
+                ? frameAncestors.includes('*') || /synkroai\.com/i.test(frameAncestors)
+                : true;
+            const blockedByCsp = Boolean(frameAncestors) && !allowsUs;
+
+            const embeddable = response.status < 400 && !blockedByXFrame && !blockedByCsp;
+
+            let reason: string | null = null;
+            if (response.status >= 400) {
+                reason = `La URL respondió ${response.status}. Revisa que el enlace sea público.`;
+            } else if (blockedByXFrame) {
+                reason =
+                    'El sitio no permite mostrarse dentro de otra página (X-Frame-Options: ' +
+                    `${xFrame}). Si es un Google Apps Script, añade ` +
+                    '.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL) al HtmlOutput.';
+            } else if (blockedByCsp) {
+                reason = `El sitio restringe qué páginas pueden embeberlo (frame-ancestors: ${frameAncestors}).`;
+            }
+
+            return { embeddable, status: response.status, xFrameOptions: xFrame || null, frameAncestors: frameAncestors || null, reason };
+        } catch (error: any) {
+            return {
+                embeddable: false,
+                status: null,
+                xFrameOptions: null,
+                frameAncestors: null,
+                reason: `No se pudo abrir la URL: ${error?.message}`,
+            };
+        }
+    }
+
+    /**
      * Sales report for a client, combining two sources:
      *  - marketplace_orders (real orders synced from marketplaces)
      *  - the client's Google Sheet published as CSV (legacy AppScript data)

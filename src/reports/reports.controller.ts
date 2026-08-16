@@ -10,6 +10,15 @@ import { ReportsService } from './reports.service';
 export class ReportsController {
     constructor(private readonly reportsService: ReportsService) { }
 
+    @Get('config')
+    @ApiOperation({
+        summary: 'Reporte externo configurado para el usuario autenticado',
+        description: 'Devuelve la URL a embeber (AppScript, Looker Studio) si el administrador configuró una.',
+    })
+    getConfig(@Req() req) {
+        return this.reportsService.getReportConfig(req.user.id);
+    }
+
     @Get('sales')
     @ApiOperation({
         summary: 'Reporte de ventas del usuario autenticado',

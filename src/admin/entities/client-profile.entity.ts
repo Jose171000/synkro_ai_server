@@ -44,6 +44,19 @@ export class ClientProfile {
     @Column({ nullable: true, type: 'text' })
     sheetCsvUrl: string;
 
+    /**
+     * Reporte externo del cliente (AppScript, Looker Studio, Sheets
+     * publicado...) que se muestra embebido dentro de sus Analíticas.
+     * Permite conservar los reportes históricos mientras el reporte
+     * nativo se alimenta de los marketplaces.
+     */
+    @Column({ nullable: true, type: 'text' })
+    reportEmbedUrl: string;
+
+    /** Título de la pestaña del reporte embebido. */
+    @Column({ nullable: true })
+    reportEmbedTitle: string;
+
     @Column({ nullable: true, type: 'text' })
     notes: string;
 

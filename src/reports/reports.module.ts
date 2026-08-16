@@ -9,5 +9,6 @@ import { ClientProfile } from '../admin/entities/client-profile.entity';
     imports: [TypeOrmModule.forFeature([MarketplaceOrder, ClientProfile])],
     controllers: [ReportsController],
     providers: [ReportsService],
+    exports: [ReportsService],
 })
 export class ReportsModule { }

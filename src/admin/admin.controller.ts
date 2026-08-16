@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { AdminService } from './admin.service';
+import { ReportsService } from '../reports/reports.service';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -16,7 +17,10 @@ import { UpdateAccessDto, ResetClientPasswordDto } from './dto/update-access.dto
 @Roles(UserRole.ADMIN)
 @Controller('admin')
 export class AdminController {
-    constructor(private readonly adminService: AdminService) { }
+    constructor(
+        private readonly adminService: AdminService,
+        private readonly reportsService: ReportsService,
+    ) { }
 
     @Get('clients')
     @ApiOperation({ summary: 'Lista todos los clientes con sus estadísticas y pagos (solo admin)' })
@@ -79,6 +83,15 @@ export class AdminController {
     @ApiOperation({ summary: 'Elimina un pago registrado por error' })
     removePayment(@Param('paymentId') paymentId: string) {
         return this.adminService.removePayment(paymentId);
+    }
+
+    @Get('embed-check')
+    @ApiOperation({
+        summary: 'Comprueba si una URL puede mostrarse embebida',
+        description: 'Avisa antes de guardarla si el sitio bloquea los iframes (típico en Google Apps Script sin ALLOWALL).',
+    })
+    checkEmbeddable(@Query('url') url: string) {
+        return this.reportsService.checkEmbeddable(url);
     }
 
     @Get('finance/summary')

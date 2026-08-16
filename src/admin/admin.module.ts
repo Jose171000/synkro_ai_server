@@ -9,6 +9,7 @@ import { Product } from '../products/entities/product.entity';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
+import { ReportsModule } from '../reports/reports.module';
 
 @Module({
     imports: [
@@ -21,6 +22,7 @@ import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
             MarketplaceConnection,
             MarketplaceOrder,
         ]),
+        ReportsModule,
     ],
     controllers: [AdminController],
     providers: [AdminService],

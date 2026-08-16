@@ -43,6 +43,18 @@ export class UpdateClientProfileDto {
     @IsUrl({ require_tld: false })
     sheetCsvUrl?: string;
 
+    @ApiPropertyOptional({
+        description: 'URL del reporte externo (AppScript, Looker Studio) que se embebe en las Analíticas del cliente',
+    })
+    @IsOptional()
+    @IsUrl({ require_tld: false })
+    reportEmbedUrl?: string;
+
+    @ApiPropertyOptional({ description: 'Título de la pestaña del reporte embebido', example: 'Reporte de ventas' })
+    @IsOptional()
+    @IsString()
+    reportEmbedTitle?: string;
+
     @ApiPropertyOptional()
     @IsOptional()
     @IsString()
