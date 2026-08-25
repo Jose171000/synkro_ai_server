@@ -8,6 +8,7 @@ import { ProductModule } from './products/products.module';
 import { AiModule } from './ai/ai.module';
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { RedisThrottlerStorage } from './common/redis-throttler.storage';
 import { APP_GUARD } from '@nestjs/core';
 import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
 import { CategoryModule } from './categories/category.module';
@@ -79,10 +80,19 @@ import { CrmModule } from './crm/crm.module';
     }),
     // Límite de peticiones por IP: frena fuerza bruta contra el login
     // y el abuso de los endpoints públicos (webhooks, recuperación).
-    ThrottlerModule.forRoot([
-      { name: 'short', ttl: 1000, limit: 10 },
-      { name: 'medium', ttl: 60_000, limit: 120 },
-    ]),
+    ThrottlerModule.forRootAsync({
+      imports: [RedisModule],
+      inject: [RedisThrottlerStorage],
+      useFactory: (storage: RedisThrottlerStorage) => ({
+        // El contador vive en Redis: así el límite es el mismo aunque
+        // el hosting levante varias instancias.
+        storage,
+        throttlers: [
+          { name: 'short', ttl: 1000, limit: 10 },
+          { name: 'medium', ttl: 60_000, limit: 120 },
+        ],
+      }),
+    }),
     AuthModule,
     UsersModule,
     ProductModule,
