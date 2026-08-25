@@ -92,8 +92,8 @@ export class SyncService {
         const connections = await this.connectionRepository.find({
             where: { owner: { id: userId } },
         });
-        // Never expose tokens to the frontend
-        return connections.map(({ accessToken, refreshToken, ...safe }) => safe);
+        // Never expose credentials to the frontend
+        return connections.map(({ accessToken, refreshToken, secrets, ...safe }) => safe);
     }
 
     async disconnect(userId: string, marketplace: string) {
@@ -118,6 +118,18 @@ export class SyncService {
         if (!connection) {
             throw new BadRequestException(
                 `No tienes una cuenta de ${marketplace} conectada. Ve a Marketplaces y conéctala primero.`,
+            );
+        }
+
+        // Si la credencial no se pudo descifrar (clave cambiada o fila alterada)
+        // llega como null: se marca la conexión como rota y se pide reconectar,
+        // en lugar de intentar llamar a la API con un token vacío.
+        if (!connection.accessToken) {
+            // update() y no save(): guardar la entidad completa reescribiría
+            // el token ilegible como NULL y perderíamos el dato cifrado.
+            await this.connectionRepository.update(connection.id, { status: 'error' });
+            throw new BadRequestException(
+                `No se pudieron leer las credenciales guardadas de ${marketplace}. Reconecta tu cuenta.`,
             );
         }
 

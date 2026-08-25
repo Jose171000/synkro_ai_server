@@ -32,6 +32,10 @@ import { CrmModule } from './crm/crm.module';
         DB_PASSWORD: Joi.string().required(),
         DB_NAME: Joi.string().required(),
         JWT_SECRET: Joi.string().required(),
+        // Cifra las credenciales de marketplaces guardadas en la base de datos.
+        // Es obligatoria a propósito: si falta, el servidor no arranca en vez de
+        // volver a guardar tokens en texto plano sin que nadie se entere.
+        CREDENTIALS_ENCRYPTION_KEY: Joi.string().required(),
         NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
         MAIL_HOST: Joi.string().default('smtp.gmail.com'),
         MAIL_PORT: Joi.number().default(587),

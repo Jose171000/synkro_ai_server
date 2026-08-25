@@ -1,10 +1,15 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, Unique } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
+import { encryptedJsonTransformer, encryptedTextTransformer } from '../../common/crypto/encrypted-column.transformer';
 
 /**
- * Stores the OAuth credentials that link a Synkro user with their
- * seller account on an external marketplace (Mercado Libre, Shopify...).
+ * Stores the credentials that link a Synkro user with their seller account on
+ * an external marketplace (Mercado Libre, Yavendió, Falabella...).
  * One row per (user, marketplace).
+ *
+ * Todo lo que sea secreto se guarda CIFRADO en la base de datos: las columnas
+ * marcadas con un transformador se cifran al escribir y se descifran al leer,
+ * de forma transparente para el resto del código.
  */
 @Entity('marketplace_connections')
 @Unique('UQ_connection_marketplace_owner', ['marketplace', 'owner'])
@@ -13,20 +18,30 @@ export class MarketplaceConnection {
     id: string;
 
     @Column()
-    marketplace: string; // 'mercadolibre' | 'shopify' | 'amazon'
+    marketplace: string; // 'mercadolibre' | 'yavendio' | 'falabella'
 
-    // Seller ID on the external platform (e.g. Mercado Libre user id)
+    // Seller ID on the external platform (e.g. Mercado Libre user id).
+    // No es un secreto y se busca por él cuando llega un webhook, así que
+    // se queda en claro: cifrarlo impediría consultarlo.
     @Column()
     externalUserId: string;
 
     @Column({ nullable: true })
     externalNickname: string;
 
-    @Column('text')
+    @Column('text', { transformer: encryptedTextTransformer })
     accessToken: string;
 
-    @Column('text', { nullable: true })
+    @Column('text', { nullable: true, transformer: encryptedTextTransformer })
     refreshToken: string;
+
+    /**
+     * Credenciales adicionales que no encajan en el modelo OAuth: la API key
+     * de Yavendió, el par UserID + API key de Falabella, etc. Se guarda como
+     * un único bloque JSON cifrado.
+     */
+    @Column('text', { nullable: true, transformer: encryptedJsonTransformer })
+    secrets: Record<string, any> | null;
 
     // When the current accessToken stops being valid
     @Column({ type: 'timestamptz' })

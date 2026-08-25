@@ -13,6 +13,8 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "credentials:check": "ts-node -r tsconfig-paths/register src/scripts/encrypt-credentials.ts --check",
+    "credentials:encrypt": "ts-node -r tsconfig-paths/register src/scripts/encrypt-credentials.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
