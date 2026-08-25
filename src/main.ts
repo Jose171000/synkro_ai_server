@@ -15,6 +15,11 @@ async function bootstrap() {
   // (no sirve HTML) y rompería la interfaz de Swagger.
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
+  // El hosting (Railway) atiende detrás de un proxy: sin esto Express ve
+  // siempre la IP del proxy y el límite de peticiones no distingue a
+  // nadie, dejando pasar la fuerza bruta.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   const frontendURLs = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['*'];
   app.enableCors({
     origin: frontendURLs,
