@@ -95,6 +95,8 @@ export class AdminController {
     }
 
     @Get('finance/summary')
+    // El contador necesita ver los ingresos, aunque no gestione cuentas
+    @Roles(UserRole.ADMIN, UserRole.ACCOUNTANT)
     @ApiOperation({ summary: 'Panel financiero: total histórico, ingresos del mes, MRR e ingresos por mes' })
     getFinanceSummary() {
         return this.adminService.getFinanceSummary();

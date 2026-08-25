@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { BillingController } from './billing.controller';
+import { BillingService } from './billing.service';
+import { MonthlyBilling } from './entities/monthly-billing.entity';
 import { ClientProfile } from './entities/client-profile.entity';
 import { Payment } from './entities/payment.entity';
 import { User } from '../users/entities/user.entity';
@@ -21,11 +24,12 @@ import { ReportsModule } from '../reports/reports.module';
             ListingLink,
             MarketplaceConnection,
             MarketplaceOrder,
+            MonthlyBilling,
         ]),
         ReportsModule,
     ],
-    controllers: [AdminController],
-    providers: [AdminService],
+    controllers: [AdminController, BillingController],
+    providers: [AdminService, BillingService],
     exports: [AdminService, TypeOrmModule],
 })
 export class AdminModule { }

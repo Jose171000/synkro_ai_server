@@ -3,12 +3,18 @@ import { AppModule } from './app.module';
 import { setupSwagger } from './config/swagger.config';
 import { ValidationPipe } from '@nestjs/common';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import helmet from 'helmet';
 import * as dns from "dns";
 
 dns.setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Cabeceras de seguridad. La CSP se deja fuera porque esto es una API
+  // (no sirve HTML) y rompería la interfaz de Swagger.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
   const frontendURLs = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['*'];
   app.enableCors({
     origin: frontendURLs,

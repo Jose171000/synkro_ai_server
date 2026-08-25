@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
+import { parseAmount } from '../common/parse-amount';
 
 export interface DayPoint {
     date: string;          // YYYY-MM-DD
@@ -203,7 +204,7 @@ export class ReportsService {
             const date = this.normalizeDate(rawDate);
             if (!date) continue;
 
-            const sales = Number(String(cols[idx.sales] || '0').replace(/[^0-9.\-]/g, '')) || 0;
+            const sales = parseAmount(cols[idx.sales]) ?? 0;
             const orders = idx.orders !== -1 ? (Number(String(cols[idx.orders] || '0').replace(/[^0-9]/g, '')) || 0) : 0;
             const channel = idx.channel !== -1 ? (cols[idx.channel] || '').trim().toLowerCase() || null : null;
 

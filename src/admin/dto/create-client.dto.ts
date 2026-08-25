@@ -43,6 +43,15 @@ export class CreateClientDto {
     @IsIn(APP_SECTIONS as unknown as string[], { each: true })
     allowedSections?: string[];
 
+    @ApiPropertyOptional({
+        enum: ['user', 'contador'],
+        default: 'user',
+        description: 'Rol de la cuenta. "contador" solo accede a finanzas y facturación.',
+    })
+    @IsOptional()
+    @IsIn(['user', 'contador'])
+    role?: 'user' | 'contador';
+
     @ApiPropertyOptional({ enum: ['agency', 'saas'], default: 'saas' })
     @IsOptional()
     @IsIn(['agency', 'saas'])

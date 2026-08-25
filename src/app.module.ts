@@ -7,6 +7,8 @@ import { UsersModule } from './users/user.module';
 import { ProductModule } from './products/products.module';
 import { AiModule } from './ai/ai.module';
 import { BullModule } from '@nestjs/bullmq';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
 import { CategoryModule } from './categories/category.module';
 import { RedisModule } from './redis/redis.module';
@@ -66,10 +68,21 @@ import { CrmModule } from './crm/crm.module';
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV') !== 'productions',
+        // OJO: antes decía 'productions' (con s), así que synchronize
+        // quedaba activo también en producción y TypeORM podía alterar
+        // el esquema en cada despliegue. Ahora es explícito: se mantiene
+        // activo por defecto hasta que existan migraciones, pero puede
+        // apagarse con DB_SYNCHRONIZE=false sin tocar código.
+        synchronize: process.env.DB_SYNCHRONIZE !== 'false',
       }),
       inject: [ConfigService],
     }),
+    // Límite de peticiones por IP: frena fuerza bruta contra el login
+    // y el abuso de los endpoints públicos (webhooks, recuperación).
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000, limit: 10 },
+      { name: 'medium', ttl: 60_000, limit: 120 },
+    ]),
     AuthModule,
     UsersModule,
     ProductModule,
@@ -91,6 +104,9 @@ import { CrmModule } from './crm/crm.module';
     AdminModule,
     ReportsModule,
     CrmModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule { }

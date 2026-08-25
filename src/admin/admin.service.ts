@@ -107,10 +107,16 @@ export class AdminService implements OnModuleInit {
             password: await bcrypt.hash(dto.password, 10),
             nameCompany: dto.nameCompany,
             cellPhone: dto.cellPhone,
-            role: UserRole.USER,
+            role: dto.role === 'contador' ? UserRole.ACCOUNTANT : UserRole.USER,
             allowedSections: dto.allowedSections?.length ? dto.allowedSections : null,
         });
         const saved = await this.userRepository.save(user);
+
+        // El contador es personal interno, no un cliente: sin perfil comercial
+        if (dto.role === 'contador') {
+            const { password, ...safeStaff } = saved;
+            return safeStaff;
+        }
 
         // Perfil comercial inicial para que aparezca completo en la tabla
         await this.profileRepository.save(

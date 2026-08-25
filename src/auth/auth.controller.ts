@@ -1,4 +1,5 @@
 import { Controller, Post, Body, UseGuards, Get, Req, Patch } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -24,6 +25,8 @@ export class AuthController {
         private mailService: MailService,
     ) { }
 
+    // Endpoint sensible: 5 intentos por minuto y 20 por hora desde una IP
+    @Throttle({ short: { limit: 5, ttl: 60_000 }, medium: { limit: 20, ttl: 3_600_000 } })
     @Post('register')
     @ApiOperation({ summary: 'Register a new user' })
     @ApiStandardResponse(AuthResponseDto)
@@ -31,6 +34,8 @@ export class AuthController {
         return this.authService.register(registerDto);
     }
 
+    // Endpoint sensible: 5 intentos por minuto y 20 por hora desde una IP
+    @Throttle({ short: { limit: 5, ttl: 60_000 }, medium: { limit: 20, ttl: 3_600_000 } })
     @Post('login')
     @ApiOperation({ summary: 'Login and get tokens' })
     @ApiStandardResponse(AuthResponseDto)
@@ -53,6 +58,8 @@ export class AuthController {
         return this.authService.logout(req.user.sub);
     }
 
+    // Endpoint sensible: 5 intentos por minuto y 20 por hora desde una IP
+    @Throttle({ short: { limit: 5, ttl: 60_000 }, medium: { limit: 20, ttl: 3_600_000 } })
     @Post('forgot-password')
     @ApiOperation({ summary: 'Request password reset email' })
     @ApiStandardResponse(MessageResponseDto)
@@ -60,6 +67,8 @@ export class AuthController {
         return this.authService.forgotPassword(forgotPasswordDto.email);
     }
 
+    // Endpoint sensible: 5 intentos por minuto y 20 por hora desde una IP
+    @Throttle({ short: { limit: 5, ttl: 60_000 }, medium: { limit: 20, ttl: 3_600_000 } })
     @Post('reset-password')
     @ApiOperation({ summary: 'Reset user password' })
     @ApiStandardResponse(MessageResponseDto)
