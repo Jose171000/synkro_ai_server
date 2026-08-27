@@ -73,12 +73,16 @@ import { CrmModule } from './crm/crm.module';
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        // OJO: antes decía 'productions' (con s), así que synchronize
-        // quedaba activo también en producción y TypeORM podía alterar
-        // el esquema en cada despliegue. Ahora es explícito: se mantiene
-        // activo por defecto hasta que existan migraciones, pero puede
-        // apagarse con DB_SYNCHRONIZE=false sin tocar código.
-        synchronize: process.env.DB_SYNCHRONIZE !== 'false',
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        // Las migraciones pendientes se aplican al arrancar, así que un
+        // despliegue deja la base al día sin ejecutar comandos a mano.
+        migrationsRun: true,
+        // Apagado por defecto. Antes iba encendido (y con un typo, 'productions',
+        // que lo dejaba encendido también en producción): TypeORM alteraba el
+        // esquema solo en cada despliegue y un renombre podía borrar una columna
+        // con datos dentro. Ahora el esquema solo cambia por una migración
+        // revisada. DB_SYNCHRONIZE=true lo reactiva para experimentar en local.
+        synchronize: process.env.DB_SYNCHRONIZE === 'true',
       }),
       inject: [ConfigService],
     }),
