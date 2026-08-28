@@ -44,6 +44,23 @@ export class Product {
     @Column({ default: 0 })
     stock: number;
 
+    // ── Datos de envío ───────────────────────────────────────────
+    // Falabella los exige para publicar (alto, ancho, largo en cm y peso en
+    // kg). Son nulos por defecto porque los productos antiguos no los tienen;
+    // publicar sin ellos se rechaza con un aviso, en vez de mandar medidas
+    // inventadas que afectarían el costo de envío real del comprador.
+    @Column('int', { nullable: true })
+    packageWidth: number | null;
+
+    @Column('int', { nullable: true })
+    packageLength: number | null;
+
+    @Column('int', { nullable: true })
+    packageHeight: number | null;
+
+    @Column('decimal', { precision: 8, scale: 3, nullable: true })
+    packageWeight: number | null;
+
     // Imágenes
     @OneToMany(() => ProductImage, (productImage) => productImage.product, { cascade: true, eager: true })
     images: ProductImage[];

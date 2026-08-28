@@ -13,11 +13,12 @@ import { CredentialsEncryptionService } from './credentials-encryption.service';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
+import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, Product, User]),
+        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, Product, User]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
     ],
     controllers: [SyncController],

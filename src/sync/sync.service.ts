@@ -13,6 +13,8 @@ import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
+import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
+import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
@@ -27,6 +29,8 @@ export class SyncService {
         private readonly listingLinkRepository: Repository<ListingLink>,
         @InjectRepository(MarketplaceOrder)
         private readonly orderRepository: Repository<MarketplaceOrder>,
+        @InjectRepository(MarketplaceFeed)
+        private readonly feedRepository: Repository<MarketplaceFeed>,
         @InjectRepository(Product)
         private readonly productRepository: Repository<Product>,
         @InjectQueue('marketplace-sync-queue')
@@ -410,6 +414,234 @@ export class SyncService {
                 { id: 'MODEL', value_name: product.sku },
             ],
         };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Falabella: publicación por lotes
+    // ─────────────────────────────────────────────────────────────
+
+    /** Código de operador: identifica el país. 'fape' es Perú, 'facl' Chile. */
+    private get falabellaOperatorCode(): string {
+        return process.env.FALABELLA_OPERATOR_CODE || 'fape';
+    }
+
+    /**
+     * Traduce un producto interno al formato de Falabella, o explica por qué
+     * no se puede publicar.
+     *
+     * Se comprueba antes de enviar y no después porque para el usuario el
+     * lote es una sola acción: es mejor decirle "a estos 3 productos les
+     * faltan las medidas" que mandar 500 y devolverle errores sueltos
+     * imposibles de interpretar.
+     */
+    private toFalabellaInput(product: Product): { input: FalabellaProductInput } | { reason: string } {
+        const attributes = (product.aiAttributes as any) || {};
+        const marketplaceIds = (product.marketplaceIds as any) || {};
+
+        if (product.price === null || product.price === undefined) {
+            return { reason: 'no tiene precio' };
+        }
+
+        const category = marketplaceIds.falabella_category_id ?? attributes.falabella_category_id;
+        if (!category) {
+            return { reason: 'no tiene categoría de Falabella asignada' };
+        }
+
+        // Falabella usa estas medidas para calcular el envío que paga el
+        // comprador. Inventarlas tendría consecuencias reales, así que si
+        // faltan el producto no se envía.
+        const width = product.packageWidth ?? attributes.packageWidth;
+        const length = product.packageLength ?? attributes.packageLength;
+        const height = product.packageHeight ?? attributes.packageHeight;
+        const weight = product.packageWeight ?? attributes.packageWeight;
+        if (!width || !length || !height || !weight) {
+            return { reason: 'le faltan las medidas o el peso del paquete' };
+        }
+
+        const description = product.aiDescription || product.description;
+        if (!description || description.trim().length < 6) {
+            return { reason: 'la descripción es demasiado corta (Falabella pide 6 caracteres como mínimo)' };
+        }
+
+        return {
+            input: {
+                sellerSku: product.sku,
+                name: (product.aiTitle || product.name).slice(0, 200),
+                description,
+                brand: attributes.brand || 'GENERICO',
+                primaryCategory: category,
+                price: Number(product.price),
+                stock: product.stock,
+                packageWidth: Number(width),
+                packageLength: Number(length),
+                packageHeight: Number(height),
+                packageWeight: Number(weight),
+                productId: attributes.ean || attributes.gtin || undefined,
+                extraAttributes: {
+                    Model: attributes.model || undefined,
+                    ProductionCountry: attributes.productionCountry || undefined,
+                },
+            },
+        };
+    }
+
+    /**
+     * Publica varios productos en Falabella en el menor número de llamadas
+     * posible.
+     *
+     * Falabella admite 50 llamadas seguidas a las acciones de feed y después
+     * exige 2 minutos entre cada una, así que mandar un producto por llamada
+     * deja de ser viable en cuanto hay catálogo. Aquí se agrupan de a 500,
+     * que es lo que ellos recomiendan.
+     */
+    async publishBatchToFalabella(userId: string, productIds: string[]) {
+        if (!productIds?.length) {
+            throw new BadRequestException('Selecciona al menos un producto para publicar.');
+        }
+
+        const credentials = await this.getFalabellaCredentials(userId);
+
+        const products = await this.productRepository.find({
+            where: productIds.map(id => ({ id, owner: { id: userId } })) as any,
+        });
+        if (!products.length) {
+            throw new NotFoundException('No se encontraron productos que publicar.');
+        }
+
+        const aceptados: { product: Product; input: FalabellaProductInput }[] = [];
+        const rechazados: { sku: string; nombre: string; motivo: string }[] = [];
+
+        for (const product of products) {
+            const resultado = this.toFalabellaInput(product);
+            if ('reason' in resultado) {
+                rechazados.push({ sku: product.sku, nombre: product.name, motivo: resultado.reason });
+            } else {
+                aceptados.push({ product, input: resultado.input });
+            }
+        }
+
+        if (!aceptados.length) {
+            return {
+                message: 'Ningún producto cumple los requisitos de Falabella.',
+                enviados: 0,
+                rechazados,
+                lotes: [],
+            };
+        }
+
+        const lotes: { feedId: string; productos: number }[] = [];
+
+        for (const lote of chunkProducts(aceptados, 500)) {
+            const feedId = await this.falabellaApi.productCreate(
+                credentials,
+                lote.map(x => x.input),
+                this.falabellaOperatorCode,
+            );
+
+            const feed = await this.feedRepository.save(this.feedRepository.create({
+                marketplace: 'falabella',
+                externalFeedId: feedId,
+                action: 'ProductCreate',
+                skus: lote.map(x => x.product.sku),
+                status: 'pending',
+                totalRecords: lote.length,
+                owner: { id: userId } as any,
+            }));
+
+            // El enlace queda pendiente: Falabella confirma después si entró.
+            for (const { product } of lote) {
+                let link = await this.listingLinkRepository.findOne({
+                    where: { marketplace: 'falabella', product: { id: product.id } },
+                });
+                if (!link) {
+                    link = this.listingLinkRepository.create({
+                        marketplace: 'falabella',
+                        externalId: product.sku,
+                        product,
+                    });
+                }
+                link.syncStatus = 'pending';
+                link.lastError = null as any;
+                await this.listingLinkRepository.save(link);
+            }
+
+            // El estado se consulta en diferido: el procesado no es inmediato.
+            await this.syncQueue.add(
+                'falabella-feed',
+                { feedRecordId: feed.id, userId },
+                { delay: 30_000 },
+            );
+
+            lotes.push({ feedId, productos: lote.length });
+        }
+
+        return {
+            message:
+                `Enviados ${aceptados.length} productos a Falabella en ${lotes.length} ` +
+                `${lotes.length === 1 ? 'lote' : 'lotes'}. Falabella los procesa en segundo plano; ` +
+                `el estado se actualiza solo en unos minutos.`,
+            enviados: aceptados.length,
+            rechazados,
+            lotes,
+        };
+    }
+
+    /**
+     * Consulta el estado de un lote y aplica el resultado a cada producto.
+     * Si Falabella sigue procesando, se vuelve a preguntar más tarde.
+     */
+    async checkFalabellaFeed(feedRecordId: string, userId: string): Promise<{ status: string }> {
+        const feed = await this.feedRepository.findOne({ where: { id: feedRecordId } });
+        if (!feed) return { status: 'desconocido' };
+
+        const credentials = await this.getFalabellaCredentials(userId);
+        const estado = await this.falabellaApi.getFeedStatus(credentials, feed.externalFeedId);
+
+        feed.status = estado.status;
+        feed.totalRecords = estado.totalRecords || feed.totalRecords;
+        feed.processedRecords = estado.processedRecords;
+        feed.failedRecords = estado.failedRecords;
+        feed.errors = estado.errors.length ? estado.errors : null;
+        await this.feedRepository.save(feed);
+
+        const terminado = /finished|canceled|error/i.test(estado.status);
+        if (!terminado) {
+            // Sigue en cola dentro de Falabella: se vuelve a mirar en un minuto.
+            await this.syncQueue.add('falabella-feed', { feedRecordId, userId }, { delay: 60_000 });
+            return { status: estado.status };
+        }
+
+        const erroresPorSku = new Map<string, string>();
+        for (const error of estado.errors) {
+            if (error.sku) erroresPorSku.set(error.sku, error.message);
+        }
+
+        for (const sku of feed.skus || []) {
+            const link = await this.listingLinkRepository.findOne({
+                where: { marketplace: 'falabella', externalId: sku },
+                relations: { product: true },
+            });
+            if (!link) continue;
+
+            const error = erroresPorSku.get(sku);
+            if (error) {
+                link.syncStatus = 'error';
+                link.lastError = error;
+            } else {
+                link.syncStatus = 'published';
+                link.lastError = null as any;
+                link.lastStockSynced = link.product?.stock ?? link.lastStockSynced;
+                link.lastPriceSynced = link.product?.price ?? link.lastPriceSynced;
+                link.lastSyncedAt = new Date();
+            }
+            await this.listingLinkRepository.save(link);
+        }
+
+        console.log(
+            `[Sync] Feed Falabella ${feed.externalFeedId}: ${estado.status}, ` +
+            `${estado.processedRecords} ok, ${estado.failedRecords} con error.`,
+        );
+        return { status: estado.status };
     }
 
     // ─────────────────────────────────────────────────────────────

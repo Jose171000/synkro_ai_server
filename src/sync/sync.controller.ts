@@ -8,6 +8,7 @@ import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
+import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 
 @ApiTags('sync')
 @Controller('sync')
@@ -106,6 +107,21 @@ export class SyncController {
     })
     publish(@Param('id') id: string, @Body() dto: PublishProductDto, @Req() req) {
         return this.syncService.enqueuePublish(id, req.user.id, dto.marketplaces);
+    }
+
+    @Post('falabella/publish')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Publica varios productos en Falabella en un solo envío',
+        description:
+            'Falabella limita las llamadas de publicación (50 seguidas y luego 2 minutos entre cada una), ' +
+            'así que los productos se agrupan en lotes de 500. Devuelve los que se enviaron y, con su motivo, ' +
+            'los que no cumplían los requisitos. El resultado real llega después: Falabella procesa en diferido.',
+    })
+    publishFalabella(@Body() dto: PublishFalabellaDto, @Req() req) {
+        return this.syncService.publishBatchToFalabella(req.user.id, dto.productIds);
     }
 
     @Patch('products/:id/inventory')

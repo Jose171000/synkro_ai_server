@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { buildSignedQuery, falabellaTimestamp } from './falabella-signature';
+import { buildProductFeedXml, FalabellaProductInput } from './falabella-product-xml';
 
 /** Lo que hace falta para hablar con la cuenta de un vendedor. */
 export interface FalabellaCredentials {
@@ -13,6 +14,16 @@ export interface FalabellaBrand {
     BrandId: number;
     Name: string;
     GlobalIdentifier?: string;
+}
+
+export interface FalabellaFeedStatus {
+    feedId: string;
+    status: string;
+    action: string;
+    totalRecords: number;
+    processedRecords: number;
+    failedRecords: number;
+    errors: { sku?: string; message: string }[];
 }
 
 export interface FalabellaOrder {
@@ -145,6 +156,107 @@ export class FalabellaApiService {
      */
     async verifyCredentials(credentials: FalabellaCredentials): Promise<void> {
         await this.call(credentials, 'GetProducts', { Limit: 1, Offset: 0 });
+    }
+
+    /**
+     * Extrae el identificador del feed de la respuesta.
+     *
+     * ProductCreate puede responder en JSON o en XML según le convenga a la
+     * API, así que se contemplan los dos: sin este identificador no hay forma
+     * de saber después si los productos entraron.
+     */
+    private extractFeedId(data: any): string {
+        if (typeof data === 'string') {
+            const match = data.match(/<RequestId>([^<]+)<\/RequestId>/);
+            if (match) return match[1];
+        }
+        const id = data?.SuccessResponse?.Head?.RequestId;
+        if (!id) {
+            throw new ServiceUnavailableException(
+                'Falabella aceptó el envío pero no devolvió el identificador del lote, así que no se puede seguir su estado.',
+            );
+        }
+        return id;
+    }
+
+    /**
+     * Envía un lote de productos. Devuelve el identificador del feed.
+     *
+     * IMPORTANTE: responder 200 solo significa que Falabella recibió el lote,
+     * NO que los productos se hayan creado. El resultado real se consulta
+     * después con getFeedStatus.
+     */
+    async productCreate(
+        credentials: FalabellaCredentials,
+        products: FalabellaProductInput[],
+        operatorCode: string,
+    ): Promise<string> {
+        if (products.length === 0) {
+            throw new BadRequestException('No hay productos que enviar a Falabella.');
+        }
+
+        const params: Record<string, string | number> = {
+            Action: 'ProductCreate',
+            Format: 'JSON',
+            Timestamp: falabellaTimestamp(),
+            UserID: credentials.userId,
+            Version: API_VERSION,
+        };
+        // La firma cubre solo los parámetros de la URL; el XML viaja en el cuerpo.
+        const query = buildSignedQuery(params, credentials.apiKey);
+        const xml = buildProductFeedXml(products, { operatorCode });
+
+        let data: any;
+        try {
+            const response = await this.http.post(`/?${query}`, xml, {
+                headers: { 'Content-Type': 'text/xml; charset=UTF-8' },
+            });
+            data = response.data;
+        } catch (error) {
+            const axiosError = error as AxiosError<any>;
+            const head = axiosError?.response?.data?.ErrorResponse?.Head;
+            if (head) throw this.describeError('ProductCreate', head.ErrorCode, head.ErrorMessage);
+            throw new ServiceUnavailableException(
+                `No se pudo enviar el lote a Falabella: ${axiosError?.message || 'error de red'}`,
+            );
+        }
+
+        if (data?.ErrorResponse) {
+            const head = data.ErrorResponse.Head || {};
+            throw this.describeError('ProductCreate', head.ErrorCode, head.ErrorMessage);
+        }
+
+        const feedId = this.extractFeedId(data);
+        this.logger.log(`Lote de ${products.length} productos enviado a Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Estado de un lote enviado: cuántos entraron, cuántos fallaron y por qué.
+     * Falabella agrupa los errores por SKU.
+     */
+    async getFeedStatus(credentials: FalabellaCredentials, feedId: string): Promise<FalabellaFeedStatus> {
+        const body = await this.call<any>(credentials, 'FeedStatus', { FeedID: feedId });
+        const feed = body?.FeedDetail ?? body?.Feed ?? body ?? {};
+
+        // Los errores llegan anidados y a veces como objeto suelto en vez de lista.
+        const rawErrors = feed?.FeedErrors?.Error ?? [];
+        const errors = (Array.isArray(rawErrors) ? rawErrors : [rawErrors])
+            .filter(Boolean)
+            .map((e: any) => ({
+                sku: e?.SellerSku ?? e?.SellerSKU ?? undefined,
+                message: [e?.Code, e?.Message].filter(Boolean).join(': ') || 'error sin detalle',
+            }));
+
+        return {
+            feedId: feed?.Feed ?? feedId,
+            status: feed?.Status ?? 'unknown',
+            action: feed?.Action ?? '',
+            totalRecords: Number(feed?.TotalRecords ?? 0),
+            processedRecords: Number(feed?.ProcessedRecords ?? 0),
+            failedRecords: Number(feed?.FailedRecords ?? 0),
+            errors,
+        };
     }
 
     /** Pedidos del vendedor, opcionalmente desde una fecha. */
