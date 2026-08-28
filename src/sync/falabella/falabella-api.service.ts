@@ -26,6 +26,13 @@ export interface FalabellaFeedStatus {
     errors: { sku?: string; message: string }[];
 }
 
+export interface FalabellaCategory {
+    id: string;
+    name: string;
+    /** Ruta completa, para distinguir dos categorías que se llaman igual. */
+    path: string;
+}
+
 export interface FalabellaAttribute {
     /** Nombre técnico, en minúsculas con guion bajo (ej. tipo_automotriz). */
     name: string;
@@ -55,6 +62,8 @@ export interface FalabellaOrder {
 const API_BASE = 'https://sellercenter-api.falabella.com';
 const API_VERSION = '1.0';
 const ATTRIBUTE_CACHE_MS = 60 * 60 * 1000; // 1 hora
+// El árbol pesa ~0,4 MB y tarda unos 6 segundos: no se pide en cada búsqueda.
+const CATEGORY_CACHE_MS = 12 * 60 * 60 * 1000; // 12 horas
 
 /**
  * Cliente HTTP del Seller Center de Falabella.
@@ -78,6 +87,8 @@ export class FalabellaApiService {
     private readonly http: AxiosInstance;
     /** Atributos por categoría; evita repetir la misma consulta en cada lote. */
     private readonly attributeCache = new Map<string, { at: number; attributes: FalabellaAttribute[] }>();
+    /** Categorías finales ya aplanadas, con su ruta. */
+    private readonly categoryCache = new Map<string, { at: number; categories: FalabellaCategory[] }>();
 
     constructor() {
         this.http = axios.create({ baseURL: API_BASE, timeout: 30000 });
@@ -345,6 +356,77 @@ export class FalabellaApiService {
 
         this.attributeCache.set(clave, { at: Date.now(), attributes });
         return attributes;
+    }
+
+    /**
+     * Todas las categorías donde se puede publicar, aplanadas.
+     *
+     * Solo se devuelven las categorías finales: Falabella no admite publicar
+     * en una intermedia. Cada una lleva su ruta completa porque hay nombres
+     * que se repiten y sin el camino no se distinguen.
+     */
+    async getCategories(credentials: FalabellaCredentials): Promise<FalabellaCategory[]> {
+        const enCache = this.categoryCache.get(credentials.userId);
+        if (enCache && Date.now() - enCache.at < CATEGORY_CACHE_MS) {
+            return enCache.categories;
+        }
+
+        const body = await this.call<any>(credentials, 'GetCategoryTree');
+        const categories: FalabellaCategory[] = [];
+
+        const recorrer = (nodos: any, ruta: string[]) => {
+            for (const nodo of [].concat(nodos ?? []).filter(Boolean) as any[]) {
+                const camino = [...ruta, nodo.Name];
+                const hijos = [].concat(nodo.Children?.Category ?? []).filter(Boolean);
+                if (hijos.length) {
+                    recorrer(hijos, camino);
+                } else {
+                    categories.push({
+                        id: String(nodo.CategoryId),
+                        name: nodo.Name,
+                        path: camino.join(' › '),
+                    });
+                }
+            }
+        };
+        recorrer(body?.Categories?.Category, []);
+
+        this.categoryCache.set(credentials.userId, { at: Date.now(), categories });
+        this.logger.log(`Árbol de categorías de Falabella cargado: ${categories.length} categorías finales.`);
+        return categories;
+    }
+
+    /**
+     * Quita tildes y pasa a minúsculas para comparar.
+     * Sin esto, buscar "audifonos" no encuentra "Audífonos", y nadie escribe
+     * con tildes cuando busca.
+     */
+    private normalizar(texto: string): string {
+        return texto
+            .normalize('NFD')
+            .replace(/\p{Diacritic}/gu, '') // quita las marcas de acento
+            .toLowerCase();
+    }
+
+    /** Busca categorías por nombre o por ruta, sin distinguir tildes. */
+    async searchCategories(
+        credentials: FalabellaCredentials,
+        term: string,
+        limit = 30,
+    ): Promise<FalabellaCategory[]> {
+        const categories = await this.getCategories(credentials);
+        const buscado = this.normalizar((term || '').trim());
+        if (!buscado) return categories.slice(0, limit);
+
+        // Primero las que empiezan por el término: suelen ser la que se busca.
+        const empiezan: FalabellaCategory[] = [];
+        const contienen: FalabellaCategory[] = [];
+        for (const category of categories) {
+            const nombre = this.normalizar(category.name);
+            if (nombre.startsWith(buscado)) empiezan.push(category);
+            else if (nombre.includes(buscado) || this.normalizar(category.path).includes(buscado)) contienen.push(category);
+        }
+        return [...empiezan, ...contienen].slice(0, limit);
     }
 
     /** Pedidos del vendedor, opcionalmente desde una fecha. */

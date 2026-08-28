@@ -109,6 +109,28 @@ export class SyncController {
         return this.syncService.enqueuePublish(id, req.user.id, dto.marketplaces);
     }
 
+    @Get('falabella/categories')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Busca categorías de Falabella donde publicar',
+        description: 'Solo devuelve categorías finales, con su ruta completa. El árbol se guarda en memoria porque pesa y tarda.',
+    })
+    searchFalabellaCategories(@Query('search') search: string, @Req() req) {
+        return this.syncService.searchFalabellaCategories(req.user.id, search || '');
+    }
+
+    @Get('falabella/categories/:categoryId/fields')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Datos obligatorios que pide una categoría de Falabella',
+        description: 'Devuelve solo lo que hay que pedirle a la persona: los campos que la plataforma ya envía por su cuenta quedan fuera.',
+    })
+    getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req) {
+        return this.syncService.getFalabellaCategoryFields(req.user.id, categoryId);
+    }
+
     @Post('falabella/publish')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()

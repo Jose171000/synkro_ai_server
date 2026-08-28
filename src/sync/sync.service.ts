@@ -15,7 +15,7 @@ import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
 import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
-import { FalabellaAttribute } from './falabella/falabella-api.service';
+import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
 /**
@@ -430,6 +430,31 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
     // Falabella: publicación por lotes
     // ─────────────────────────────────────────────────────────────
+
+    /** Categorías de Falabella donde se puede publicar, filtradas por texto. */
+    async searchFalabellaCategories(userId: string, term: string): Promise<FalabellaCategory[]> {
+        const credentials = await this.getFalabellaCredentials(userId);
+        return this.falabellaApi.searchCategories(credentials, term);
+    }
+
+    /**
+     * Datos que pide una categoría, para poder dibujar el formulario:
+     * cuáles son obligatorios, cómo se llaman en castellano y qué valores
+     * admiten. Se marcan los que la plataforma ya cubre por su cuenta.
+     */
+    async getFalabellaCategoryFields(userId: string, categoryId: string) {
+        const credentials = await this.getFalabellaCredentials(userId);
+        const attributes = await this.falabellaApi.getCategoryAttributes(credentials, categoryId);
+
+        return attributes
+            .filter(a => a.isMandatory && !ATRIBUTOS_YA_CUBIERTOS.has(a.name))
+            .map(a => ({
+                name: a.name,
+                label: a.label || a.name,
+                inputType: a.inputType,
+                options: a.options,
+            }));
+    }
 
     /** La categoría de Falabella asignada al producto, si la tiene. */
     private categoriaFalabella(product: Product): string | number | undefined {
