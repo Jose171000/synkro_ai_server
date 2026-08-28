@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { buildSignedQuery, falabellaTimestamp } from './falabella-signature';
-import { buildProductFeedXml, FalabellaProductInput } from './falabella-product-xml';
+import { buildProductFeedXml, escapeXml, FalabellaProductInput } from './falabella-product-xml';
 
 /** Lo que hace falta para hablar con la cuenta de un vendedor. */
 export interface FalabellaCredentials {
@@ -211,16 +211,47 @@ export class FalabellaApiService {
             throw new BadRequestException('No hay productos que enviar a Falabella.');
         }
 
+        const xml = buildProductFeedXml(products, { operatorCode });
+        const feedId = await this.postFeed(credentials, 'ProductCreate', xml);
+        this.logger.log(`Lote de ${products.length} productos enviado a Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Da de baja productos por su SKU. Genera un feed igual que el alta, así
+     * que también se procesa en diferido y cuenta para el límite de llamadas.
+     */
+    async productRemove(credentials: FalabellaCredentials, sellerSkus: string[]): Promise<string> {
+        if (!sellerSkus.length) {
+            throw new BadRequestException('No hay productos que dar de baja en Falabella.');
+        }
+        const cuerpo = sellerSkus
+            .map(sku => `<Product><SellerSku>${escapeXml(sku)}</SellerSku></Product>`)
+            .join('');
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+
+        const feedId = await this.postFeed(credentials, 'ProductRemove', xml);
+        this.logger.warn(`Baja de ${sellerSkus.length} productos en Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Envía un XML a una acción de feed y devuelve el identificador del lote.
+     * La firma cubre solo los parámetros de la URL; el XML viaja en el cuerpo.
+     */
+    private async postFeed(
+        credentials: FalabellaCredentials,
+        action: string,
+        xml: string,
+    ): Promise<string> {
         const params: Record<string, string | number> = {
-            Action: 'ProductCreate',
+            Action: action,
             Format: 'JSON',
             Timestamp: falabellaTimestamp(),
             UserID: credentials.userId,
             Version: API_VERSION,
         };
-        // La firma cubre solo los parámetros de la URL; el XML viaja en el cuerpo.
         const query = buildSignedQuery(params, credentials.apiKey);
-        const xml = buildProductFeedXml(products, { operatorCode });
 
         let data: any;
         try {
@@ -231,20 +262,18 @@ export class FalabellaApiService {
         } catch (error) {
             const axiosError = error as AxiosError<any>;
             const head = axiosError?.response?.data?.ErrorResponse?.Head;
-            if (head) throw this.describeError('ProductCreate', head.ErrorCode, head.ErrorMessage);
+            if (head) throw this.describeError(action, head.ErrorCode, head.ErrorMessage);
             throw new ServiceUnavailableException(
-                `No se pudo enviar el lote a Falabella: ${axiosError?.message || 'error de red'}`,
+                `No se pudo enviar el lote a Falabella (${action}): ${axiosError?.message || 'error de red'}`,
             );
         }
 
         if (data?.ErrorResponse) {
             const head = data.ErrorResponse.Head || {};
-            throw this.describeError('ProductCreate', head.ErrorCode, head.ErrorMessage);
+            throw this.describeError(action, head.ErrorCode, head.ErrorMessage);
         }
 
-        const feedId = this.extractFeedId(data);
-        this.logger.log(`Lote de ${products.length} productos enviado a Falabella. Feed ${feedId}.`);
-        return feedId;
+        return this.extractFeedId(data);
     }
 
     /**
