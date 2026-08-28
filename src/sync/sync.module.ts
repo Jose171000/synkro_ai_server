@@ -14,12 +14,14 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, Product, User]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
+        NotificationsModule,
     ],
     controllers: [SyncController],
     providers: [SyncService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],

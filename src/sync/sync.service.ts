@@ -15,6 +15,7 @@ import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
 import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
@@ -27,6 +28,9 @@ const ATRIBUTOS_YA_CUBIERTOS = new Set([
     'condition_type', 'package_width', 'package_length', 'package_height',
     'package_weight', 'variation', 'price', 'stock', 'status',
 ]);
+
+/** Por debajo de estas unidades se avisa que un producto se agota. */
+const LOW_STOCK_THRESHOLD = 5;
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
@@ -51,6 +55,7 @@ export class SyncService {
         private readonly meliApi: MeliApiService,
         private readonly yavendioApi: YavendioApiService,
         private readonly falabellaApi: FalabellaApiService,
+        private readonly notifications: NotificationsService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -147,6 +152,13 @@ export class SyncService {
             // update() y no save(): guardar la entidad completa reescribiría
             // el token ilegible como NULL y perderíamos el dato cifrado.
             await this.connectionRepository.update(connection.id, { status: 'error' });
+            await this.notifications.notify(userId, {
+                type: 'connection',
+                severity: 'error',
+                title: `No se pueden leer las credenciales de ${marketplace}`,
+                body: 'Vuelve a conectar la cuenta desde Marketplaces para seguir publicando y recibiendo ventas.',
+                marketplace,
+            });
             throw new BadRequestException(
                 `No se pudieron leer las credenciales guardadas de ${marketplace}. Reconecta tu cuenta.`,
             );
@@ -169,6 +181,15 @@ export class SyncService {
             } catch (error) {
                 connection.status = 'error';
                 await this.connectionRepository.save(connection);
+                await this.notifications.notify(userId, {
+                    type: 'connection',
+                    severity: 'error',
+                    title: `Se cayó la conexión con ${marketplace}`,
+                    body:
+                        `La sesión caducó y no se pudo renovar sola. Hasta que la reconectes, ` +
+                        `no se publican productos ni se registran sus ventas.`,
+                    marketplace,
+                });
                 throw new BadRequestException(
                     `La sesión con ${marketplace} expiró y no se pudo renovar. Reconecta tu cuenta.`,
                 );
@@ -368,8 +389,25 @@ export class SyncService {
             link.syncStatus = 'error';
             link.lastError = this.describeApiError(error);
             await this.listingLinkRepository.save(link);
+            await this.notifications.notify(userId, {
+                type: 'publish-error',
+                severity: 'error',
+                title: `No se pudo publicar ${product.name} en Mercado Libre`,
+                body: link.lastError,
+                marketplace: 'mercadolibre',
+                meta: { productId, sku: product.sku },
+            });
             throw error;
         }
+
+        await this.notifications.notify(userId, {
+            type: 'publish',
+            severity: 'success',
+            title: `${product.name} ya está publicado en Mercado Libre`,
+            body: `Publicación ${link.externalId} activa con ${product.stock} unidades.`,
+            marketplace: 'mercadolibre',
+            meta: { productId, sku: product.sku, permalink: link.permalink },
+        });
 
         return this.listingLinkRepository.save(link);
     }
@@ -758,6 +796,35 @@ export class SyncService {
             `[Sync] Feed Falabella ${feed.externalFeedId}: ${estado.status}, ` +
             `${estado.processedRecords} ok, ${estado.failedRecords} con error.`,
         );
+
+        const correctos = Math.max(0, estado.processedRecords - estado.failedRecords);
+        if (correctos > 0) {
+            await this.notifications.notify(userId, {
+                type: 'publish',
+                severity: 'success',
+                title: `Falabella publicó ${correctos} ${correctos === 1 ? 'producto' : 'productos'}`,
+                body: `El lote terminó correctamente. Falabella los revisará antes de ponerlos a la venta.`,
+                marketplace: 'falabella',
+                meta: { feedId: feed.externalFeedId },
+            });
+        }
+        if (estado.failedRecords > 0) {
+            // Se listan los primeros motivos: con el detalle a la vista se
+            // puede corregir sin entrar a buscarlo a otra pantalla.
+            const detalle = estado.errors
+                .slice(0, 3)
+                .map(e => `${e.sku ? e.sku + ': ' : ''}${e.message}`)
+                .join(' — ');
+            await this.notifications.notify(userId, {
+                type: 'publish-error',
+                severity: 'error',
+                title: `Falabella rechazó ${estado.failedRecords} ${estado.failedRecords === 1 ? 'producto' : 'productos'}`,
+                body: detalle || 'Revisa el detalle del lote en Marketplaces.',
+                marketplace: 'falabella',
+                meta: { feedId: feed.externalFeedId, errors: estado.errors.slice(0, 10) },
+            });
+        }
+
         return { status: estado.status };
     }
 
@@ -913,6 +980,41 @@ export class SyncService {
             product.stock = Math.max(0, product.stock - quantity);
             await this.productRepository.save(product);
             console.log(`[Sync] Venta ML ${orderId}: ${quantity}x ${product.sku} → stock ${product.stock}`);
+
+            await this.notifications.notify(userId, {
+                type: 'sale',
+                severity: 'success',
+                title: `Venta en Mercado Libre: ${quantity} x ${product.name}`,
+                body:
+                    `Pedido ${orderId} por ${order.currency_id || 'PEN'} ${Number(order.total_amount || 0).toFixed(2)}. ` +
+                    `Quedan ${product.stock} unidades de ${product.sku}.`,
+                marketplace: 'mercadolibre',
+                meta: { orderId, productId: product.id, sku: product.sku, quantity },
+            });
+
+            // Avisar cuando el stock se está acabando, mientras aún da tiempo
+            // a reponer. Se avisa al cruzar el umbral y no por debajo, para
+            // no repetir el mismo aviso en cada venta.
+            if (product.stock > 0 && product.stock <= LOW_STOCK_THRESHOLD &&
+                product.stock + quantity > LOW_STOCK_THRESHOLD) {
+                await this.notifications.notify(userId, {
+                    type: 'low-stock',
+                    severity: 'warning',
+                    title: `Se está agotando: ${product.name}`,
+                    body: `Quedan ${product.stock} unidades de ${product.sku}. Repone antes de quedarte sin stock publicado.`,
+                    marketplace: 'mercadolibre',
+                    meta: { productId: product.id, sku: product.sku, stock: product.stock },
+                });
+            } else if (product.stock === 0) {
+                await this.notifications.notify(userId, {
+                    type: 'low-stock',
+                    severity: 'error',
+                    title: `Sin stock: ${product.name}`,
+                    body: `${product.sku} se quedó en cero tras la última venta. La publicación dejará de vender.`,
+                    marketplace: 'mercadolibre',
+                    meta: { productId: product.id, sku: product.sku, stock: 0 },
+                });
+            }
 
             // Propagate the new stock to every OTHER channel where it's published
             const otherLinks = await this.listingLinkRepository.find({

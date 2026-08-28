@@ -20,6 +20,7 @@ import { SyncModule } from './sync/sync.module';
 import { AdminModule } from './admin/admin.module';
 import { ReportsModule } from './reports/reports.module';
 import { CrmModule } from './crm/crm.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -122,6 +123,7 @@ import { CrmModule } from './crm/crm.module';
     AdminModule,
     ReportsModule,
     CrmModule,
+    NotificationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
