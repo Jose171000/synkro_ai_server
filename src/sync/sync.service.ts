@@ -12,6 +12,7 @@ import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
+import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
@@ -34,6 +35,7 @@ export class SyncService {
         private readonly redis: Redis,
         private readonly meliApi: MeliApiService,
         private readonly yavendioApi: YavendioApiService,
+        private readonly falabellaApi: FalabellaApiService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -218,6 +220,60 @@ export class SyncService {
     async getYavendioApiKey(userId: string): Promise<string> {
         const connection = await this.getValidConnection(userId, 'yavendio');
         return connection.accessToken;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Falabella: conexión por UserID + API key
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Conecta la cuenta del Seller Center de Falabella. Necesita dos datos:
+     * el UserID (que es el correo de la cuenta) y la API key. Los dos viajan
+     * en cada petición —el correo como parámetro y la clave como secreto que
+     * firma la llamada— así que el correo se guarda legible y la clave cifrada.
+     *
+     * Antes de guardar nada se hace una consulta real de marcas: si la firma
+     * o la clave están mal, Falabella rechaza todo por igual y es mejor que
+     * el usuario se entere aquí y no cuando intente publicar.
+     */
+    async connectFalabella(
+        ownerId: string,
+        credentials: FalabellaCredentials,
+    ): Promise<{ marketplace: string; nickname: string; brandCount: number }> {
+        const userId = (credentials.userId || '').trim();
+        const apiKey = (credentials.apiKey || '').trim();
+        if (!userId || !apiKey) {
+            throw new BadRequestException('Falta el UserID o la API key de Falabella.');
+        }
+
+        const { brandCount } = await this.falabellaApi.verifyCredentials({ userId, apiKey });
+
+        let connection = await this.connectionRepository.findOne({
+            where: { marketplace: 'falabella', owner: { id: ownerId } },
+        });
+        if (!connection) {
+            connection = this.connectionRepository.create({
+                marketplace: 'falabella',
+                owner: { id: ownerId } as any,
+            });
+        }
+
+        connection.externalUserId = userId;
+        connection.externalNickname = userId;
+        connection.accessToken = apiKey;
+        connection.refreshToken = null as any;
+        connection.expiresAt = null; // las API keys no caducan
+        connection.secrets = { brandCount };
+        connection.status = 'active';
+
+        await this.connectionRepository.save(connection);
+        return { marketplace: 'falabella', nickname: userId, brandCount };
+    }
+
+    /** Credenciales descifradas de Falabella. Interna: ningún endpoint las expone. */
+    async getFalabellaCredentials(ownerId: string): Promise<FalabellaCredentials> {
+        const connection = await this.getValidConnection(ownerId, 'falabella');
+        return { userId: connection.externalUserId, apiKey: connection.accessToken };
     }
 
     // ─────────────────────────────────────────────────────────────

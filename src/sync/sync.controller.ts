@@ -7,6 +7,7 @@ import { SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
+import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
 
 @ApiTags('sync')
 @Controller('sync')
@@ -64,6 +65,17 @@ export class SyncController {
     })
     connectYavendio(@Body() dto: ConnectYavendioDto, @Req() req) {
         return this.syncService.connectYavendio(req.user.id, dto.apiKey);
+    }
+
+    @Post('falabella/connect')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Conecta la cuenta de Falabella Seller Center',
+        description: 'Comprueba las credenciales con una consulta real antes de guardarlas. La API key se guarda cifrada y nunca se devuelve.',
+    })
+    connectFalabella(@Body() dto: ConnectFalabellaDto, @Req() req) {
+        return this.syncService.connectFalabella(req.user.id, { userId: dto.userId, apiKey: dto.apiKey });
     }
 
     @Get('listings')
