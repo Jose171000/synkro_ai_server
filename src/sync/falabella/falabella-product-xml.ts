@@ -28,6 +28,11 @@ export interface FalabellaProductInput {
     productId?: string;
     /** Para variantes: mismo ParentSku en todo el grupo. */
     parentSku?: string;
+    /**
+     * Nombre de la variante. Muchas categorías lo exigen aunque el producto
+     * no tenga variantes; en ese caso vale un valor único como el propio SKU.
+     */
+    variation?: string;
     status?: 'active' | 'inactive';
     /** Atributos propios de la categoría (Model, ProductionCountry, Material...). */
     extraAttributes?: Record<string, string | number | undefined | null>;
@@ -95,6 +100,7 @@ function buildProduct(product: FalabellaProductInput, options: BuildOptions): st
         tag('SellerSku', product.sellerSku),
         tag('Name', product.name),
         tag('ParentSku', product.parentSku),
+        tag('Variation', product.variation),
         tag('ProductId', product.productId),
         `<Description>${cdata(product.description)}</Description>`,
         tag('Brand', product.brand),

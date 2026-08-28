@@ -26,6 +26,19 @@ export interface FalabellaFeedStatus {
     errors: { sku?: string; message: string }[];
 }
 
+export interface FalabellaAttribute {
+    /** Nombre técnico, en minúsculas con guion bajo (ej. tipo_automotriz). */
+    name: string;
+    /** Etiqueta exacta que hay que usar en el XML (ej. TipoAutomotriz). */
+    feedName: string;
+    /** Nombre en castellano, el que ve una persona. */
+    label: string;
+    isMandatory: boolean;
+    inputType: string;
+    /** Valores admitidos, cuando el atributo es una lista cerrada. */
+    options: string[];
+}
+
 export interface FalabellaOrder {
     OrderId: number;
     OrderNumber: number;
@@ -41,6 +54,7 @@ export interface FalabellaOrder {
 
 const API_BASE = 'https://sellercenter-api.falabella.com';
 const API_VERSION = '1.0';
+const ATTRIBUTE_CACHE_MS = 60 * 60 * 1000; // 1 hora
 
 /**
  * Cliente HTTP del Seller Center de Falabella.
@@ -62,6 +76,8 @@ const API_VERSION = '1.0';
 export class FalabellaApiService {
     private readonly logger = new Logger('FalabellaApi');
     private readonly http: AxiosInstance;
+    /** Atributos por categoría; evita repetir la misma consulta en cada lote. */
+    private readonly attributeCache = new Map<string, { at: number; attributes: FalabellaAttribute[] }>();
 
     constructor() {
         this.http = axios.create({ baseURL: API_BASE, timeout: 30000 });
@@ -257,6 +273,49 @@ export class FalabellaApiService {
             failedRecords: Number(feed?.FailedRecords ?? 0),
             errors,
         };
+    }
+
+    /**
+     * Atributos que pide una categoría, con cuáles son obligatorios y qué
+     * valores admiten.
+     *
+     * Cada categoría exige cosas distintas: la de accesorios de automoción
+     * pide `tipo_automotriz`, la de mascarillas pide otras. Sin consultarlo
+     * primero, publicar es adivinar — y Falabella solo avisa del error
+     * después de procesar el lote entero.
+     *
+     * Se guarda en memoria un rato porque no cambia de un minuto a otro y
+     * cada consulta gasta una llamada.
+     */
+    async getCategoryAttributes(
+        credentials: FalabellaCredentials,
+        categoryId: number | string,
+    ): Promise<FalabellaAttribute[]> {
+        const clave = `${credentials.userId}:${categoryId}`;
+        const enCache = this.attributeCache.get(clave);
+        if (enCache && Date.now() - enCache.at < ATTRIBUTE_CACHE_MS) {
+            return enCache.attributes;
+        }
+
+        const body = await this.call<any>(credentials, 'GetCategoryAttributes', { PrimaryCategory: categoryId });
+        const crudos = [].concat(body?.Attribute ?? body?.Attributes?.Attribute ?? []).filter(Boolean) as any[];
+
+        // Falabella manda los dos nombres: `Name` en minúsculas para
+        // identificar el atributo y `FeedName` tal cual debe ir en el XML.
+        const attributes: FalabellaAttribute[] = crudos.map(a => ({
+            name: a.Name ?? a.FeedName,
+            feedName: a.FeedName ?? a.Name,
+            label: a.Label ?? a.Name ?? '',
+            isMandatory: String(a.isMandatory ?? a.IsMandatory ?? '0') === '1',
+            inputType: a.InputType ?? '',
+            options: [].concat(a.Options?.Option ?? [])
+                .filter(Boolean)
+                .map((o: any) => o?.Name ?? o?.GlobalIdentifier)
+                .filter(Boolean),
+        }));
+
+        this.attributeCache.set(clave, { at: Date.now(), attributes });
+        return attributes;
     }
 
     /** Pedidos del vendedor, opcionalmente desde una fecha. */

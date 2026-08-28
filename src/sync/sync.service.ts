@@ -15,7 +15,18 @@ import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
 import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
+import { FalabellaAttribute } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
+
+/**
+ * Atributos obligatorios que ya se mandan como campos fijos del producto:
+ * no hay que volver a pedirselos a quien carga el catalogo.
+ */
+const ATRIBUTOS_YA_CUBIERTOS = new Set([
+    'name', 'brand', 'description', 'primary_category', 'seller_sku',
+    'condition_type', 'package_width', 'package_length', 'package_height',
+    'package_weight', 'variation', 'price', 'stock', 'status',
+]);
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
@@ -420,6 +431,13 @@ export class SyncService {
     // Falabella: publicación por lotes
     // ─────────────────────────────────────────────────────────────
 
+    /** La categoría de Falabella asignada al producto, si la tiene. */
+    private categoriaFalabella(product: Product): string | number | undefined {
+        const marketplaceIds = (product.marketplaceIds as any) || {};
+        const attributes = (product.aiAttributes as any) || {};
+        return marketplaceIds.falabella_category_id ?? attributes.falabella_category_id;
+    }
+
     /** Código de operador: identifica el país. 'fape' es Perú, 'facl' Chile. */
     private get falabellaOperatorCode(): string {
         return process.env.FALABELLA_OPERATOR_CODE || 'fape';
@@ -434,7 +452,11 @@ export class SyncService {
      * faltan las medidas" que mandar 500 y devolverle errores sueltos
      * imposibles de interpretar.
      */
-    private toFalabellaInput(product: Product): { input: FalabellaProductInput } | { reason: string } {
+    private toFalabellaInput(
+        product: Product,
+        status: 'active' | 'inactive' = 'active',
+        categoryAttributes: FalabellaAttribute[] = [],
+    ): { input: FalabellaProductInput } | { reason: string } {
         const attributes = (product.aiAttributes as any) || {};
         const marketplaceIds = (product.marketplaceIds as any) || {};
 
@@ -463,6 +485,30 @@ export class SyncService {
             return { reason: 'la descripción es demasiado corta (Falabella pide 6 caracteres como mínimo)' };
         }
 
+        // Cada categoria exige atributos propios. Los que ya cubrimos con
+        // campos fijos no se piden otra vez; del resto, si falta alguno
+        // obligatorio se dice cual, en lugar de mandar el lote y que
+        // Falabella lo rechace despues sin que nadie entienda por que.
+        const faltantes: string[] = [];
+        const propios: Record<string, string> = {};
+
+        for (const attribute of categoryAttributes) {
+            if (!attribute.isMandatory) continue;
+            if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name)) continue;
+
+            const valor = this.buscarAtributo(attributes, attribute.name);
+            if (valor === undefined || valor === null || String(valor).trim() === '') {
+                faltantes.push(attribute.label || attribute.feedName);
+                continue;
+            }
+            // FeedName ya viene con el nombre exacto de la etiqueta XML.
+            propios[attribute.feedName] = String(valor);
+        }
+
+        if (faltantes.length) {
+            return { reason: `le faltan datos que pide su categoria en Falabella: ${faltantes.join(', ')}` };
+        }
+
         return {
             input: {
                 sellerSku: product.sku,
@@ -472,17 +518,32 @@ export class SyncService {
                 primaryCategory: category,
                 price: Number(product.price),
                 stock: product.stock,
+                status,
                 packageWidth: Number(width),
                 packageLength: Number(length),
                 packageHeight: Number(height),
                 packageWeight: Number(weight),
                 productId: attributes.ean || attributes.gtin || undefined,
-                extraAttributes: {
-                    Model: attributes.model || undefined,
-                    ProductionCountry: attributes.productionCountry || undefined,
-                },
+                // Muchas categorias exigen Variation aunque el producto no
+                // tenga variantes; el SKU sirve como valor unico.
+                variation: attributes.variation || product.sku,
+                extraAttributes: propios,
             },
         };
+    }
+
+    /**
+     * Busca el valor de un atributo tolerando como este escrito: Falabella
+     * los nombra `tipo_automotriz` y quien carga el producto puede haberlo
+     * guardado como `tipoAutomotriz` o `TipoAutomotriz`.
+     */
+    private buscarAtributo(attributes: Record<string, any>, feedName: string): any {
+        const normalizar = (texto: string) => texto.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const buscado = normalizar(feedName);
+        for (const [clave, valor] of Object.entries(attributes || {})) {
+            if (normalizar(clave) === buscado) return valor;
+        }
+        return undefined;
     }
 
     /**
@@ -493,8 +554,16 @@ export class SyncService {
      * exige 2 minutos entre cada una, así que mandar un producto por llamada
      * deja de ser viable en cuanto hay catálogo. Aquí se agrupan de a 500,
      * que es lo que ellos recomiendan.
+     *
+     * Con `status: 'inactive'` el producto se crea en Falabella pero no queda
+     * a la venta: útil para revisarlo antes de exponerlo, o para probar la
+     * integración sin poner nada en el escaparate.
      */
-    async publishBatchToFalabella(userId: string, productIds: string[]) {
+    async publishBatchToFalabella(
+        userId: string,
+        productIds: string[],
+        options: { status?: 'active' | 'inactive' } = {},
+    ) {
         if (!productIds?.length) {
             throw new BadRequestException('Selecciona al menos un producto para publicar.');
         }
@@ -511,8 +580,31 @@ export class SyncService {
         const aceptados: { product: Product; input: FalabellaProductInput }[] = [];
         const rechazados: { sku: string; nombre: string; motivo: string }[] = [];
 
+        // Se consultan los atributos de cada categoria una sola vez, por mas
+        // productos que la compartan.
+        const atributosPorCategoria = new Map<string, FalabellaAttribute[]>();
         for (const product of products) {
-            const resultado = this.toFalabellaInput(product);
+            const categoria = this.categoriaFalabella(product);
+            if (!categoria || atributosPorCategoria.has(String(categoria))) continue;
+            try {
+                atributosPorCategoria.set(
+                    String(categoria),
+                    await this.falabellaApi.getCategoryAttributes(credentials, categoria),
+                );
+            } catch (error: any) {
+                // Si no se pueden consultar, seguimos con las validaciones
+                // basicas: es peor bloquear la publicacion entera.
+                console.warn(`[Sync] No se pudieron leer los atributos de la categoria ${categoria}: ${error?.message}`);
+            }
+        }
+
+        for (const product of products) {
+            const categoria = this.categoriaFalabella(product);
+            const resultado = this.toFalabellaInput(
+                product,
+                options.status ?? 'active',
+                atributosPorCategoria.get(String(categoria)) ?? [],
+            );
             if ('reason' in resultado) {
                 rechazados.push({ sku: product.sku, nombre: product.name, motivo: resultado.reason });
             } else {
