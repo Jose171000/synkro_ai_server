@@ -6,6 +6,7 @@ import { RequireSection, SectionAccessGuard } from '../common/guards/section-acc
 import { SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 
 @ApiTags('sync')
 @Controller('sync')
@@ -52,6 +53,17 @@ export class SyncController {
             const message = error?.response?.message || error?.message || 'Error al conectar con Mercado Libre';
             return res.redirect(`${frontend}/?meli=error&message=${encodeURIComponent(message)}`);
         }
+    }
+
+    @Post('yavendio/connect')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Conecta la cuenta de Yavendió del usuario con su API key',
+        description: 'Valida la clave contra Yavendió antes de guardarla cifrada. La clave nunca se devuelve.',
+    })
+    connectYavendio(@Body() dto: ConnectYavendioDto, @Req() req) {
+        return this.syncService.connectYavendio(req.user.id, dto.apiKey);
     }
 
     @Get('listings')

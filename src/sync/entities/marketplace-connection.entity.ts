@@ -43,9 +43,13 @@ export class MarketplaceConnection {
     @Column('text', { nullable: true, transformer: encryptedJsonTransformer })
     secrets: Record<string, any> | null;
 
-    // When the current accessToken stops being valid
-    @Column({ type: 'timestamptz' })
-    expiresAt: Date;
+    /**
+     * Cuándo deja de valer el accessToken. Nulo cuando la credencial no
+     * caduca: las API keys de Yavendió o Falabella viven hasta que el
+     * cliente las revoca a mano.
+     */
+    @Column({ type: 'timestamptz', nullable: true })
+    expiresAt: Date | null;
 
     @Column({ default: 'active' })
     status: 'active' | 'revoked' | 'error';

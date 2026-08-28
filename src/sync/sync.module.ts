@@ -7,6 +7,7 @@ import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
 import { SyncProcessor } from './sync.processor';
 import { MeliApiService } from './meli/meli-api.service';
+import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { CredentialsEncryptionService } from './credentials-encryption.service';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
@@ -19,7 +20,7 @@ import { Product } from '../products/entities/product.entity';
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
     ],
     controllers: [SyncController],
-    providers: [SyncService, SyncProcessor, MeliApiService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService],
+    providers: [SyncService, SyncProcessor, MeliApiService, YavendioApiService, CredentialsEncryptionService, SectionAccessGuard],
+    exports: [SyncService, YavendioApiService],
 })
 export class SyncModule { }

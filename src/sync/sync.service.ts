@@ -11,6 +11,7 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
+import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
@@ -32,6 +33,7 @@ export class SyncService {
         @Inject(REDIS_CLIENT)
         private readonly redis: Redis,
         private readonly meliApi: MeliApiService,
+        private readonly yavendioApi: YavendioApiService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -133,7 +135,13 @@ export class SyncService {
             );
         }
 
-        const needsRefresh = connection.expiresAt.getTime() - Date.now() < TOKEN_REFRESH_MARGIN_MS;
+        // Solo Mercado Libre usa OAuth con tokens que caducan. Las API keys
+        // (Yavendió, Falabella) no tienen expiración ni refresco: viven hasta
+        // que el cliente las revoca, y por eso expiresAt puede venir vacío.
+        const needsRefresh =
+            marketplace === 'mercadolibre' &&
+            !!connection.expiresAt &&
+            connection.expiresAt.getTime() - Date.now() < TOKEN_REFRESH_MARGIN_MS;
         if (needsRefresh) {
             try {
                 const tokens = await this.meliApi.refreshTokens(connection.refreshToken);
@@ -151,6 +159,65 @@ export class SyncService {
         }
 
         return connection;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Yavendió: conexión por API key
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Conecta la cuenta de Yavendió del usuario a partir de una API key que
+     * él mismo pega. A diferencia de Mercado Libre no hay OAuth: la clave ES
+     * la credencial, así que antes de guardarla se comprueba contra la API
+     * pidiendo el perfil de la empresa. Así el usuario sabe al instante si
+     * la clave sirve, y de paso vemos a qué cuenta pertenece.
+     *
+     * La clave nunca vuelve al frontend y se guarda cifrada.
+     */
+    async connectYavendio(userId: string, apiKey: string): Promise<{ marketplace: string; nickname: string }> {
+        const trimmed = (apiKey || '').trim();
+        if (!trimmed) {
+            throw new BadRequestException('Pega la API key de Yavendió para conectar la cuenta.');
+        }
+
+        // Si la clave no sirve, esto lanza un error explicando por qué y no
+        // llegamos a guardar nada.
+        const company = await this.yavendioApi.getCompany(trimmed);
+
+        let connection = await this.connectionRepository.findOne({
+            where: { marketplace: 'yavendio', owner: { id: userId } },
+        });
+        if (!connection) {
+            connection = this.connectionRepository.create({
+                marketplace: 'yavendio',
+                owner: { id: userId } as any,
+            });
+        }
+
+        connection.externalUserId = company.id;
+        connection.externalNickname = company.name;
+        connection.accessToken = trimmed;
+        connection.refreshToken = null as any;
+        connection.expiresAt = null; // las API keys no caducan
+        connection.secrets = {
+            country: company.country,
+            currency: company.currency,
+            plan: company.planName,
+            phoneNumber: company.phoneNumber,
+        };
+        connection.status = 'active';
+
+        await this.connectionRepository.save(connection);
+        return { marketplace: 'yavendio', nickname: company.name };
+    }
+
+    /**
+     * Devuelve la API key descifrada de Yavendió del usuario. La usa el CRM
+     * para traer las conversaciones. Es interna: ningún endpoint la expone.
+     */
+    async getYavendioApiKey(userId: string): Promise<string> {
+        const connection = await this.getValidConnection(userId, 'yavendio');
+        return connection.accessToken;
     }
 
     // ─────────────────────────────────────────────────────────────

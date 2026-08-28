@@ -1,10 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { CrmService } from './crm.service';
+import { YavendioImportService } from './yavendio-import.service';
+import { ImportYavendioDto } from './dto/import-yavendio.dto';
 import { CreateLeadDto, ImportLeadsDto, UpdateLeadDto } from './dto/lead.dto';
 
 @ApiTags('crm')
@@ -13,7 +15,8 @@ import { CreateLeadDto, ImportLeadsDto, UpdateLeadDto } from './dto/lead.dto';
 @Roles(UserRole.ADMIN)
 @Controller('crm')
 export class CrmController {
-    constructor(private readonly crmService: CrmService) { }
+    constructor(
+        private readonly yavendioImport: YavendioImportService,private readonly crmService: CrmService) { }
 
     @Get('leads')
     @ApiOperation({ summary: 'Lista los prospectos, con búsqueda y filtro por etapa' })
@@ -56,5 +59,21 @@ export class CrmController {
     })
     import(@Body() dto: ImportLeadsDto) {
         return this.crmService.importFromCsv(dto.csvUrl, dto.dryRun === true);
+    }
+
+    @Post('import/yavendio')
+    @ApiOperation({
+        summary: 'Importa las conversaciones de Yavendió al embudo',
+        description:
+            'Usa la cuenta de Yavendió conectada por el administrador. Cada conversación se convierte en un prospecto: ' +
+            'las ventas confirmadas entran como ganado/perdido, las que tienen mensajes como contactado y las que ' +
+            'nunca tuvieron uno como nuevo. Con dryRun=true solo devuelve el conteo sin guardar, y con skipEmpty=true ' +
+            'deja fuera las conversaciones sin ningún mensaje. Nunca revierte una etapa movida a mano.',
+    })
+    importYavendio(@Body() dto: ImportYavendioDto, @Req() req) {
+        return this.yavendioImport.import(req.user.id, {
+            dryRun: dto.dryRun === true,
+            skipEmpty: dto.skipEmpty === true,
+        });
     }
 }
