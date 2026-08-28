@@ -122,9 +122,12 @@ export class FalabellaApiService {
     }
 
     /**
-     * Marcas del catálogo. Es la consulta más barata y sin filtros de la API,
-     * así que se usa para comprobar unas credenciales recién pegadas: si
-     * responde, la firma y la clave son correctas.
+     * Marcas del catálogo de Falabella.
+     *
+     * CUIDADO: comprobado contra la API real, GetBrands NO valida la firma —
+     * responde el catálogo completo aunque la API key sea inventada. Es un
+     * catálogo global, no datos del vendedor. NO sirve para comprobar
+     * credenciales; para eso está verifyCredentials.
      */
     async getBrands(credentials: FalabellaCredentials): Promise<FalabellaBrand[]> {
         const body = await this.call<any>(credentials, 'GetBrands');
@@ -132,10 +135,16 @@ export class FalabellaApiService {
         return Array.isArray(brands) ? brands : [brands];
     }
 
-    /** Comprueba que las credenciales sirven. Devuelve cuántas marcas ve la cuenta. */
-    async verifyCredentials(credentials: FalabellaCredentials): Promise<{ brandCount: number }> {
-        const brands = await this.getBrands(credentials);
-        return { brandCount: brands.length };
+    /**
+     * Comprueba que las credenciales sirven de verdad.
+     *
+     * Usa GetProducts porque consulta datos del propio vendedor y sí verifica
+     * la firma: con una clave incorrecta responde «E007: Login failed.
+     * Signature mismatch». Se pide un solo producto para que la llamada sea
+     * barata, y no es ninguna de las cinco acciones con límite estricto.
+     */
+    async verifyCredentials(credentials: FalabellaCredentials): Promise<void> {
+        await this.call(credentials, 'GetProducts', { Limit: 1, Offset: 0 });
     }
 
     /** Pedidos del vendedor, opcionalmente desde una fecha. */

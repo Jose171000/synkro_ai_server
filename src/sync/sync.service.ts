@@ -239,14 +239,14 @@ export class SyncService {
     async connectFalabella(
         ownerId: string,
         credentials: FalabellaCredentials,
-    ): Promise<{ marketplace: string; nickname: string; brandCount: number }> {
+    ): Promise<{ marketplace: string; nickname: string }> {
         const userId = (credentials.userId || '').trim();
         const apiKey = (credentials.apiKey || '').trim();
         if (!userId || !apiKey) {
             throw new BadRequestException('Falta el UserID o la API key de Falabella.');
         }
 
-        const { brandCount } = await this.falabellaApi.verifyCredentials({ userId, apiKey });
+        await this.falabellaApi.verifyCredentials({ userId, apiKey });
 
         let connection = await this.connectionRepository.findOne({
             where: { marketplace: 'falabella', owner: { id: ownerId } },
@@ -263,11 +263,10 @@ export class SyncService {
         connection.accessToken = apiKey;
         connection.refreshToken = null as any;
         connection.expiresAt = null; // las API keys no caducan
-        connection.secrets = { brandCount };
         connection.status = 'active';
 
         await this.connectionRepository.save(connection);
-        return { marketplace: 'falabella', nickname: userId, brandCount };
+        return { marketplace: 'falabella', nickname: userId };
     }
 
     /** Credenciales descifradas de Falabella. Interna: ningún endpoint las expone. */
