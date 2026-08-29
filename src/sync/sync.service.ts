@@ -970,6 +970,235 @@ export class SyncService {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Falabella: pedidos entrantes por webhook
+    // ─────────────────────────────────────────────────────────────
+
+    /** Eventos que nos interesan: una venta nueva y los cambios de estado. */
+    private readonly FALABELLA_EVENTS = ['onOrderCreated', 'onOrderItemsStatusChanged'];
+
+    /** URL pública de este servidor, a la que Falabella enviará los avisos. */
+    private get publicApiUrl(): string {
+        return (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
+    }
+
+    /**
+     * Da de alta el webhook de Falabella para esta cuenta.
+     *
+     * Falabella no firma sus llamadas ni manda ninguna credencial, así que la
+     * identidad viaja en la propia URL: cada cuenta recibe una dirección con
+     * un testigo aleatorio que solo conoce ella. Eso resuelve dos cosas a la
+     * vez — saber de qué vendedor es el aviso, y que nadie de fuera pueda
+     * inventarse ventas llamando a nuestro endpoint.
+     *
+     * Se AÑADE a los webhooks existentes. La cuenta de este vendedor ya tiene
+     * uno apuntando a Yuju; borrarlo le dejaría sin recibir sus ventas allí
+     * mientras dure la convivencia entre ambos sistemas.
+     */
+    async registerFalabellaWebhook(userId: string) {
+        if (!this.publicApiUrl) {
+            throw new BadRequestException(
+                'Falta configurar PUBLIC_API_URL: sin la dirección pública de este servidor, ' +
+                'Falabella no sabría dónde avisar de las ventas.',
+            );
+        }
+
+        const connection = await this.connectionRepository.findOne({
+            where: { marketplace: 'falabella', owner: { id: userId }, status: 'active' },
+        });
+        if (!connection) {
+            throw new BadRequestException('Conecta primero tu cuenta de Falabella.');
+        }
+
+        const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
+
+        // El testigo se conserva entre llamadas: si ya había uno, se reutiliza
+        // para no dejar huérfano el webhook que Falabella ya conoce.
+        const secrets = (connection.secrets as any) || {};
+        const token: string = secrets.webhookToken || randomUUID();
+        const callbackUrl = `${this.publicApiUrl}/api/v1/sync/webhooks/falabella/${token}`;
+
+        const existentes = await this.falabellaApi.getWebhooks(credentials);
+        const ajenos = existentes.filter(w => w.CallbackUrl !== callbackUrl);
+        const yaEsta = existentes.find(w => w.CallbackUrl === callbackUrl);
+
+        let webhookId = yaEsta?.WebhookId;
+        if (!yaEsta) {
+            webhookId = await this.falabellaApi.createWebhook(
+                credentials,
+                callbackUrl,
+                this.FALABELLA_EVENTS,
+            );
+        }
+
+        connection.secrets = { ...secrets, webhookToken: token, webhookId };
+        await this.connectionRepository.save(connection);
+
+        return {
+            message: yaEsta
+                ? 'El aviso de ventas ya estaba configurado.'
+                : 'Falabella avisará a Synkro de cada venta nueva.',
+            callbackUrl,
+            otrosWebhooks: ajenos.map(w => w.CallbackUrl),
+        };
+    }
+
+    /**
+     * Entrada pública de los avisos de Falabella.
+     *
+     * Se responde de inmediato y el trabajo real va a la cola: Falabella
+     * reintenta durante 30 días si no recibe respuesta rápida, y no queremos
+     * que una consulta lenta le haga pensar que fallamos.
+     *
+     * El contenido del aviso no se cree a ciegas: solo se usa como pista de
+     * que "algo pasó". Los datos buenos se piden después a la API, que es la
+     * fuente de verdad.
+     */
+    async handleFalabellaNotification(token: string, body: any): Promise<{ received: boolean }> {
+        const connection = await this.findConnectionByWebhookToken(token);
+        if (!connection) {
+            console.warn('[Sync] Aviso de Falabella con un testigo desconocido. Se ignora.');
+            return { received: true };
+        }
+
+        await this.syncQueue.add('falabella-order', {
+            userId: connection.owner.id,
+            hint: body?.payload?.OrderId ?? body?.OrderId ?? null,
+        });
+        return { received: true };
+    }
+
+    /**
+     * Busca la conexión a la que pertenece un testigo de webhook.
+     * Los testigos viven cifrados, así que se comparan en memoria; son pocas
+     * conexiones y esto evita guardarlos en claro solo para poder indexarlos.
+     */
+    private async findConnectionByWebhookToken(token: string): Promise<MarketplaceConnection | null> {
+        if (!token) return null;
+        const conexiones = await this.connectionRepository.find({
+            where: { marketplace: 'falabella' },
+            relations: { owner: true },
+        });
+        return conexiones.find(c => (c.secrets as any)?.webhookToken === token) ?? null;
+    }
+
+    /**
+     * Trae los pedidos recientes de Falabella y aplica los que sean nuevos.
+     *
+     * Se consulta por fecha en vez de fiarse del aviso: así un webhook
+     * perdido no deja una venta sin registrar, y sirve igual para ponerse al
+     * día a mano después de una caída.
+     */
+    async processFalabellaOrders(userId: string, options: { desdeHoras?: number } = {}) {
+        const credentials = await this.getFalabellaCredentials(userId);
+        const desde = new Date(Date.now() - (options.desdeHoras ?? 48) * 60 * 60 * 1000);
+
+        const pedidos = await this.falabellaApi.getOrders(credentials, {
+            createdAfter: desde,
+            limit: 100,
+        });
+
+        let nuevos = 0;
+        let repetidos = 0;
+
+        for (const pedido of pedidos) {
+            const externalId = String((pedido as any).OrderId ?? '');
+            if (!externalId) continue;
+
+            const yaRegistrado = await this.orderRepository.findOne({
+                where: { marketplace: 'falabella', externalId },
+            });
+            if (yaRegistrado) { repetidos++; continue; }
+
+            const items = await this.falabellaApi.getOrderItems(credentials, externalId);
+
+            await this.orderRepository.save(this.orderRepository.create({
+                marketplace: 'falabella',
+                externalId,
+                owner: { id: userId } as any,
+                totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
+                currency: 'PEN',
+                itemsCount: Number((pedido as any).ItemsCount ?? items.length ?? 1),
+                items: items.map(i => ({
+                    sku: i.Sku ?? null,
+                    title: i.Name,
+                    quantity: 1, // Falabella devuelve una línea por unidad vendida
+                    unitPrice: Number(i.PaidPrice ?? i.ItemPrice ?? 0),
+                })),
+                status: String((pedido as any).Statuses?.Status ?? 'pending'),
+                orderDate: (pedido as any).CreatedAt ? new Date((pedido as any).CreatedAt) : new Date(),
+            }));
+            nuevos++;
+
+            await this.aplicarVentaFalabella(userId, externalId, items, pedido);
+        }
+
+        if (nuevos) {
+            console.log(`[Sync] Falabella: ${nuevos} pedidos nuevos, ${repetidos} ya registrados.`);
+        }
+        return { nuevos, repetidos, revisados: pedidos.length };
+    }
+
+    /** Descuenta stock y avisa por cada línea vendida en Falabella. */
+    private async aplicarVentaFalabella(
+        userId: string,
+        orderId: string,
+        items: any[],
+        pedido: any,
+    ): Promise<void> {
+        for (const item of items) {
+            const sku = item?.Sku;
+            if (!sku) continue;
+
+            const product = await this.productRepository.findOne({
+                where: { sku, owner: { id: userId } },
+            });
+            if (!product) {
+                console.warn(`[Sync] Venta Falabella ${orderId}: SKU ${sku} no está en el catálogo.`);
+                continue;
+            }
+
+            product.stock = Math.max(0, product.stock - 1);
+            await this.productRepository.save(product);
+
+            await this.notifications.notify(userId, {
+                type: 'sale',
+                severity: 'success',
+                title: `Venta en Falabella: ${product.name}`,
+                body:
+                    `Pedido ${(pedido as any).OrderNumber ?? orderId} por PEN ` +
+                    `${Number(item.PaidPrice ?? item.ItemPrice ?? 0).toFixed(2)}. ` +
+                    `Quedan ${product.stock} unidades de ${sku}.`,
+                marketplace: 'falabella',
+                meta: { orderId, productId: product.id, sku },
+            });
+
+            if (product.stock === 0) {
+                await this.notifications.notify(userId, {
+                    type: 'low-stock',
+                    severity: 'error',
+                    title: `Sin stock: ${product.name}`,
+                    body: `${sku} se quedó en cero tras la venta en Falabella.`,
+                    marketplace: 'falabella',
+                    meta: { productId: product.id, sku, stock: 0 },
+                });
+            }
+
+            // Propagar el nuevo stock a los demás canales donde esté publicado.
+            const otros = await this.listingLinkRepository.find({
+                where: { product: { id: product.id }, syncStatus: 'published' },
+            });
+            for (const enlace of otros) {
+                if (enlace.marketplace === 'falabella') continue;
+                await this.syncQueue.add('inventory', {
+                    productId: product.id,
+                    userId,
+                    marketplace: enlace.marketplace,
+                });
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Webhooks (pull): a sale on Mercado Libre lowers local stock
     // ─────────────────────────────────────────────────────────────
 

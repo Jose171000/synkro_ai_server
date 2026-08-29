@@ -46,6 +46,24 @@ export interface FalabellaAttribute {
     options: string[];
 }
 
+export interface FalabellaOrderItem {
+    OrderItemId: string;
+    /** SKU del vendedor: es el que casa con nuestros productos. */
+    Sku: string;
+    ShopSku?: string;
+    Name: string;
+    Status?: string;
+    ItemPrice?: string;
+    PaidPrice?: string;
+}
+
+export interface FalabellaWebhook {
+    WebhookId: string;
+    CallbackUrl: string;
+    WebhookSource?: string;
+    Events?: { Event: string[] | string };
+}
+
 export interface FalabellaOrder {
     OrderId: number;
     OrderNumber: number;
@@ -255,6 +273,15 @@ export class FalabellaApiService {
         action: string,
         xml: string,
     ): Promise<string> {
+        return this.extractFeedId(await this.postFeedRaw(credentials, action, xml));
+    }
+
+    /** Envía un XML y devuelve la respuesta completa. */
+    private async postFeedRaw(
+        credentials: FalabellaCredentials,
+        action: string,
+        xml: string,
+    ): Promise<any> {
         const params: Record<string, string | number> = {
             Action: action,
             Format: 'JSON',
@@ -284,7 +311,7 @@ export class FalabellaApiService {
             throw this.describeError(action, head.ErrorCode, head.ErrorMessage);
         }
 
-        return this.extractFeedId(data);
+        return data;
     }
 
     /**
@@ -427,6 +454,59 @@ export class FalabellaApiService {
             else if (nombre.includes(buscado) || this.normalizar(category.path).includes(buscado)) contienen.push(category);
         }
         return [...empiezan, ...contienen].slice(0, limit);
+    }
+
+    /**
+     * Ítems de un pedido. Falabella no los incluye en GetOrders: hay que
+     * pedirlos aparte, y son los que dicen qué SKU se vendió.
+     */
+    async getOrderItems(credentials: FalabellaCredentials, orderId: string | number): Promise<FalabellaOrderItem[]> {
+        const body = await this.call<any>(credentials, 'GetOrderItems', { OrderId: orderId });
+        const items = body?.OrderItems?.OrderItem ?? [];
+        return (Array.isArray(items) ? items : [items]).filter(Boolean);
+    }
+
+    /** Webhooks registrados en la cuenta. */
+    async getWebhooks(credentials: FalabellaCredentials): Promise<FalabellaWebhook[]> {
+        const body = await this.call<any>(credentials, 'GetWebhooks');
+        const hooks = body?.Webhooks?.Webhook ?? [];
+        return (Array.isArray(hooks) ? hooks : [hooks]).filter(Boolean);
+    }
+
+    /**
+     * Registra un webhook.
+     *
+     * IMPORTANTE: se AÑADE, no se reemplaza. Una cuenta puede tener otros
+     * webhooks de otras plataformas —la de este vendedor apunta a Yuju— y
+     * borrarlos dejaría al cliente sin recibir sus ventas allí.
+     */
+    async createWebhook(
+        credentials: FalabellaCredentials,
+        callbackUrl: string,
+        events: string[],
+    ): Promise<string> {
+        const eventos = events.map(e => `<Event>${escapeXml(e)}</Event>`).join('');
+        const xml =
+            `<?xml version="1.0" encoding="UTF-8"?>` +
+            `<Request><Webhook>` +
+            `<CallbackUrl>${escapeXml(callbackUrl)}</CallbackUrl>` +
+            `<Events>${eventos}</Events>` +
+            `</Webhook></Request>`;
+
+        const data = await this.postFeedRaw(credentials, 'CreateWebhook', xml);
+        const id = data?.SuccessResponse?.Body?.Webhook?.WebhookId
+            ?? data?.SuccessResponse?.Head?.RequestId;
+        this.logger.log(`Webhook creado en Falabella: ${id} → ${callbackUrl}`);
+        return String(id ?? '');
+    }
+
+    /** Elimina un webhook por su id. Solo se usa sobre los nuestros. */
+    async deleteWebhook(credentials: FalabellaCredentials, webhookId: string): Promise<void> {
+        const xml =
+            `<?xml version="1.0" encoding="UTF-8"?>` +
+            `<Request><Webhook><WebhookId>${escapeXml(webhookId)}</WebhookId></Webhook></Request>`;
+        await this.postFeedRaw(credentials, 'DeleteWebhook', xml);
+        this.logger.warn(`Webhook eliminado en Falabella: ${webhookId}`);
     }
 
     /** Pedidos del vendedor, opcionalmente desde una fecha. */

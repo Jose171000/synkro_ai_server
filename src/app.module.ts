@@ -60,6 +60,9 @@ import { DashboardModule } from './dashboard/dashboard.module';
         MELI_CURRENCY_ID: Joi.string().default('PEN'),
         MELI_LISTING_TYPE_ID: Joi.string().default('gold_special'),
         ADMIN_EMAILS: Joi.string().optional().allow(''),
+        // Dirección pública de este servidor. Falabella la necesita para
+        // avisar de las ventas; sin ella no se puede registrar el webhook.
+        PUBLIC_API_URL: Joi.string().optional().allow(''),
         // Si está definida, los correos salen por la API HTTP de Brevo
         // (necesario donde el hosting bloquea SMTP). Si no, se usa SMTP.
         BREVO_API_KEY: Joi.string().optional().allow(''),

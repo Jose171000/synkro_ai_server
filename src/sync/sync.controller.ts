@@ -176,10 +176,43 @@ export class SyncController {
         return this.syncService.getProductSyncStatus(id, req.user.id);
     }
 
+    @Post('falabella/webhook/register')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Pide a Falabella que avise de cada venta',
+        description:
+            'Registra un webhook propio con una dirección única para esta cuenta. Se añade a los que ya existan: ' +
+            'si la cuenta tiene otro sistema conectado, sigue recibiendo sus avisos.',
+    })
+    registerFalabellaWebhook(@Req() req) {
+        return this.syncService.registerFalabellaWebhook(req.user.id);
+    }
+
+    @Post('falabella/orders/sync')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Trae los pedidos recientes de Falabella',
+        description: 'Sirve para ponerse al día si algún aviso se perdió. No duplica los ya registrados.',
+    })
+    syncFalabellaOrders(@Req() req) {
+        return this.syncService.processFalabellaOrders(req.user.id);
+    }
+
     // ── Webhooks ─────────────────────────────────────────────────
 
     // Public: Mercado Libre POSTs notifications here (configure the URL in DevCenter).
     // Must answer 200 fast; heavy work is deferred to the queue.
+    // Público: Falabella llama aquí cuando hay una venta. La identidad va en
+    // el testigo de la URL, porque Falabella no firma sus llamadas.
+    @Post('webhooks/falabella/:token')
+    @HttpCode(HttpStatus.OK)
+    @ApiExcludeEndpoint()
+    handleFalabellaWebhook(@Param('token') token: string, @Body() body: any) {
+        return this.syncService.handleFalabellaNotification(token, body);
+    }
+
     @Post('webhooks/mercadolibre')
     @HttpCode(HttpStatus.OK)
     @ApiExcludeEndpoint()

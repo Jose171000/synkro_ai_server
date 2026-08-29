@@ -7,6 +7,7 @@ import { SyncService } from './sync.service';
  *  - 'publish':    create the listing on the marketplace
  *  - 'inventory':  push local stock/price to a published listing
  *  - 'falabella-feed': check how a batch sent to Falabella turned out
+ *  - 'falabella-order': pull recent Falabella orders after a webhook ping
  *  - 'meli-order': apply a Mercado Libre sale to local stock and propagate
  */
 @Processor('marketplace-sync-queue')
@@ -52,6 +53,13 @@ export class SyncProcessor extends WorkerHost {
                 // cómo fue y, si aún no terminó, se reprograma solo.
                 const { feedRecordId, userId } = job.data;
                 return this.syncService.checkFalabellaFeed(feedRecordId, userId);
+            }
+
+            case 'falabella-order': {
+                // Se consultan los pedidos recientes: el aviso solo dice que
+                // algo pasó, los datos buenos vienen de la API.
+                const { userId } = job.data;
+                return this.syncService.processFalabellaOrders(userId);
             }
 
             case 'meli-order': {
