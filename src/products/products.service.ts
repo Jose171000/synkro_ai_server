@@ -137,25 +137,7 @@ export class ProductsService {
             tone: options?.tone || 'professional',
         });
 
-        // aiContent has shape { categorizedAs: {...}, generatedListings: { amazon: {...}, mercadolibre: {...} } }
-        // We pick the first marketplace entry from generatedListings to populate the generic AI fields.
-        const generatedListings = aiContent.generatedListings ?? aiContent;
-        const firstMarketplaceData = Object.values(generatedListings)[0] as any;
-
-        if (firstMarketplaceData) {
-            product.aiTitle = firstMarketplaceData.title || product.aiTitle;
-            product.aiDescription = firstMarketplaceData.description || product.aiDescription;
-            const bulletPoints = typeof firstMarketplaceData.bullet_points === 'string'
-                ? [firstMarketplaceData.bullet_points]
-                : firstMarketplaceData.bullet_points;
-
-            product.aiKeywords = bulletPoints || product.aiKeywords;
-
-            // The entity uses a transformer so we can assign an object directly
-            product.aiAttributes = typeof firstMarketplaceData.attributes === 'object'
-                ? firstMarketplaceData.attributes
-                : product.aiAttributes;
-        }
+        this.applyAiContent(product, aiContent);
 
         return this.productRepository.save(product);
     }
@@ -192,25 +174,7 @@ export class ProductsService {
         });
 
         // Step 3: Map AI results to product fields
-        const firstMarketplaceData = Object.values(aiContent.generatedListings || aiContent)[0] as any;
-
-        if (firstMarketplaceData) {
-            savedProduct.aiTitle = firstMarketplaceData.title || savedProduct.aiTitle;
-            savedProduct.aiDescription = firstMarketplaceData.description || savedProduct.aiDescription;
-
-            const bulletPoints = typeof firstMarketplaceData.bullet_points === 'string'
-                ? [firstMarketplaceData.bullet_points]
-                : firstMarketplaceData.bullet_points;
-
-            savedProduct.aiKeywords = bulletPoints || savedProduct.aiKeywords;
-            savedProduct.aiAttributes = typeof firstMarketplaceData.attributes === 'object'
-                ? firstMarketplaceData.attributes
-                : savedProduct.aiAttributes;
-        }
-
-        if (aiContent.categorizedAs) {
-            savedProduct.marketplaceIds = aiContent.categorizedAs;
-        }
+        this.applyAiContent(savedProduct, aiContent);
 
         savedProduct.status = 'synced';
 
@@ -283,4 +247,63 @@ export class ProductsService {
         const product = await this.findOne(id, userId);
         return this.productRepository.remove(product);
     }
+
+    /**
+     * Vuelca lo que generó la IA sobre el producto.
+     *
+     * Cada canal responde con una forma distinta: Mercado Libre y Amazon
+     * traen `title` y sus atributos agrupados, mientras que Falabella usa
+     * `name` y deja marca, modelo y condición sueltos en la raíz. Antes solo
+     * se leía el primer canal buscando `title` y `attributes`, así que todo
+     * lo de Falabella se perdía en silencio y luego la publicación fallaba
+     * pidiendo datos que la IA sí había generado.
+     */
+    private applyAiContent(product: Product, aiContent: any): void {
+        const listings = aiContent?.generatedListings ?? aiContent ?? {};
+        const primero = Object.values(listings)[0] as any;
+
+        if (primero) {
+            // Falabella nombra el título como `name`.
+            product.aiTitle = primero.title || primero.name || product.aiTitle;
+            product.aiDescription = primero.description || product.aiDescription;
+
+            const bulletPoints = typeof primero.bullet_points === 'string'
+                ? [primero.bullet_points]
+                : primero.bullet_points;
+            product.aiKeywords = bulletPoints || product.aiKeywords;
+
+            if (typeof primero.attributes === 'object' && primero.attributes) {
+                product.aiAttributes = primero.attributes;
+            }
+        }
+
+        // Los campos propios de Falabella se suman a los atributos, que es
+        // donde los busca la publicación. No pisan lo que ya hubiera.
+        const falabella = (listings as any).falabella;
+        if (falabella) {
+            const propios: Record<string, any> = {
+                brand: falabella.brand,
+                model: falabella.model,
+                productionCountry: falabella.productionCountry,
+                conditionType: falabella.conditionType,
+            };
+            for (const clave of Object.keys(propios)) {
+                if (!propios[clave]) delete propios[clave];
+            }
+            product.aiAttributes = { ...((product.aiAttributes as any) || {}), ...propios };
+
+            // Si Falabella fue el único canal pedido, su descripción es la buena.
+            if (!product.aiDescription && falabella.description) {
+                product.aiDescription = falabella.description;
+            }
+        }
+
+        if (aiContent?.categorizedAs) {
+            product.marketplaceIds = {
+                ...((product.marketplaceIds as any) || {}),
+                ...aiContent.categorizedAs,
+            };
+        }
+    }
+
 }

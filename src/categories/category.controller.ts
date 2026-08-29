@@ -8,6 +8,7 @@ import {
     Param,
     Patch,
     Post,
+    Req,
     UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
+import { FalabellaCategoryImportService } from './falabella-category-import.service';
 import { CategorySeederService } from './category-seeder.service';
 import { AddCategoryDto } from './dto/add-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -28,12 +30,26 @@ import { Repository } from 'typeorm';
 @Controller('categories')
 export class CategoryController {
     constructor(
+        private readonly falabellaImport: FalabellaCategoryImportService,
         private readonly categorySeederService: CategorySeederService,
         @InjectRepository(MarketplaceCategory)
         private readonly categoryRepository: Repository<MarketplaceCategory>,
     ) { }
 
     /** [ADMIN] Add a new category — generates embedding via OpenAI */
+    @Post('falabella/import')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'Trae las categorías de Falabella para que la IA pueda elegirlas',
+        description:
+            'Descarga el árbol completo de Falabella y guarda cada categoría con su vector semántico. ' +
+            'Sin esto la IA no propone categoría de Falabella y hay que ponerla a mano en cada producto. ' +
+            'Se puede repetir: las que ya existen se actualizan.',
+    })
+    importFalabellaCategories(@Req() req) {
+        return this.falabellaImport.importCategories(req.user.id);
+    }
+
     @Post()
     @Roles(UserRole.ADMIN)
     @ApiOperation({
