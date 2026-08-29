@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
+import { SECTION_DEFINITIONS } from '../common/app-sections';
 import { AdminService } from './admin.service';
 import { ReportsService } from '../reports/reports.service';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
@@ -21,6 +22,17 @@ export class AdminController {
         private readonly adminService: AdminService,
         private readonly reportsService: ReportsService,
     ) { }
+
+    @Get('sections')
+    @ApiOperation({
+        summary: 'Secciones sobre las que se puede dar o quitar acceso',
+        description:
+            'La lista vive solo en el servidor. Cualquier módulo nuevo aparece aquí automáticamente, ' +
+            'así que la pantalla de permisos nunca se queda desactualizada.',
+    })
+    getSections() {
+        return SECTION_DEFINITIONS;
+    }
 
     @Get('clients')
     @ApiOperation({ summary: 'Lista todos los clientes con sus estadísticas y pagos (solo admin)' })
