@@ -494,6 +494,76 @@ export class SyncService {
             }));
     }
 
+    /**
+     * Guarda en un producto lo que Falabella exige y el sistema no puede
+     * deducir solo: la categoría, las medidas del paquete y los atributos
+     * propios de esa categoría.
+     *
+     * Va por su propio endpoint y no por la edición normal del producto
+     * porque son datos de un canal concreto; mezclarlos con los campos
+     * generales obligaría a que todo producto los conociera.
+     */
+    async prepareFalabellaProduct(
+        userId: string,
+        productId: string,
+        datos: {
+            categoryId: string;
+            packageWidth: number;
+            packageLength: number;
+            packageHeight: number;
+            packageWeight: number;
+            attributes?: Record<string, string>;
+        },
+    ) {
+        const product = await this.productRepository.findOne({
+            where: { id: productId, owner: { id: userId } },
+        });
+        if (!product) {
+            throw new NotFoundException('Producto no encontrado');
+        }
+
+        product.packageWidth = datos.packageWidth;
+        product.packageLength = datos.packageLength;
+        product.packageHeight = datos.packageHeight;
+        product.packageWeight = datos.packageWeight;
+        product.marketplaceIds = {
+            ...((product.marketplaceIds as any) || {}),
+            falabella_category_id: datos.categoryId,
+        };
+        // Se conservan los atributos que ya tuviera: la IA pudo generar
+        // algunos y no hay por qué perderlos al completar los de Falabella.
+        product.aiAttributes = {
+            ...((product.aiAttributes as any) || {}),
+            ...(datos.attributes || {}),
+        };
+
+        await this.productRepository.save(product);
+
+        // Se comprueba con las reglas reales de publicación: así el usuario
+        // sabe en el momento si el producto ya puede salir o le falta algo.
+        const credentials = await this.getFalabellaCredentials(userId).catch(() => null);
+        let listo = true;
+        let motivo: string | undefined;
+        if (credentials) {
+            const attrs = await this.falabellaApi
+                .getCategoryAttributes(credentials, datos.categoryId)
+                .catch(() => []);
+            const resultado = this.toFalabellaInput(product, 'active', attrs);
+            if ('reason' in resultado) {
+                listo = false;
+                motivo = resultado.reason;
+            }
+        }
+
+        return {
+            message: listo
+                ? 'Producto listo para publicar en Falabella.'
+                : `Guardado, pero todavía ${motivo}.`,
+            listo,
+            motivo,
+        };
+    }
+
     /** La categoría de Falabella asignada al producto, si la tiene. */
     private categoriaFalabella(product: Product): string | number | undefined {
         const marketplaceIds = (product.marketplaceIds as any) || {};

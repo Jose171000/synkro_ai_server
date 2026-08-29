@@ -9,6 +9,7 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
+import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 
 @ApiTags('sync')
 @Controller('sync')
@@ -129,6 +130,17 @@ export class SyncController {
     })
     getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req) {
         return this.syncService.getFalabellaCategoryFields(req.user.id, categoryId);
+    }
+
+    @Patch('falabella/products/:id/preparation')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Guarda la categoría, medidas y atributos que Falabella exige',
+        description: 'Al guardar comprueba con las reglas reales de publicación y responde si el producto ya puede salir o qué le falta.',
+    })
+    prepareFalabella(@Param('id') id: string, @Body() dto: PrepareFalabellaDto, @Req() req) {
+        return this.syncService.prepareFalabellaProduct(req.user.id, id, dto);
     }
 
     @Post('falabella/publish')
