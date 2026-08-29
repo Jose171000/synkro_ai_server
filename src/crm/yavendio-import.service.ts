@@ -68,8 +68,10 @@ export class YavendioImportService {
         return String(value || '').replace(/\D/g, '');
     }
 
-    async import(adminUserId: string, options: YavendioImportOptions = {}): Promise<YavendioImportResult> {
-        const apiKey = await this.syncService.getYavendioApiKey(adminUserId);
+    async import(ownerId: string, options: YavendioImportOptions = {}): Promise<YavendioImportResult> {
+        // Se usa la conexión de quien pide la importación: cada cuenta trae sus
+        // propias conversaciones a su propio embudo.
+        const apiKey = await this.syncService.getYavendioApiKey(ownerId);
         const conversations = await this.yavendioApi.listConversations(apiKey);
 
         const result: YavendioImportResult = {
@@ -100,13 +102,16 @@ export class YavendioImportService {
 
             // Primero por identificador de la conversación; si no, por teléfono,
             // para no duplicar a alguien que ya entró por la hoja de cálculo.
-            let lead = await this.leadRepository.findOne({ where: { externalKey } });
+            let lead = await this.leadRepository.findOne({
+                where: { externalKey, owner: { id: ownerId } },
+            });
             if (!lead && phone) {
                 const digits = this.onlyDigits(phone);
                 if (digits.length >= 8) {
                     lead = await this.leadRepository
                         .createQueryBuilder('l')
-                        .where(`regexp_replace(COALESCE(l.phone,''), '\D', '', 'g') = :digits`, { digits })
+                        .where('l.ownerId = :ownerId', { ownerId })
+                        .andWhere(`regexp_replace(COALESCE(l.phone,''), '\D', '', 'g') = :digits`, { digits })
                         .getOne();
                 }
             }
@@ -117,6 +122,7 @@ export class YavendioImportService {
             if (!lead) {
                 if (!options.dryRun) {
                     await this.leadRepository.save(this.leadRepository.create({
+                        owner: { id: ownerId } as any,
                         name: name || phone,
                         phone: phone || undefined,
                         source: 'yavendio',

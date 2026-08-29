@@ -53,8 +53,11 @@ export class CrmService {
     // CRUD
     // ─────────────────────────────────────────────────────────────
 
-    async findAll(search?: string, stage?: string) {
-        const qb = this.leadRepository.createQueryBuilder('l').orderBy('l.updatedAt', 'DESC');
+    async findAll(ownerId: string, search?: string, stage?: string) {
+        const qb = this.leadRepository
+            .createQueryBuilder('l')
+            .where('l.ownerId = :ownerId', { ownerId })
+            .orderBy('l.updatedAt', 'DESC');
 
         if (search) {
             qb.andWhere(
@@ -68,9 +71,10 @@ export class CrmService {
         return qb.getMany();
     }
 
-    async getSummary() {
+    async getSummary(ownerId: string) {
         const rows = await this.leadRepository
             .createQueryBuilder('l')
+            .where('l.ownerId = :ownerId', { ownerId })
             .select('l.stage', 'stage')
             .addSelect('COUNT(*)', 'count')
             .addSelect('COALESCE(SUM(l.estimatedValue),0)', 'value')
@@ -96,8 +100,9 @@ export class CrmService {
         return { total, byStage, openValue, wonValue };
     }
 
-    async create(dto: CreateLeadDto) {
+    async create(ownerId: string, dto: CreateLeadDto) {
         const lead = this.leadRepository.create({
+            owner: { id: ownerId } as any,
             ...dto,
             stage: (dto.stage as LeadStage) || 'nuevo',
             externalKey: this.buildKey(dto.email, dto.phone, dto.name),
@@ -106,8 +111,8 @@ export class CrmService {
         return this.leadRepository.save(lead);
     }
 
-    async update(id: string, dto: UpdateLeadDto) {
-        const lead = await this.leadRepository.findOne({ where: { id } });
+    async update(ownerId: string, id: string, dto: UpdateLeadDto) {
+        const lead = await this.leadRepository.findOne({ where: { id, owner: { id: ownerId } } });
         if (!lead) throw new NotFoundException('Prospecto no encontrado');
 
         Object.assign(lead, dto);
@@ -115,8 +120,8 @@ export class CrmService {
         return this.leadRepository.save(lead);
     }
 
-    async remove(id: string) {
-        const lead = await this.leadRepository.findOne({ where: { id } });
+    async remove(ownerId: string, id: string) {
+        const lead = await this.leadRepository.findOne({ where: { id, owner: { id: ownerId } } });
         if (!lead) throw new NotFoundException('Prospecto no encontrado');
         await this.leadRepository.remove(lead);
         return { message: 'Prospecto eliminado' };
@@ -131,7 +136,7 @@ export class CrmService {
      * prospectos. Con dryRun solo devuelve la vista previa: así el usuario
      * confirma que el mapeo es correcto antes de tocar sus datos.
      */
-    async importFromCsv(csvUrl: string, dryRun = false) {
+    async importFromCsv(ownerId: string, csvUrl: string, dryRun = false) {
         let raw: string;
         try {
             const { data } = await axios.get(csvUrl, { timeout: 20000, responseType: 'text' });
@@ -179,7 +184,9 @@ export class CrmService {
             const phone = mapping.phone !== -1 ? (cols[mapping.phone] ?? '').trim() : '';
             const key = this.buildKey(email, phone, name);
 
-            const existing = await this.leadRepository.findOne({ where: { externalKey: key } });
+            const existing = await this.leadRepository.findOne({
+                where: { externalKey: key, owner: { id: ownerId } },
+            });
 
             const payload: Partial<Lead> = {
                 name,
@@ -217,7 +224,9 @@ export class CrmService {
                 await this.leadRepository.save(existing);
                 updated++;
             } else {
-                await this.leadRepository.save(this.leadRepository.create(payload));
+                await this.leadRepository.save(
+                    this.leadRepository.create({ ...payload, owner: { id: ownerId } as any }),
+                );
                 created++;
             }
         }

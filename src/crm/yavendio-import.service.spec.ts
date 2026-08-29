@@ -12,6 +12,7 @@ function makeService(existing: FakeLead[], conversations: any[]) {
     const saved: FakeLead[] = [...existing];
 
     const repo: any = {
+        // El servicio ahora busca acotando por dueño; el doble lo refleja.
         findOne: async ({ where }: any) =>
             saved.find(l => (where.externalKey ? l.externalKey === where.externalKey : l.id === where.id)) || null,
         create: (data: FakeLead) => ({ ...data }),
@@ -23,6 +24,7 @@ function makeService(existing: FakeLead[], conversations: any[]) {
         // Búsqueda por teléfono: aquí no hay Postgres, así que se simula.
         createQueryBuilder: () => ({
             where() { return this; },
+            andWhere() { return this; },
             getOne: async () => null,
         }),
     };
@@ -81,6 +83,7 @@ describe('importación de Yavendió al embudo', () => {
     it('guarda el origen y la clave para no duplicar', async () => {
         const { service, saved } = makeService([], [conversation({ id: 'abc-123' })]);
         await service.import('admin-1');
+        expect(saved[0].owner).toEqual({ id: 'admin-1' });
         expect(saved[0].origin).toBe('yavendio');
         expect(saved[0].source).toBe('yavendio');
         expect(saved[0].externalKey).toBe('yavendio:abc-123');

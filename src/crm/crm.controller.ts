@@ -1,8 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { UserRole } from '../users/user-role';
 import { CrmService } from './crm.service';
 import { YavendioImportService } from './yavendio-import.service';
@@ -11,8 +10,8 @@ import { CreateLeadDto, ImportLeadsDto, UpdateLeadDto } from './dto/lead.dto';
 
 @ApiTags('crm')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@UseGuards(JwtAuthGuard, SectionAccessGuard)
+@RequireSection('crm')
 @Controller('crm')
 export class CrmController {
     constructor(
@@ -22,32 +21,32 @@ export class CrmController {
     @ApiOperation({ summary: 'Lista los prospectos, con búsqueda y filtro por etapa' })
     @ApiQuery({ name: 'search', required: false })
     @ApiQuery({ name: 'stage', required: false })
-    findAll(@Query('search') search?: string, @Query('stage') stage?: string) {
-        return this.crmService.findAll(search, stage);
+    findAll(@Req() req, @Query('search') search?: string, @Query('stage') stage?: string) {
+        return this.crmService.findAll(req.user.id, search, stage);
     }
 
     @Get('summary')
     @ApiOperation({ summary: 'Resumen del embudo: cantidad y valor por etapa' })
-    getSummary() {
-        return this.crmService.getSummary();
+    getSummary(@Req() req) {
+        return this.crmService.getSummary(req.user.id);
     }
 
     @Post('leads')
     @ApiOperation({ summary: 'Crea un prospecto' })
-    create(@Body() dto: CreateLeadDto) {
-        return this.crmService.create(dto);
+    create(@Body() dto: CreateLeadDto, @Req() req) {
+        return this.crmService.create(req.user.id, dto);
     }
 
     @Patch('leads/:id')
     @ApiOperation({ summary: 'Actualiza un prospecto (incluye mover de etapa)' })
-    update(@Param('id') id: string, @Body() dto: UpdateLeadDto) {
-        return this.crmService.update(id, dto);
+    update(@Param('id') id: string, @Body() dto: UpdateLeadDto, @Req() req) {
+        return this.crmService.update(req.user.id, id, dto);
     }
 
     @Delete('leads/:id')
     @ApiOperation({ summary: 'Elimina un prospecto' })
-    remove(@Param('id') id: string) {
-        return this.crmService.remove(id);
+    remove(@Param('id') id: string, @Req() req) {
+        return this.crmService.remove(req.user.id, id);
     }
 
     @Post('import')
@@ -57,8 +56,8 @@ export class CrmController {
             'Detecta las columnas automáticamente (nombre, empresa, correo, teléfono, estado, origen, valor, notas, fecha). ' +
             'Con dryRun=true solo devuelve la vista previa sin guardar. Los prospectos existentes se actualizan en vez de duplicarse.',
     })
-    import(@Body() dto: ImportLeadsDto) {
-        return this.crmService.importFromCsv(dto.csvUrl, dto.dryRun === true);
+    import(@Body() dto: ImportLeadsDto, @Req() req) {
+        return this.crmService.importFromCsv(req.user.id, dto.csvUrl, dto.dryRun === true);
     }
 
     @Post('import/yavendio')

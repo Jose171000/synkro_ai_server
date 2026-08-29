@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, ManyToOne } from 'typeorm';
+import { User } from '../../users/entities/user.entity';
 
 /** Etapas del embudo comercial. */
 export const LEAD_STAGES = [
@@ -54,12 +55,25 @@ export class Lead {
     lastContactAt: string;
 
     /**
-     * Clave de la fila en el origen (hoja de cálculo) para no duplicar
-     * en importaciones sucesivas. Se deriva del correo o del teléfono.
+     * Clave de la fila en el origen (hoja de cálculo o conversación) para no
+     * duplicar en importaciones sucesivas. Solo es única dentro de un mismo
+     * dueño: dos clientes pueden tener al mismo contacto sin pisarse.
      */
     @Column({ nullable: true })
     @Index()
     externalKey: string;
+
+    /**
+     * A quién pertenece el prospecto.
+     *
+     * Antes los leads eran una lista única y global: servía mientras el CRM
+     * era solo del administrador, pero impedía que cada cliente viera los
+     * suyos. Con dueño, cada cuenta trabaja su propio embudo y nadie ve el
+     * de los demás.
+     */
+    @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: false })
+    @Index()
+    owner: User;
 
     /** Cómo entró: 'manual' | 'sheets' */
     @Column({ type: 'varchar', length: 20, default: 'manual' })

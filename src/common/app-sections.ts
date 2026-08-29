@@ -9,6 +9,7 @@ export const APP_SECTIONS = [
     'ai-products',
     'marketplaces',
     'analytics',
+    'crm',
     'settings',
 ] as const;
 
