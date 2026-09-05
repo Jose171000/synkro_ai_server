@@ -12,12 +12,13 @@ import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
-import { FalabellaApiService, FalabellaCredentials } from './falabella/falabella-api.service';
+import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, unidadPrincipal } from './falabella/falabella-api.service';
 import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
  * Atributos obligatorios que ya se mandan como campos fijos del producto:
@@ -274,8 +275,8 @@ export class SyncService {
      */
     async connectFalabella(
         ownerId: string,
-        credentials: FalabellaCredentials,
-    ): Promise<{ marketplace: string; nickname: string }> {
+        credentials: FalabellaCredentials & { country?: string },
+    ): Promise<{ marketplace: string; nickname: string; currency: string }> {
         const userId = (credentials.userId || '').trim();
         const apiKey = (credentials.apiKey || '').trim();
         if (!userId || !apiKey) {
@@ -301,14 +302,214 @@ export class SyncService {
         connection.expiresAt = null; // las API keys no caducan
         connection.status = 'active';
 
+        // Falabella usa la misma API para Perú, Chile y Colombia, así que el
+        // país no se puede deducir de la credencial: se pregunta al conectar.
+        // Si no viene, se conserva lo que ya hubiera antes de sobrescribir.
+        connection.currency =
+            monedaDePais(credentials.country) ?? connection.currency ?? monedaPorDefecto();
+
         await this.connectionRepository.save(connection);
-        return { marketplace: 'falabella', nickname: userId };
+        return { marketplace: 'falabella', nickname: userId, currency: connection.currency };
+    }
+
+    /**
+     * Moneda guardada para una cuenta en un marketplace.
+     * Devuelve `undefined` si no se guardó, para que quien llame decida.
+     */
+    private async monedaDeCuenta(
+        ownerId: string,
+        marketplace: string,
+    ): Promise<string | undefined> {
+        const connection = await this.connectionRepository.findOne({
+            where: { marketplace, owner: { id: ownerId } },
+            select: { id: true, currency: true },
+        });
+        return connection?.currency ?? undefined;
     }
 
     /** Credenciales descifradas de Falabella. Interna: ningún endpoint las expone. */
     async getFalabellaCredentials(ownerId: string): Promise<FalabellaCredentials> {
         const connection = await this.getValidConnection(ownerId, 'falabella');
         return { userId: connection.externalUserId, apiKey: connection.accessToken };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Falabella: traer las publicaciones que ya existen
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Cómo se traduce el estado de una ficha de Falabella al nuestro.
+     *
+     * El control de calidad manda sobre el estado: una ficha «activa» pero
+     * rechazada por QC no se ve en la tienda, y mostrarla como publicada sería
+     * justo el tipo de mentira que este módulo viene a quitar.
+     */
+    private estadoDeFicha(producto: FalabellaProduct): ListingLink['syncStatus'] {
+        // El control de calidad manda: una ficha rechazada no la ve nadie,
+        // por mucho que su unidad de negocio diga que está activa.
+        const qc = String(producto.QCStatus ?? '').trim().toLowerCase();
+        if (qc === 'rejected') return 'error';
+
+        const unidad = unidadPrincipal(producto);
+        const estado = String(unidad.Status ?? '').trim().toLowerCase();
+
+        if (estado === 'inactive' || estado === 'deleted') return 'paused';
+
+        // Activa pero sin publicar es el limbo de siempre: aprobada y todavía
+        // no visible en la tienda. Mostrarla como publicada sería mentir.
+        if (estado === 'active') {
+            return String(unidad.IsPublished ?? '') === '1' ? 'published' : 'pending';
+        }
+
+        return 'pending';
+    }
+
+    /**
+     * Nota de calidad de la ficha, de 0 a 100, según Falabella.
+     * Es la medida de optimización que hasta ahora se llevaba a mano.
+     */
+    private notaDeFicha(producto: FalabellaProduct): number | null {
+        const nota = Number(producto.ContentScore);
+        if (!Number.isFinite(nota)) return null;
+        return Math.max(0, Math.min(100, Math.round(nota)));
+    }
+
+    /**
+     * Trae de un tirón todas las publicaciones que el vendedor ya tiene en
+     * Falabella y las enlaza con el catálogo de Synkro.
+     *
+     * Es la alternativa a que el cliente rellene una hoja a mano: si tiene la
+     * cuenta conectada, en un clic sabemos qué está publicado de verdad y en
+     * qué estado, sin depender de nadie.
+     *
+     * Con `dryRun` no escribe nada: solo cuenta qué pasaría. Se usa para
+     * enseñar la previsualización antes de tocar el catálogo, porque un
+     * vendedor con cientos de fichas no espera que le aparezcan cientos de
+     * productos nuevos sin avisar.
+     */
+    async importFalabellaListings(
+        userId: string,
+        options: { dryRun?: boolean } = {},
+    ) {
+        const credentials = await this.getFalabellaCredentials(userId);
+        const { productos, incompleto } = await this.falabellaApi.getAllProducts(credentials);
+
+        let sumaNotas = 0;
+        let conNota = 0;
+
+        const resumen = {
+            total: productos.length,
+            yaEnCatalogo: 0,
+            nuevas: 0,
+            enlazadas: 0,
+            incompleto,
+            porEstado: {} as Record<string, number>,
+            /** Media de la nota de calidad que pone Falabella. */
+            notaMedia: null as number | null,
+            ejemplos: [] as {
+                sku: string; nombre: string; estado: string;
+                nota: number | null; enCatalogo: boolean;
+            }[],
+        };
+
+        for (const producto of productos) {
+            const sku = String(producto.SellerSku ?? '').trim();
+            if (!sku) continue;
+
+            const estado = this.estadoDeFicha(producto);
+            const nota = this.notaDeFicha(producto);
+            resumen.porEstado[estado] = (resumen.porEstado[estado] ?? 0) + 1;
+            if (nota !== null) { sumaNotas += nota; conNota++; }
+
+            let product = await this.productRepository.findOne({
+                where: { sku, owner: { id: userId } },
+            });
+            const estabaEnCatalogo = !!product;
+
+            if (estabaEnCatalogo) resumen.yaEnCatalogo++;
+            else resumen.nuevas++;
+
+            if (resumen.ejemplos.length < 10) {
+                resumen.ejemplos.push({
+                    sku,
+                    nombre: String(producto.Name ?? '').slice(0, 80),
+                    estado,
+                    nota,
+                    enCatalogo: estabaEnCatalogo,
+                });
+            }
+
+            if (options.dryRun) continue;
+
+            // Precio y stock viven dentro de la unidad de negocio, no en la
+            // raíz. Falabella los manda como texto; un catálogo sin precio es
+            // válido, así que "sin precio" se guarda vacío y no como cero,
+            // que se leería como producto regalado.
+            const unidad = unidadPrincipal(producto);
+            const precioBruto = Number(unidad.SpecialPrice ?? unidad.Price ?? 0);
+            const precio = Number.isFinite(precioBruto) && precioBruto > 0 ? precioBruto : null;
+            const existencias = Number(unidad.Stock ?? 0) || 0;
+
+            // El producto que aún no tenemos se crea con lo poco que Falabella
+            // devuelve, y queda como borrador: es un registro de que la ficha
+            // existe, no un producto listo para publicar en otros canales.
+            if (!product) {
+                const nuevo = this.productRepository.create({
+                    sku,
+                    name: String(producto.Name ?? sku).slice(0, 250),
+                    description: '',
+                    price: precio ?? undefined,
+                    stock: existencias,
+                    status: 'draft',
+                    owner: { id: userId } as any,
+                });
+                product = await this.productRepository.save(nuevo);
+            }
+
+            const externalId = String(producto.ShopSku ?? sku);
+
+            let enlace = await this.listingLinkRepository.findOne({
+                where: { marketplace: 'falabella', product: { id: product.id } },
+            });
+            if (!enlace) {
+                enlace = this.listingLinkRepository.create({
+                    marketplace: 'falabella',
+                    product: { id: product.id } as any,
+                });
+            }
+
+            enlace.externalId = externalId;
+            enlace.permalink = producto.Url ?? enlace.permalink ?? null as any;
+            enlace.syncStatus = estado;
+            enlace.lastStockSynced = existencias;
+            enlace.lastPriceSynced = precio as any;
+            enlace.qualityScore = nota;
+            enlace.lastSyncedAt = new Date();
+            enlace.lastError = estado === 'error'
+                ? 'Falabella rechazó la ficha en su control de calidad.'
+                : null as any;
+
+            await this.listingLinkRepository.save(enlace);
+            resumen.enlazadas++;
+        }
+
+        resumen.notaMedia = conNota > 0 ? Math.round(sumaNotas / conNota) : null;
+
+        if (!options.dryRun && resumen.enlazadas > 0) {
+            await this.notifications.notify(userId, {
+                type: 'import',
+                severity: incompleto ? 'warning' : 'success',
+                title: `Falabella: ${resumen.enlazadas} publicaciones importadas`,
+                body:
+                    `${resumen.yaEnCatalogo} ya estaban en tu catálogo y ${resumen.nuevas} se ` +
+                    `crearon como borrador.` +
+                    (incompleto ? ' El catálogo es muy grande y quedaron fichas sin leer.' : ''),
+                marketplace: 'falabella',
+                meta: { total: resumen.total, porEstado: resumen.porEstado },
+            });
+        }
+
+        return resumen;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -453,7 +654,7 @@ export class SyncService {
             family_name: familyName,
             category_id: categoryId,
             price: Number(product.price),
-            currency_id: process.env.MELI_CURRENCY_ID || 'PEN',
+            currency_id: process.env.MELI_CURRENCY_ID || monedaPorDefecto(),
             available_quantity: product.stock,
             condition: 'new',
             listing_type_id: process.env.MELI_LISTING_TYPE_ID || 'gold_special',
@@ -1090,6 +1291,7 @@ export class SyncService {
      */
     async processFalabellaOrders(userId: string, options: { desdeHoras?: number } = {}) {
         const credentials = await this.getFalabellaCredentials(userId);
+        const monedaCuenta = await this.monedaDeCuenta(userId, 'falabella');
         const desde = new Date(Date.now() - (options.desdeHoras ?? 48) * 60 * 60 * 1000);
 
         const pedidos = await this.falabellaApi.getOrders(credentials, {
@@ -1116,7 +1318,13 @@ export class SyncService {
                 externalId,
                 owner: { id: userId } as any,
                 totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
-                currency: 'PEN',
+                // Falabella no siempre manda la moneda; si no viene, se usa la
+                // del país de envío y, en último caso, la guardada al conectar.
+                currency: resolverMoneda(
+                    (pedido as any).Currency,
+                    monedaDePais((pedido as any).AddressShipping?.Country),
+                    monedaCuenta,
+                ),
                 itemsCount: Number((pedido as any).ItemsCount ?? items.length ?? 1),
                 items: items.map(i => ({
                     sku: i.Sku ?? null,
@@ -1248,7 +1456,7 @@ export class SyncService {
                 externalId: String(orderId),
                 owner: { id: userId } as any,
                 totalAmount: Number(order.total_amount || 0),
-                currency: order.currency_id || 'PEN',
+                currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(userId, 'mercadolibre')),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
                 items: (order.order_items || []).map((i: any) => ({
                     sku: i?.item?.seller_sku || null,
@@ -1285,7 +1493,7 @@ export class SyncService {
                 severity: 'success',
                 title: `Venta en Mercado Libre: ${quantity} x ${product.name}`,
                 body:
-                    `Pedido ${orderId} por ${order.currency_id || 'PEN'} ${Number(order.total_amount || 0).toFixed(2)}. ` +
+                    `Pedido ${orderId} por ${resolverMoneda(order.currency_id)} ${Number(order.total_amount || 0).toFixed(2)}. ` +
                     `Quedan ${product.stock} unidades de ${product.sku}.`,
                 marketplace: 'mercadolibre',
                 meta: { orderId, productId: product.id, sku: product.sku, quantity },
@@ -1341,7 +1549,20 @@ export class SyncService {
             relations: { product: true },
             order: { updatedAt: 'DESC' },
         });
+
+        // La moneda depende del canal: la misma cuenta puede vender en soles
+        // en Mercado Libre y en pesos en Falabella Colombia. Sin esto la
+        // pantalla pintaba un símbolo de dólar sobre precios en soles.
+        const conexiones = await this.connectionRepository.find({
+            where: { owner: { id: userId } },
+            select: { id: true, marketplace: true, currency: true },
+        });
+        const monedaPorCanal = new Map(
+            conexiones.map(c => [c.marketplace, c.currency ?? monedaPorDefecto()]),
+        );
+
         return links.map(l => ({
+            currency: monedaPorCanal.get(l.marketplace) ?? monedaPorDefecto(),
             id: l.id,
             productId: l.product.id,
             productName: l.product.name,

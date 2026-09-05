@@ -58,6 +58,9 @@ import { DashboardModule } from './dashboard/dashboard.module';
         MELI_REDIRECT_URI: Joi.string().optional().allow(''),
         MELI_SITE_ID: Joi.string().default('MPE'),
         MELI_CURRENCY_ID: Joi.string().default('PEN'),
+        // Moneda de la instalación cuando el marketplace no la indica y la
+        // cuenta no la tiene guardada. ISO 4217: PEN, COP, CLP...
+        DEFAULT_CURRENCY: Joi.string().length(3).uppercase().default('PEN'),
         MELI_LISTING_TYPE_ID: Joi.string().default('gold_special'),
         ADMIN_EMAILS: Joi.string().optional().allow(''),
         // Dirección pública de este servidor. Falabella la necesita para

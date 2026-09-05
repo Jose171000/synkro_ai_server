@@ -32,6 +32,16 @@ export class ListingLink {
     @Column('decimal', { precision: 10, scale: 2, nullable: true })
     lastPriceSynced: number;
 
+    /**
+     * Nota de calidad de la ficha, de 0 a 100, tal como la califica el canal.
+     *
+     * Falabella la devuelve en `ContentScore`. Es la medida de optimización
+     * que hasta ahora se llevaba a mano en una hoja de cálculo, y viene del
+     * propio canal en vez de estimarse. Nula cuando el canal no la publica.
+     */
+    @Column('int', { nullable: true })
+    qualityScore: number | null;
+
     @Column({ type: 'timestamptz', nullable: true })
     lastSyncedAt: Date;
 

@@ -4,6 +4,18 @@ import { buildSignedQuery, falabellaTimestamp } from './falabella-signature';
 import { buildProductFeedXml, escapeXml, FalabellaProductInput } from './falabella-product-xml';
 
 /** Lo que hace falta para hablar con la cuenta de un vendedor. */
+/** Publicaciones por página al recorrer el catálogo. */
+const PRODUCTOS_POR_PAGINA = 100;
+
+/** Tope de páginas, para no encadenar llamadas sin fin. */
+const MAX_PAGINAS = 50;
+
+/** Tope de publicaciones en una sola lectura. */
+const MAX_PRODUCTOS = 5000;
+
+/** Respiro entre páginas: Falabella corta a las 50 llamadas seguidas. */
+const PAUSA_ENTRE_PAGINAS_MS = 400;
+
 export interface FalabellaCredentials {
     /** El UserID del Seller Center: es el correo de la cuenta. */
     userId: string;
@@ -55,6 +67,76 @@ export interface FalabellaOrderItem {
     Status?: string;
     ItemPrice?: string;
     PaidPrice?: string;
+}
+
+/**
+ * Precio, stock y estado NO viven en la raíz del producto sino aquí dentro.
+ * Comprobado contra la API real: la raíz no trae ningún campo `Status`.
+ *
+ * Una misma ficha puede estar en varias unidades de negocio (Falabella,
+ * Sodimac, Tottus) con precio y stock distintos en cada una.
+ */
+export interface FalabellaBusinessUnit {
+    BusinessUnit?: string;
+    OperatorCode?: string;
+    Price?: string | number;
+    SpecialPrice?: string | number;
+    SpecialFromDate?: string;
+    SpecialToDate?: string;
+    Stock?: string | number;
+    /** active | inactive | deleted */
+    Status?: string;
+    /** '1' cuando la ficha está visible en la tienda. */
+    IsPublished?: string | number;
+    AvailableToSell?: { Site?: { Site?: string | string[] } };
+}
+
+export interface FalabellaProduct {
+    /** SKU del vendedor: es el que casa con nuestro catálogo. */
+    SellerSku: string;
+    /** SKU que Falabella asigna en su tienda. */
+    ShopSku?: string;
+    ProductId?: string;
+    Name?: string;
+    Description?: string;
+    Brand?: string;
+    Variation?: string;
+    ParentSku?: string;
+    /** Dirección pública de la ficha. */
+    Url?: string;
+    MainImage?: string;
+    Images?: { Image?: string | string[] };
+    /**
+     * Nota de 0 a 100 que Falabella pone a la calidad de la ficha. Es la
+     * medida de optimización que hasta ahora se calculaba a mano en una hoja.
+     */
+    ContentScore?: string | number;
+    /** Resultado del control de calidad: approved, pending, rejected. */
+    QCStatus?: string;
+    PrimaryCategory?: string;
+    PrimaryCategoryId?: string | number;
+    BusinessUnits?: { BusinessUnit?: FalabellaBusinessUnit | FalabellaBusinessUnit[] };
+    ProductData?: Record<string, any>;
+}
+
+/**
+ * Devuelve la unidad de negocio principal de una ficha.
+ * Falabella manda un objeto cuando hay una sola y un array cuando hay varias;
+ * sin normalizarlo, la mitad de los catálogos se leerían como vacíos.
+ */
+export function unidadPrincipal(producto: FalabellaProduct): FalabellaBusinessUnit {
+    const unidad = producto?.BusinessUnits?.BusinessUnit;
+    if (!unidad) return {};
+    const lista = Array.isArray(unidad) ? unidad : [unidad];
+    // Se prefiere la que esté publicada; si ninguna lo está, la primera.
+    return lista.find(u => String(u?.IsPublished ?? '') === '1') ?? lista[0] ?? {};
+}
+
+/** Sitios donde la ficha aparece publicada (Falabella, Sodimac, Tottus...). */
+export function sitiosPublicados(unidad: FalabellaBusinessUnit): string[] {
+    const sitios = unidad?.AvailableToSell?.Site?.Site;
+    if (!sitios) return [];
+    return (Array.isArray(sitios) ? sitios : [sitios]).map(s => String(s));
 }
 
 export interface FalabellaWebhook {
@@ -525,5 +607,75 @@ export class FalabellaApiService {
         const body = await this.call<any>(credentials, 'GetOrders', extra);
         const orders = body?.Orders?.Order ?? [];
         return Array.isArray(orders) ? orders : [orders];
+    }
+
+    /**
+     * Una página del catálogo del vendedor.
+     *
+     * `filter` acepta los valores de Falabella: all, live, inactive, deleted,
+     * pending, rejected, sold-out, imageMissing. Se usa 'all' por defecto
+     * porque para el tablero interesan también las fichas rechazadas o sin
+     * imagen: son justamente las que hay que arreglar.
+     */
+    async getProducts(
+        credentials: FalabellaCredentials,
+        options: { limit?: number; offset?: number; filter?: string } = {},
+    ): Promise<FalabellaProduct[]> {
+        const body = await this.call<any>(credentials, 'GetProducts', {
+            Limit: options.limit ?? PRODUCTOS_POR_PAGINA,
+            Offset: options.offset ?? 0,
+            Filter: options.filter ?? 'all',
+        });
+        const products = body?.Products?.Product ?? [];
+        return Array.isArray(products) ? products : [products];
+    }
+
+    /**
+     * Todo el catálogo del vendedor, pasando página a página.
+     *
+     * Falabella limita a 50 llamadas seguidas y luego obliga a espaciarlas dos
+     * minutos, así que entre página y página se deja un respiro y hay un tope
+     * de seguridad: es preferible avisar de que un catálogo es enorme antes que
+     * quedarse colgado o que nos corten el acceso a media importación.
+     */
+    async getAllProducts(
+        credentials: FalabellaCredentials,
+        options: { filter?: string; maxProductos?: number } = {},
+    ): Promise<{ productos: FalabellaProduct[]; incompleto: boolean }> {
+        const tope = options.maxProductos ?? MAX_PRODUCTOS;
+        const productos: FalabellaProduct[] = [];
+        const vistos = new Set<string>();
+        let offset = 0;
+        let incompleto = false;
+
+        for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+            const lote = await this.getProducts(credentials, {
+                limit: PRODUCTOS_POR_PAGINA,
+                offset,
+                filter: options.filter,
+            });
+
+            for (const producto of lote) {
+                const sku = String(producto?.SellerSku ?? '').trim();
+                // Falabella puede repetir una ficha entre páginas si el
+                // catálogo cambia mientras se recorre; sin esto se contarían
+                // dos veces y el informe saldría inflado.
+                if (!sku || vistos.has(sku)) continue;
+                vistos.add(sku);
+                productos.push(producto);
+            }
+
+            if (lote.length < PRODUCTOS_POR_PAGINA) break;
+            if (productos.length >= tope) { incompleto = true; break; }
+
+            offset += PRODUCTOS_POR_PAGINA;
+            await new Promise(r => setTimeout(r, PAUSA_ENTRE_PAGINAS_MS));
+        }
+
+        this.logger.log(
+            `Catálogo de Falabella leído: ${productos.length} publicaciones` +
+            (incompleto ? ' (se alcanzó el tope, faltan más)' : ''),
+        );
+        return { productos, incompleto };
     }
 }

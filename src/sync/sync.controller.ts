@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
@@ -77,7 +77,7 @@ export class SyncController {
         description: 'Comprueba las credenciales con una consulta real antes de guardarlas. La API key se guarda cifrada y nunca se devuelve.',
     })
     connectFalabella(@Body() dto: ConnectFalabellaDto, @Req() req) {
-        return this.syncService.connectFalabella(req.user.id, { userId: dto.userId, apiKey: dto.apiKey });
+        return this.syncService.connectFalabella(req.user.id, { userId: dto.userId, apiKey: dto.apiKey, country: dto.country });
     }
 
     @Get('listings')
@@ -187,6 +187,28 @@ export class SyncController {
     })
     registerFalabellaWebhook(@Req() req) {
         return this.syncService.registerFalabellaWebhook(req.user.id);
+    }
+
+    @Post('falabella/listings/import')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Trae de un clic las publicaciones que ya existen en Falabella',
+        description:
+            'Lee el catálogo completo de la cuenta y lo enlaza con el catálogo de Synkro. ' +
+            'Con dryRun=true no escribe nada: solo informa de qué pasaría, para poder ' +
+            'enseñar la previsualización antes de crear productos.',
+    })
+    @ApiQuery({
+        name: 'dryRun',
+        required: false,
+        type: Boolean,
+        description: 'true para previsualizar sin guardar nada.',
+    })
+    importFalabellaListings(@Req() req, @Query('dryRun') dryRun?: string) {
+        return this.syncService.importFalabellaListings(req.user.id, {
+            dryRun: dryRun === 'true',
+        });
     }
 
     @Post('falabella/orders/sync')

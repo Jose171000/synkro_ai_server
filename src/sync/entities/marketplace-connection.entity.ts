@@ -51,6 +51,17 @@ export class MarketplaceConnection {
     @Column({ type: 'timestamptz', nullable: true })
     expiresAt: Date | null;
 
+    /**
+     * Moneda en la que vende esta cuenta (ISO 4217: PEN, COP, CLP...).
+     *
+     * Se guarda al conectar porque no todos los marketplaces la dicen en cada
+     * pedido: Falabella opera en Perú, Chile y Colombia con la misma API, así
+     * que sin este dato un cliente colombiano tendría sus ventas guardadas en
+     * soles. Nula significa "usa la de por defecto de la instalación".
+     */
+    @Column({ type: 'varchar', length: 5, nullable: true })
+    currency: string | null;
+
     @Column({ default: 'active' })
     status: 'active' | 'revoked' | 'error';
 
