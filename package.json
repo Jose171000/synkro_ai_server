@@ -47,6 +47,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "cloudinary": "^2.9.0",
+    "exceljs": "^4.4.0",
     "handlebars": "^4.7.8",
     "helmet": "^8.3.0",
     "image-size": "^2.0.2",
@@ -61,8 +62,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1",
-    "typeorm": "^0.3.21",
-    "xlsx": "^0.18.5"
+    "typeorm": "^0.3.21"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -100,7 +100,6 @@
       "ts"
     ],
     "rootDir": "src",
-    "_comment_moduleDirectories": "Algunas entidades importan como 'src/...' (baseUrl del tsconfig). Sin esto Jest no las resuelve.",
     "moduleDirectories": [
       "node_modules",
       "<rootDir>/.."

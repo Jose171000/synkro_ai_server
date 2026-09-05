@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ProductsService } from '../products/products.service';
 import { ExportQueryDto } from './dto/export-query.dto';
 import { Product } from '../products/entities/product.entity';
-import * as XLSX from 'xlsx';
+import { escribirHoja } from '../common/excel/excel';
 
 export type ExportFormat = 'json' | 'csv' | 'xlsx';
 
@@ -90,28 +90,8 @@ export class ExportService {
         return Buffer.from(csvContent, 'utf-8');
     }
 
-    toXLSX(data: Record<string, any>[], sheetName: string): Buffer {
-        const workbook = XLSX.utils.book_new();
-        const worksheet = XLSX.utils.json_to_sheet(data);
-
-        // Auto-size columns based on content
-        if (data.length > 0) {
-            const headers = Object.keys(data[0]);
-            worksheet['!cols'] = headers.map((header) => {
-                const maxContentLength = data.reduce((max, row) => {
-                    const cellValue = String(row[header] ?? '');
-                    return Math.max(max, cellValue.length);
-                }, header.length);
-                return { wch: Math.min(maxContentLength + 2, 60) };
-            });
-        }
-
-        XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-        const buffer = XLSX.write(workbook, {
-            type: 'buffer',
-            bookType: 'xlsx',
-        });
-        return Buffer.from(buffer);
+    toXLSX(data: Record<string, any>[], sheetName: string): Promise<Buffer> {
+        return escribirHoja(data, sheetName);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────

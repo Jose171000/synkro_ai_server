@@ -8,7 +8,7 @@ import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import * as xlsx from 'xlsx';
+import { leerPrimeraHoja } from '../common/excel/excel';
 import * as AdmZip from 'adm-zip';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -40,10 +40,8 @@ export class BulkUploadController {
         return found ? String(row[found]).trim() : undefined;
     }
 
-    private parseExcel(buffer: Buffer): any[] {
-        const workbook = xlsx.read(buffer, { type: 'buffer' });
-        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        return xlsx.utils.sheet_to_json(worksheet);
+    private parseExcel(buffer: Buffer): Promise<any[]> {
+        return leerPrimeraHoja(buffer);
     }
 
     /**
@@ -120,7 +118,7 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
         }
 
         try {
-            const rows = this.parseExcel(excelFile.buffer);
+            const rows = await this.parseExcel(excelFile.buffer);
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
             console.log('[BulkUpload] Columnas detectadas:', Object.keys(rows[0] as object));
 
@@ -216,7 +214,7 @@ Solo se actualizan los campos presentes en el Excel. Solo puedes editar tus prop
         if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
 
         try {
-            const rows = this.parseExcel(file.buffer);
+            const rows = await this.parseExcel(file.buffer);
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
 
             let totalQueued = 0;
@@ -298,7 +296,7 @@ Ejemplo: [{"name":"ShoeSize","description":"Talla US","example":"10.5","isRequir
         if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
 
         try {
-            const rows = this.parseExcel(file.buffer);
+            const rows = await this.parseExcel(file.buffer);
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
 
             let totalQueued = 0;
@@ -383,7 +381,7 @@ Si cambia labelText, el embedding se regenera automaticamente.`,
         if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
 
         try {
-            const rows = this.parseExcel(file.buffer);
+            const rows = await this.parseExcel(file.buffer);
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
 
             let totalQueued = 0;

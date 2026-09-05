@@ -91,7 +91,7 @@ export class ExportController {
         }
     }
 
-    private sendFile(
+    private async sendFile(
         res: Response,
         data: Record<string, any>[],
         filenamePrefix: string,
@@ -108,7 +108,7 @@ export class ExportController {
                 buffer = this.exportService.toCSV(data);
                 break;
             case 'xlsx':
-                buffer = this.exportService.toXLSX(data, sheetName);
+                buffer = await this.exportService.toXLSX(data, sheetName);
                 break;
         }
 
