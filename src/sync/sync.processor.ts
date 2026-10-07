@@ -1,6 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { SyncService } from './sync.service';
+import { ChangeRequestsService } from './change-requests.service';
 
 /**
  * Background worker for every marketplace-sync job:
@@ -12,7 +13,10 @@ import { SyncService } from './sync.service';
  */
 @Processor('marketplace-sync-queue')
 export class SyncProcessor extends WorkerHost {
-    constructor(private readonly syncService: SyncService) {
+    constructor(
+        private readonly syncService: SyncService,
+        private readonly changeRequests: ChangeRequestsService,
+    ) {
         super();
     }
 
@@ -40,15 +44,24 @@ export class SyncProcessor extends WorkerHost {
             }
 
             case 'inventory': {
-                const { productId, userId, marketplace } = job.data;
-                if (marketplace === 'mercadolibre') {
-                    await this.syncService.pushInventoryToMeli(productId, userId);
-                    return { status: 'synced' };
+                const { productId, userId, marketplace, changeRequestId } = job.data;
+                try {
+                    let result: any;
+                    if (marketplace === 'mercadolibre') {
+                        await this.syncService.pushInventoryToMeli(productId, userId);
+                        result = { status: 'synced' };
+                    } else if (marketplace === 'falabella') {
+                        result = await this.syncService.pushInventoryToFalabella(productId, userId);
+                    } else {
+                        throw new Error(`Marketplace no soportado aún: ${marketplace}`);
+                    }
+                    // Si el envío nació de una aprobación, se cierra la solicitud.
+                    if (changeRequestId) await this.changeRequests.markResult(changeRequestId, true);
+                    return result;
+                } catch (error: any) {
+                    if (changeRequestId) await this.changeRequests.markResult(changeRequestId, false, error?.message);
+                    throw error;
                 }
-                if (marketplace === 'falabella') {
-                    return this.syncService.pushInventoryToFalabella(productId, userId);
-                }
-                throw new Error(`Marketplace no soportado aún: ${marketplace}`);
             }
 
             case 'falabella-feed': {

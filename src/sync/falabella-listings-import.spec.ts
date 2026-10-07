@@ -12,6 +12,7 @@ import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaBusinessUnit, FalabellaProduct } from './falabella/falabella-api.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
+import { ChangeRequestsService } from './change-requests.service';
 
 /**
  * Traer de un clic las publicaciones que ya existen en Falabella.
@@ -108,6 +109,7 @@ describe('importFalabellaListings', () => {
                 { provide: YavendioApiService, useValue: {} },
                 { provide: FalabellaApiService, useValue: falabella },
                 { provide: NotificationsService, useValue: { notify: notificar } },
+                { provide: ChangeRequestsService, useValue: {} },
             ],
         }).compile();
 

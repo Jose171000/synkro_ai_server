@@ -18,6 +18,7 @@ import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { ChangeRequestsService } from './change-requests.service';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
@@ -57,6 +58,7 @@ export class SyncService {
         private readonly yavendioApi: YavendioApiService,
         private readonly falabellaApi: FalabellaApiService,
         private readonly notifications: NotificationsService,
+        private readonly changeRequests: ChangeRequestsService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -1124,13 +1126,27 @@ export class SyncService {
             throw new NotFoundException('Producto no encontrado');
         }
 
-        if (dto.stock !== undefined) product.stock = dto.stock;
-        if (dto.price !== undefined) product.price = dto.price;
-        await this.productRepository.save(product);
-
         const links = await this.listingLinkRepository.find({
             where: { product: { id: productId }, syncStatus: 'published' },
         });
+
+        // Modo revisión: el cambio espera aprobación y no toca ni el producto
+        // ni los canales. Sin canales publicados no hay nada que revisar.
+        if (links.length && (await this.changeRequests.isReviewMode(userId))) {
+            const solicitudes = await this.changeRequests.createFromInventory(
+                userId, product, dto, links.map(l => l.marketplace),
+            );
+            return {
+                pending: solicitudes.length,
+                message: solicitudes.length
+                    ? `Cambio en revisión: ${solicitudes.length} solicitud(es) esperan aprobación antes de enviarse a ${links.map(l => l.marketplace).join(', ')}.`
+                    : 'No hay cambios respecto a los valores actuales.',
+            };
+        }
+
+        if (dto.stock !== undefined) product.stock = dto.stock;
+        if (dto.price !== undefined) product.price = dto.price;
+        await this.productRepository.save(product);
 
         for (const link of links) {
             await this.syncQueue.add('inventory', {

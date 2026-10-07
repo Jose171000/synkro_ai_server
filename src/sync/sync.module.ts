@@ -14,17 +14,19 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
+import { SyncChangeRequest } from './entities/sync-change-request.entity';
+import { ChangeRequestsService } from './change-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, Product, User]),
+        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, User]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
         NotificationsModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService],
 })
 export class SyncModule { }

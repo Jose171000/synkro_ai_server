@@ -45,6 +45,13 @@ export class User {
     @Column('simple-array', { nullable: true })
     allowedSections: string[] | null;
 
+    /**
+     * Modo revisión: cuando está encendido, los cambios de precio y stock no
+     * se envían a los marketplaces hasta que alguien los apruebe.
+     */
+    @Column({ default: true })
+    syncReviewMode: boolean;
+
     @OneToMany(() => RefreshToken, refreshToken => refreshToken.user)
     refreshTokens: RefreshToken[];
 

@@ -10,12 +10,17 @@ import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
+import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
+import { ChangeRequestsService } from './change-requests.service';
 
 @ApiTags('sync')
 @Controller('sync')
 @RequireSection('marketplaces')
 export class SyncController {
-    constructor(private readonly syncService: SyncService) { }
+    constructor(
+        private readonly syncService: SyncService,
+        private readonly changeRequests: ChangeRequestsService,
+    ) { }
 
     // ── Connections ──────────────────────────────────────────────
 
@@ -162,10 +167,62 @@ export class SyncController {
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard)
     @ApiOperation({
-        summary: 'Actualiza stock/precio local y lo sincroniza con todos los canales publicados',
+        summary: 'Actualiza stock/precio y lo sincroniza con los canales publicados',
+        description: 'Con el modo revisión encendido (por defecto) no toca los canales: crea solicitudes pendientes y responde 202.',
     })
-    updateInventory(@Param('id') id: string, @Body() dto: UpdateInventoryDto, @Req() req) {
-        return this.syncService.updateInventory(id, req.user.id, dto);
+    async updateInventory(
+        @Param('id') id: string,
+        @Body() dto: UpdateInventoryDto,
+        @Req() req,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const result = await this.syncService.updateInventory(id, req.user.id, dto);
+        if ('pending' in result) res.status(HttpStatus.ACCEPTED);
+        return result;
+    }
+
+    // ── Modo revisión: cola de aprobación ────────────────────────
+
+    @Get('change-requests')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({ summary: 'Lista las solicitudes de cambio de precio/stock del usuario' })
+    @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error'] })
+    listChangeRequests(@Req() req, @Query('status') status?: string) {
+        return this.changeRequests.list(req.user.id, status);
+    }
+
+    @Post('change-requests/:id/approve')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({ summary: 'Aprueba un cambio: lo aplica al producto y lo envía al canal (asíncrono)' })
+    approveChangeRequest(@Param('id') id: string, @Req() req) {
+        return this.changeRequests.approve(id, req.user.id);
+    }
+
+    @Post('change-requests/:id/reject')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({ summary: 'Rechaza un cambio: no toca el producto ni el canal' })
+    rejectChangeRequest(@Param('id') id: string, @Body() dto: RejectChangeDto, @Req() req) {
+        return this.changeRequests.reject(id, req.user.id, dto.reason);
+    }
+
+    @Get('settings')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({ summary: 'Ajustes de sincronización del usuario' })
+    async getSyncSettings(@Req() req) {
+        return { reviewMode: await this.changeRequests.isReviewMode(req.user.id) };
+    }
+
+    @Patch('settings/review-mode')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({ summary: 'Enciende o apaga el modo revisión de cambios de inventario' })
+    setReviewMode(@Body() dto: ReviewModeDto, @Req() req) {
+        return this.changeRequests.setReviewMode(req.user.id, dto.enabled);
     }
 
     @Get('products/:id/status')
