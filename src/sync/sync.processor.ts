@@ -45,6 +45,9 @@ export class SyncProcessor extends WorkerHost {
                     await this.syncService.pushInventoryToMeli(productId, userId);
                     return { status: 'synced' };
                 }
+                if (marketplace === 'falabella') {
+                    return this.syncService.pushInventoryToFalabella(productId, userId);
+                }
                 throw new Error(`Marketplace no soportado aún: ${marketplace}`);
             }
 

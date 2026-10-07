@@ -1,5 +1,7 @@
 import {
+    buildPriceUpdateXml,
     buildProductFeedXml,
+    buildStockUpdateXml,
     cdata,
     chunkProducts,
     escapeXml,
@@ -120,5 +122,29 @@ describe('XML de productos para Falabella', () => {
         it('una lista vacía no produce lotes', () => {
             expect(chunkProducts([], 500)).toEqual([]);
         });
+    });
+});
+
+describe('XML de actualización de precio y stock', () => {
+    it('el precio va en la unidad de negocio con el operador y dos decimales', () => {
+        const xml = buildPriceUpdateXml([{ sellerSku: 'A-1', price: 79.9 }], OPCIONES);
+        expect(xml).toContain('<SellerSku>A-1</SellerSku>');
+        expect(xml).toContain('<BusinessUnit><OperatorCode>fape</OperatorCode><Price>79.90</Price></BusinessUnit>');
+        expect(xml).not.toContain('<Stock>');
+    });
+
+    it('el stock se manda entero y nunca negativo', () => {
+        const xml = buildStockUpdateXml(
+            [{ sellerSku: 'A-1', quantity: 7.9 }, { sellerSku: 'B', quantity: -3 }],
+            OPCIONES,
+        );
+        expect(xml.match(/<Product>/g)).toHaveLength(2);
+        expect(xml).toContain('<Stock>7</Stock>');
+        expect(xml).toContain('<Stock>0</Stock>'); // tag() omite vacíos, no ceros
+        expect(xml).not.toContain('<Price>');
+    });
+
+    it('escapa el SKU para no romper el XML', () => {
+        expect(buildStockUpdateXml([{ sellerSku: 'A&B', quantity: 1 }], OPCIONES)).toContain('A&amp;B');
     });
 });

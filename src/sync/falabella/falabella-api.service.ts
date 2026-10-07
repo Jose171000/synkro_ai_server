@@ -1,7 +1,13 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { buildSignedQuery, falabellaTimestamp } from './falabella-signature';
-import { buildProductFeedXml, escapeXml, FalabellaProductInput } from './falabella-product-xml';
+import {
+    buildPriceUpdateXml,
+    buildProductFeedXml,
+    buildStockUpdateXml,
+    escapeXml,
+    FalabellaProductInput,
+} from './falabella-product-xml';
 
 /** Lo que hace falta para hablar con la cuenta de un vendedor. */
 /** Publicaciones por página al recorrer el catálogo. */
@@ -161,6 +167,8 @@ export interface FalabellaOrder {
 
 const API_BASE = 'https://sellercenter-api.falabella.com';
 const API_VERSION = '1.0';
+/** 'fape' es Perú; 'facl' sería Chile. */
+const DEFAULT_OPERATOR = process.env.FALABELLA_OPERATOR_CODE || 'fape';
 const ATTRIBUTE_CACHE_MS = 60 * 60 * 1000; // 1 hora
 // El árbol pesa ~0,4 MB y tarda unos 6 segundos: no se pide en cada búsqueda.
 const CATEGORY_CACHE_MS = 12 * 60 * 60 * 1000; // 12 horas
@@ -343,6 +351,41 @@ export class FalabellaApiService {
 
         const feedId = await this.postFeed(credentials, 'ProductRemove', xml);
         this.logger.warn(`Baja de ${sellerSkus.length} productos en Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Cambia el precio de una ficha ya publicada (acción ProductUpdate).
+     * Devuelve el identificador del feed: el resultado real se consulta
+     * después con getFeedStatus, igual que en el alta.
+     */
+    async updatePrice(
+        credentials: FalabellaCredentials,
+        sellerSku: string,
+        price: number,
+        opts: { operatorCode?: string } = {},
+    ): Promise<string> {
+        const xml = buildPriceUpdateXml([{ sellerSku, price }], { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
+        const feedId = await this.postFeed(credentials, 'ProductUpdate', xml);
+        this.logger.log(`Precio de ${sellerSku} enviado a Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Cambia el stock de una o varias fichas (acción UpdateStock). Admite
+     * varias a la vez para gastar una sola llamada del límite de feeds.
+     */
+    async updateStock(
+        credentials: FalabellaCredentials,
+        items: { sellerSku: string; quantity: number }[],
+        opts: { operatorCode?: string } = {},
+    ): Promise<string> {
+        if (!items.length) {
+            throw new BadRequestException('No hay stock que actualizar en Falabella.');
+        }
+        const xml = buildStockUpdateXml(items, { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
+        const feedId = await this.postFeed(credentials, 'UpdateStock', xml);
+        this.logger.log(`Stock de ${items.length} producto(s) enviado a Falabella. Feed ${feedId}.`);
         return feedId;
     }
 

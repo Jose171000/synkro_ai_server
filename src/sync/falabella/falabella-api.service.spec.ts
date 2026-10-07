@@ -101,3 +101,30 @@ describe('atributos de categoría', () => {
         expect(s.call).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('actualización de precio y stock', () => {
+    const credenciales = { userId: 'vendedor@ejemplo.com', apiKey: 'clave' };
+
+    const servicioConFeed = () => {
+        const service = new FalabellaApiService();
+        const spy = jest.spyOn(service as any, 'postFeed').mockResolvedValue('feed-123');
+        return { service, spy };
+    };
+
+    it('el precio usa la acción ProductUpdate', async () => {
+        const { service, spy } = servicioConFeed();
+        await expect(service.updatePrice(credenciales, 'A-1', 59.5, { operatorCode: 'fape' })).resolves.toBe('feed-123');
+        expect(spy).toHaveBeenCalledWith(credenciales, 'ProductUpdate', expect.stringContaining('<Price>59.50</Price>'));
+    });
+
+    it('el stock usa la acción UpdateStock y admite varios SKUs', async () => {
+        const { service, spy } = servicioConFeed();
+        await service.updateStock(credenciales, [{ sellerSku: 'A', quantity: 2 }, { sellerSku: 'B', quantity: 5 }]);
+        expect(spy).toHaveBeenCalledWith(credenciales, 'UpdateStock', expect.stringContaining('<Stock>5</Stock>'));
+    });
+
+    it('no envía un lote de stock vacío', async () => {
+        const { service } = servicioConFeed();
+        await expect(service.updateStock(credenciales, [])).rejects.toThrow();
+    });
+});

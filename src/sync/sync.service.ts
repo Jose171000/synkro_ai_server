@@ -1042,6 +1042,11 @@ export class SyncService {
             if (error.sku) erroresPorSku.set(error.sku, error.message);
         }
 
+        // Los feeds de precio o stock no publican nada: se tratan aparte.
+        if (feed.action !== 'ProductCreate') {
+            return this.aplicarResultadoActualizacion(feed, userId, erroresPorSku, estado);
+        }
+
         for (const sku of feed.skus || []) {
             const link = await this.listingLinkRepository.findOne({
                 where: { marketplace: 'falabella', externalId: sku },
@@ -1168,6 +1173,136 @@ export class SyncService {
             throw error;
         }
         await this.listingLinkRepository.save(link);
+    }
+
+    /**
+     * Ejecutado por la cola: empuja a Falabella el stock y precio actuales.
+     *
+     * Solo se manda lo que cambió respecto a la última sincronización, porque
+     * cada feed gasta una de las 50 llamadas seguidas que admite Falabella.
+     * Los valores quedan anotados en el enlace al enviarse; si el feed
+     * resulta fallido, checkFalabellaFeed los borra para que el desajuste
+     * quede a la vista en lugar de aparentar que todo está al día.
+     */
+    async pushInventoryToFalabella(
+        productId: string,
+        userId: string,
+    ): Promise<{ status: string; feeds: string[] }> {
+        const product = await this.productRepository.findOne({
+            where: { id: productId, owner: { id: userId } },
+        });
+        const link = await this.listingLinkRepository.findOne({
+            where: { marketplace: 'falabella', product: { id: productId }, syncStatus: 'published' },
+        });
+        if (!product || !link) return { status: 'omitido', feeds: [] };
+
+        const precioCambio =
+            link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
+            Number(link.lastPriceSynced) !== Number(product.price);
+        const stockCambio = link.lastStockSynced !== product.stock;
+        if (!precioCambio && !stockCambio) return { status: 'sin-cambios', feeds: [] };
+
+        // El SKU del vendedor es lo que casa con la ficha de Falabella.
+        const sellerSku = product.sku;
+        const feeds: string[] = [];
+
+        try {
+            const credentials = await this.getFalabellaCredentials(userId);
+            const opts = { operatorCode: this.falabellaOperatorCode };
+
+            if (precioCambio) {
+                feeds.push(await this.registrarFeedFalabella(
+                    userId, 'ProductUpdate', sellerSku,
+                    await this.falabellaApi.updatePrice(credentials, sellerSku, Number(product.price), opts),
+                ));
+            }
+            if (stockCambio) {
+                feeds.push(await this.registrarFeedFalabella(
+                    userId, 'UpdateStock', sellerSku,
+                    await this.falabellaApi.updateStock(credentials, [{ sellerSku, quantity: product.stock }], opts),
+                ));
+            }
+        } catch (error: any) {
+            link.lastError = this.describeApiError(error);
+            await this.listingLinkRepository.save(link);
+            throw error;
+        }
+
+        if (precioCambio) link.lastPriceSynced = product.price;
+        if (stockCambio) link.lastStockSynced = product.stock;
+        link.lastSyncedAt = new Date();
+        link.lastError = null as any;
+        await this.listingLinkRepository.save(link);
+
+        return { status: 'enviado', feeds };
+    }
+
+    /** Anota un feed de actualización y programa la consulta de su resultado. */
+    private async registrarFeedFalabella(
+        userId: string,
+        action: 'ProductUpdate' | 'UpdateStock',
+        sku: string,
+        externalFeedId: string,
+    ): Promise<string> {
+        const feed = await this.feedRepository.save(this.feedRepository.create({
+            marketplace: 'falabella',
+            externalFeedId,
+            action,
+            skus: [sku],
+            status: 'pending',
+            totalRecords: 1,
+            owner: { id: userId } as any,
+        }));
+        await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId }, { delay: 30_000 });
+        return externalFeedId;
+    }
+
+    /**
+     * Aplica el resultado de un feed de precio o stock. A diferencia del alta,
+     * aquí la ficha ya está publicada: un fallo no cambia su estado, solo
+     * deja el motivo en el enlace y borra el dato que no llegó a Falabella.
+     */
+    private async aplicarResultadoActualizacion(
+        feed: MarketplaceFeed,
+        userId: string,
+        erroresPorSku: Map<string, string>,
+        estado: { failedRecords: number; errors: { sku?: string; message: string }[] },
+    ) {
+        // Un feed que termina en error sin detalle por SKU falla entero.
+        const falloTotal =
+            (/error|canceled/i.test(feed.status) || estado.failedRecords > 0) && erroresPorSku.size === 0;
+
+        for (const sku of feed.skus || []) {
+            const link = await this.listingLinkRepository.findOne({
+                where: { marketplace: 'falabella', externalId: sku },
+            });
+            if (!link) continue;
+
+            const error = erroresPorSku.get(sku) ?? (falloTotal ? `El lote ${feed.action} terminó con error.` : undefined);
+            if (error) {
+                link.lastError = error;
+                if (feed.action === 'UpdateStock') link.lastStockSynced = null as any;
+                if (feed.action === 'ProductUpdate') link.lastPriceSynced = null as any;
+            } else {
+                link.lastError = null as any;
+            }
+            await this.listingLinkRepository.save(link);
+        }
+
+        if (estado.failedRecords > 0 || falloTotal) {
+            const detalle = estado.errors.slice(0, 3).map(e => `${e.sku ? e.sku + ': ' : ''}${e.message}`).join(' — ');
+            await this.notifications.notify(userId, {
+                type: 'publish-error',
+                severity: 'error',
+                title: feed.action === 'UpdateStock'
+                    ? 'Falabella no aceptó un cambio de stock'
+                    : 'Falabella no aceptó un cambio de precio',
+                body: detalle || 'Revisa el detalle del lote en Marketplaces.',
+                marketplace: 'falabella',
+                meta: { feedId: feed.externalFeedId, errors: estado.errors.slice(0, 10) },
+            });
+        }
+        return { status: feed.status };
     }
 
     // ─────────────────────────────────────────────────────────────

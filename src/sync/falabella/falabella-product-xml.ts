@@ -128,3 +128,43 @@ export function chunkProducts<T>(items: T[], size = 500): T[][] {
     }
     return lotes;
 }
+
+/**
+ * XML para cambiar solo el precio de una ficha ya publicada (ProductUpdate).
+ * Va dentro de la unidad de negocio, igual que en el alta: es donde Falabella
+ * guarda precio y stock, no en la raíz del producto.
+ */
+export function buildPriceUpdateXml(
+    items: { sellerSku: string; price: number }[],
+    options: BuildOptions,
+): string {
+    const cuerpo = items
+        .map(item =>
+            '<Product>' +
+            tag('SellerSku', item.sellerSku) +
+            '<BusinessUnits><BusinessUnit>' +
+            tag('OperatorCode', options.operatorCode) +
+            tag('Price', item.price.toFixed(2)) +
+            '</BusinessUnit></BusinessUnits>' +
+            '</Product>')
+        .join('');
+    return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+}
+
+/** XML para cambiar solo el stock de fichas ya publicadas (UpdateStock). */
+export function buildStockUpdateXml(
+    items: { sellerSku: string; quantity: number }[],
+    options: BuildOptions,
+): string {
+    const cuerpo = items
+        .map(item =>
+            '<Product>' +
+            tag('SellerSku', item.sellerSku) +
+            '<BusinessUnits><BusinessUnit>' +
+            tag('OperatorCode', options.operatorCode) +
+            tag('Stock', Math.max(0, Math.trunc(item.quantity))) +
+            '</BusinessUnit></BusinessUnits>' +
+            '</Product>')
+        .join('');
+    return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+}
