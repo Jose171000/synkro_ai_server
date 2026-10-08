@@ -44,6 +44,13 @@ export class Product {
     @Column({ default: 0 })
     stock: number;
 
+    /**
+     * Precio con descuento de la tienda web propia (futura conexión con
+     * WooCommerce). No se envía a ningún marketplace: es solo del canal web.
+     */
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    webPrice: number | null;
+
     // ── Datos de envío ───────────────────────────────────────────
     // Falabella los exige para publicar (alto, ancho, largo en cm y peso en
     // kg). Son nulos por defecto porque los productos antiguos no los tienen;

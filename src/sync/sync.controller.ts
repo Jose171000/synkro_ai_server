@@ -11,6 +11,7 @@ import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
+import { WebPriceDto } from './dto/web-price.dto';
 import { ChangeRequestsService } from './change-requests.service';
 
 @ApiTags('sync')
@@ -179,6 +180,17 @@ export class SyncController {
         const result = await this.syncService.updateInventory(id, req.user.id, dto);
         if ('pending' in result) res.status(HttpStatus.ACCEPTED);
         return result;
+    }
+
+    @Patch('products/:id/web-price')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @ApiOperation({
+        summary: 'Fija el precio con descuento de la tienda web',
+        description: 'No se envía a ningún marketplace ni pasa por revisión; se usará cuando exista la conexión con WooCommerce.',
+    })
+    setWebPrice(@Param('id') id: string, @Body() dto: WebPriceDto, @Req() req) {
+        return this.syncService.setWebPrice(id, req.user.id, dto.webPrice);
     }
 
     // ── Modo revisión: cola de aprobación ────────────────────────

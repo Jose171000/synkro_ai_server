@@ -206,12 +206,58 @@ describe('importFalabellaListings', () => {
         expect(enlaces[0].lastPriceSynced).toBeNull();
     });
 
-    it('prefiere el precio de oferta al de lista', async () => {
+    it('guarda el precio regular como del producto y el descuento aparte, en la publicación', async () => {
+        // Synkro manda de vuelta el regular al editar; si guardara el rebajado,
+        // el siguiente envío dejaría el regular por debajo de la promoción.
         await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90' })]);
 
         await service.importFalabellaListings(USUARIO);
 
-        expect(enlaces[0].lastPriceSynced).toBe(149.9);
+        expect(productos[0].price).toBe(199.9);
+        expect(enlaces[0].lastPriceSynced).toBe(199.9);
+        expect(enlaces[0].regularPrice).toBe(199.9);
+        expect(enlaces[0].salePrice).toBe(149.9);
+    });
+
+    it('trae la imagen de cada variante y su nombre de variante', async () => {
+        await construir([ficha({
+            SellerSku: 'CAMISA-M-ROJO',
+            Variation: 'M / Rojo',
+            ParentSku: 'CAMISA',
+            MainImage: 'https://img.falabella/rojo.jpg',
+            Images: { Image: ['https://img.falabella/rojo.jpg', 'https://img.falabella/rojo-2.jpg'] },
+        })]);
+
+        await service.importFalabellaListings(USUARIO);
+
+        expect(enlaces[0].imageUrl).toBe('https://img.falabella/rojo.jpg');
+        expect(enlaces[0].variation).toBe('M / Rojo');
+        expect(enlaces[0].parentSku).toBe('CAMISA');
+        expect(productos[0].images).toEqual([
+            { url: 'https://img.falabella/rojo.jpg' },
+            { url: 'https://img.falabella/rojo-2.jpg' },
+        ]);
+    });
+
+    it('corrige al regular un producto importado antes con el precio rebajado, si nadie lo editó', async () => {
+        const { repoProductos } = await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90' })]);
+        productos.push({ id: 'p-viejo', sku: 'SKU-1', name: 'Gafas', price: 149.9 });
+        enlaces.push({ marketplace: 'falabella', product: { id: 'p-viejo' }, lastPriceSynced: 149.9 });
+
+        await service.importFalabellaListings(USUARIO);
+
+        expect(productos[0].price).toBe(199.9);
+        expect(repoProductos.save).toHaveBeenCalled();
+    });
+
+    it('no pisa un precio que el usuario ya editó', async () => {
+        await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90' })]);
+        productos.push({ id: 'p-editado', sku: 'SKU-1', name: 'Gafas', price: 170 });
+        enlaces.push({ marketplace: 'falabella', product: { id: 'p-editado' }, lastPriceSynced: 149.9 });
+
+        await service.importFalabellaListings(USUARIO);
+
+        expect(productos[0].price).toBe(170);
     });
 
     it('salta las fichas sin SKU en vez de romperse', async () => {

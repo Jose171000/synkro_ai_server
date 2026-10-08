@@ -128,3 +128,53 @@ describe('actualización de precio y stock', () => {
         await expect(service.updateStock(credenciales, [])).rejects.toThrow();
     });
 });
+
+import { imagenesDeFicha, preciosDeUnidad } from './falabella-api.service';
+
+describe('precios de una ficha de Falabella', () => {
+    const hoy = new Date('2026-10-07T12:00:00Z');
+
+    it('separa el precio regular del descuento', () => {
+        expect(preciosDeUnidad({ Price: '199.90', SpecialPrice: '149.90' }, hoy))
+            .toEqual({ regular: 199.9, descuento: 149.9 });
+    });
+
+    it('sin SpecialPrice no hay descuento', () => {
+        expect(preciosDeUnidad({ Price: '199.90' }, hoy)).toEqual({ regular: 199.9, descuento: null });
+        expect(preciosDeUnidad({ Price: '199.90', SpecialPrice: '0' }, hoy).descuento).toBeNull();
+    });
+
+    it('un descuento mayor o igual al regular no es un descuento', () => {
+        expect(preciosDeUnidad({ Price: '100', SpecialPrice: '100' }, hoy).descuento).toBeNull();
+        expect(preciosDeUnidad({ Price: '100', SpecialPrice: '120' }, hoy).descuento).toBeNull();
+    });
+
+    it('una promoción vencida o futura no cuenta', () => {
+        const vencida = { Price: '100', SpecialPrice: '80', SpecialFromDate: '2026-01-01', SpecialToDate: '2026-02-01' };
+        const futura = { Price: '100', SpecialPrice: '80', SpecialFromDate: '2026-12-01', SpecialToDate: '2026-12-31' };
+        const vigente = { Price: '100', SpecialPrice: '80', SpecialFromDate: '2026-10-01', SpecialToDate: '2026-10-31' };
+        expect(preciosDeUnidad(vencida, hoy).descuento).toBeNull();
+        expect(preciosDeUnidad(futura, hoy).descuento).toBeNull();
+        expect(preciosDeUnidad(vigente, hoy).descuento).toBe(80);
+    });
+
+    it('sin precio válido el regular queda vacío, no en cero', () => {
+        expect(preciosDeUnidad({}, hoy).regular).toBeNull();
+        expect(preciosDeUnidad({ Price: '0' }, hoy).regular).toBeNull();
+    });
+});
+
+describe('imágenes de una ficha de Falabella', () => {
+    it('pone la principal primero y no repite', () => {
+        expect(imagenesDeFicha({
+            SellerSku: 'A',
+            MainImage: 'https://img/1.jpg',
+            Images: { Image: ['https://img/1.jpg', 'https://img/2.jpg'] },
+        })).toEqual(['https://img/1.jpg', 'https://img/2.jpg']);
+    });
+
+    it('acepta una sola imagen como texto y descarta lo que no es una URL', () => {
+        expect(imagenesDeFicha({ SellerSku: 'A', Images: { Image: 'https://img/3.jpg' } })).toEqual(['https://img/3.jpg']);
+        expect(imagenesDeFicha({ SellerSku: 'A', MainImage: 'sin-url' })).toEqual([]);
+    });
+});

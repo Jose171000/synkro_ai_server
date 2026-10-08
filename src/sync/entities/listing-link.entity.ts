@@ -42,6 +42,28 @@ export class ListingLink {
     @Column('int', { nullable: true })
     qualityScore: number | null;
 
+    /**
+     * Lo que muestra el canal ahora mismo: precio regular y, si hay una
+     * promoción vigente, el precio con descuento. Es el estado del canal,
+     * no un dato nuestro: se vuelve a leer en cada importación.
+     */
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    regularPrice: number | null;
+
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    salePrice: number | null;
+
+    /** Imagen principal de esta publicación (cada variante tiene la suya). */
+    @Column('text', { nullable: true })
+    imageUrl: string | null;
+
+    /** Nombre de la variante (talla, color...) y SKU del grupo al que pertenece. */
+    @Column({ type: 'varchar', nullable: true })
+    variation: string | null;
+
+    @Column({ type: 'varchar', nullable: true })
+    parentSku: string | null;
+
     @Column({ type: 'timestamptz', nullable: true })
     lastSyncedAt: Date;
 

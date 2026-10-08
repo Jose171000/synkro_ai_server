@@ -12,7 +12,7 @@ import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
-import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, unidadPrincipal } from './falabella/falabella-api.service';
+import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
 import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -447,10 +447,16 @@ export class SyncService {
             // raíz. Falabella los manda como texto; un catálogo sin precio es
             // válido, así que "sin precio" se guarda vacío y no como cero,
             // que se leería como producto regalado.
+            //
+            // El precio de Synkro es el REGULAR: es el que se manda de vuelta a
+            // Falabella al editar, y ahí el descuento (SpecialPrice) es otro
+            // campo. Si Synkro guardara el precio rebajado como suyo, el
+            // siguiente envío dejaría el regular igual o por debajo de la
+            // promoción.
             const unidad = unidadPrincipal(producto);
-            const precioBruto = Number(unidad.SpecialPrice ?? unidad.Price ?? 0);
-            const precio = Number.isFinite(precioBruto) && precioBruto > 0 ? precioBruto : null;
+            const { regular: precio, descuento } = preciosDeUnidad(unidad);
             const existencias = Number(unidad.Stock ?? 0) || 0;
+            const imagenes = imagenesDeFicha(producto);
 
             // El producto que aún no tenemos se crea con lo poco que Falabella
             // devuelve, y queda como borrador: es un registro de que la ficha
@@ -464,6 +470,8 @@ export class SyncService {
                     stock: existencias,
                     status: 'draft',
                     owner: { id: userId } as any,
+                    // Cada variante es su propio SKU en Falabella, con su imagen.
+                    images: imagenes.map(url => ({ url })) as any,
                 });
                 product = await this.productRepository.save(nuevo);
             }
@@ -480,11 +488,29 @@ export class SyncService {
                 });
             }
 
+            // Un producto que ya existía y nunca se tocó desde la última
+            // sincronización guardaba el precio rebajado (así importaba antes):
+            // se corrige al regular. Si el usuario lo editó, no se pisa.
+            if (
+                estabaEnCatalogo && precio !== null && descuento !== null &&
+                enlace.lastPriceSynced != null &&
+                Number(product.price) === Number(enlace.lastPriceSynced) &&
+                Number(product.price) !== precio
+            ) {
+                product.price = precio as any;
+                await this.productRepository.save(product);
+            }
+
             enlace.externalId = externalId;
             enlace.permalink = producto.Url ?? enlace.permalink ?? null as any;
             enlace.syncStatus = estado;
             enlace.lastStockSynced = existencias;
             enlace.lastPriceSynced = precio as any;
+            enlace.regularPrice = precio;
+            enlace.salePrice = descuento;
+            enlace.imageUrl = imagenes[0] ?? null;
+            enlace.variation = producto.Variation ? String(producto.Variation).slice(0, 200) : null;
+            enlace.parentSku = producto.ParentSku ? String(producto.ParentSku).slice(0, 200) : null;
             enlace.qualityScore = nota;
             enlace.lastSyncedAt = new Date();
             enlace.lastError = estado === 'error'
@@ -1726,9 +1752,30 @@ export class SyncService {
             syncStatus: l.syncStatus,
             lastStockSynced: l.lastStockSynced,
             lastPriceSynced: l.lastPriceSynced,
+            regularPrice: l.regularPrice,
+            salePrice: l.salePrice,
+            imageUrl: l.imageUrl,
+            variation: l.variation,
+            parentSku: l.parentSku,
+            webPrice: l.product.webPrice,
             lastSyncedAt: l.lastSyncedAt,
             lastError: l.lastError,
         }));
+    }
+
+    /**
+     * Fija el precio con descuento de la tienda web. No pasa por la cola de
+     * revisión ni toca ningún marketplace: es un dato solo de la web propia,
+     * que se enviará a WooCommerce cuando esa conexión exista.
+     */
+    async setWebPrice(productId: string, userId: string, webPrice: number | null) {
+        const product = await this.productRepository.findOne({
+            where: { id: productId, owner: { id: userId } },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+        product.webPrice = webPrice;
+        await this.productRepository.save(product);
+        return { productId, webPrice, message: webPrice === null ? 'Precio web quitado.' : 'Precio web guardado.' };
     }
 
     async getProductSyncStatus(productId: string, userId: string) {

@@ -145,6 +145,43 @@ export function sitiosPublicados(unidad: FalabellaBusinessUnit): string[] {
     return (Array.isArray(sitios) ? sitios : [sitios]).map(s => String(s));
 }
 
+/**
+ * Precio regular y precio con descuento de una unidad de negocio.
+ *
+ * El descuento (SpecialPrice) solo cuenta si es un número positivo, MENOR que
+ * el regular, y si hoy está dentro de su ventana de fechas cuando Falabella la
+ * informa. Una promoción vencida seguiría en la ficha pero ya no se cobra, y
+ * mostrarla como vigente sería enseñar un precio que nadie puede pagar.
+ */
+export function preciosDeUnidad(
+    unidad: FalabellaBusinessUnit,
+    ahora: Date = new Date(),
+): { regular: number | null; descuento: number | null } {
+    const regularBruto = Number(unidad?.Price);
+    const regular = Number.isFinite(regularBruto) && regularBruto > 0 ? regularBruto : null;
+
+    const descuentoBruto = Number(unidad?.SpecialPrice);
+    let descuento = Number.isFinite(descuentoBruto) && descuentoBruto > 0 ? descuentoBruto : null;
+    if (descuento !== null && regular !== null && descuento >= regular) descuento = null;
+
+    if (descuento !== null) {
+        const desde = unidad?.SpecialFromDate ? new Date(unidad.SpecialFromDate) : null;
+        const hasta = unidad?.SpecialToDate ? new Date(unidad.SpecialToDate) : null;
+        if (desde && !Number.isNaN(desde.getTime()) && ahora < desde) descuento = null;
+        if (hasta && !Number.isNaN(hasta.getTime()) && ahora > hasta) descuento = null;
+    }
+    return { regular, descuento };
+}
+
+/** Imágenes de una ficha, la principal primero y sin repetidas. */
+export function imagenesDeFicha(producto: FalabellaProduct): string[] {
+    const lista = producto?.Images?.Image;
+    const todas = [producto?.MainImage, ...(Array.isArray(lista) ? lista : lista ? [lista] : [])]
+        .map(u => String(u ?? '').trim())
+        .filter(u => /^https?:\/\//i.test(u));
+    return [...new Set(todas)];
+}
+
 export interface FalabellaWebhook {
     WebhookId: string;
     CallbackUrl: string;
