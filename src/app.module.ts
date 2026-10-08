@@ -17,6 +17,7 @@ import { MailModule } from './mail/mail.module';
 import { UploadModule } from './upload/upload.module';
 import { ExportModule } from './export/export.module';
 import { SyncModule } from './sync/sync.module';
+import { StoresModule } from './stores/stores.module';
 import { AdminModule } from './admin/admin.module';
 import { ReportsModule } from './reports/reports.module';
 import { CrmModule } from './crm/crm.module';
@@ -127,6 +128,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     UploadModule,
     ExportModule,
     SyncModule,
+    StoresModule,
     AdminModule,
     ReportsModule,
     CrmModule,

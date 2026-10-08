@@ -49,6 +49,28 @@ export class MailService {
     }
 
     /**
+     * Invita a una persona a una tienda. El enlace lleva el código de un solo
+     * uso; solo sirve para el correo al que se envía.
+     */
+    async sendStoreInvitation(
+        to: string,
+        data: { storeName: string; inviterName: string; role: string; token: string; days: number },
+    ): Promise<void> {
+        await this.deliver({
+            to,
+            subject: `Te invitaron a la tienda ${data.storeName} — Synkro AI`,
+            template: 'store-invitation',
+            context: {
+                storeName: data.storeName,
+                inviterName: data.inviterName || 'Un miembro del equipo',
+                roleLabel: data.role === 'editor' ? 'editor (puede proponer cambios)' : 'lector (solo ver)',
+                acceptUrl: `${this.frontendUrl}/invitacion?token=${data.token}`,
+                days: data.days,
+            },
+        });
+    }
+
+    /**
      * Sends a welcome email after successful registration.
      */
     async sendWelcome(to: string, name: string): Promise<void> {

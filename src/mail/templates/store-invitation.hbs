@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invitación a una tienda</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .header { background: #111111; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .header span { color: #FCCB34; }
+        .body { padding: 40px 32px; }
+        .body p { color: #444; line-height: 1.7; font-size: 15px; }
+        .btn { display: inline-block; margin: 24px 0; padding: 14px 32px; background: #FCCB34; color: #111111; text-decoration: none; border-radius: 8px; font-size: 15px; font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #999; border-top: 1px solid #eee; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Synkro <span>AI</span></h1>
+        </div>
+        <div class="body">
+            <p><strong>{{inviterName}}</strong> te invitó a la tienda <strong>{{storeName}}</strong> como <strong>{{roleLabel}}</strong>.</p>
+            <p>Para entrar, inicia sesión (o crea tu cuenta) con este mismo correo y acepta la invitación:</p>
+            <p style="text-align:center;"><a class="btn" href="{{acceptUrl}}">Aceptar invitación</a></p>
+            <p style="font-size:13px;color:#888;">La invitación caduca en {{days}} días y solo funciona con este correo. Si no esperabas este mensaje, ignóralo.</p>
+        </div>
+        <div class="footer">&copy; Synkro AI</div>
+    </div>
+</body>
+</html>
