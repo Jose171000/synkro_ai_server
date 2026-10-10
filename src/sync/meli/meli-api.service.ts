@@ -35,6 +35,15 @@ export class MeliApiService {
 
     constructor() {
         this.http = axios.create({ baseURL: this.apiBase, timeout: 15000 });
+        // Mercado Libre explica el rechazo en el cuerpo; sin esto solo se vería «status code 403».
+        this.http.interceptors.response.use(undefined, (error: any) => {
+            const d = error?.response?.data;
+            const motivo = [d?.message, d?.error].filter((x: any) => typeof x === 'string' && x).join(' · ');
+            if (error?.response?.status && motivo) {
+                error.message = `Mercado Libre respondió ${error.response.status} (${error.config?.url ?? ''}): ${motivo}`;
+            }
+            return Promise.reject(error);
+        });
     }
 
     private get clientId(): string {
