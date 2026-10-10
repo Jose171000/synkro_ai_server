@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -55,7 +55,7 @@ const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
 
 @Injectable()
-export class SyncService {
+export class SyncService implements OnModuleInit {
     constructor(
         @InjectRepository(MarketplaceConnection)
         private readonly connectionRepository: Repository<MarketplaceConnection>,
@@ -453,6 +453,13 @@ export class SyncService {
             monedaDePais(credentials.country) ?? connection.currency ?? monedaPorDefecto();
 
         const saved = await this.saveConnection(scope, connection, credentials.label);
+
+        // Mejor esfuerzo: si falla, las ventas igual entran por la consulta periódica.
+        if (this.publicApiUrl) {
+            this.registerFalabellaWebhook(scope, saved.id).catch(error =>
+                console.warn(`[Sync] No se pudo registrar el aviso de ventas de Falabella: ${error?.message}`),
+            );
+        }
         return { id: saved.id, marketplace: 'falabella', nickname: userId, currency: saved.currency ?? monedaPorDefecto() };
     }
 
@@ -1742,6 +1749,8 @@ export class SyncService {
                 marketplace: 'falabella',
                 externalId,
                 owner: { id: userId } as any,
+                store: connection.store ? ({ id: connection.store.id } as any) : null,
+                connection: { id: connection.id } as any,
                 totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
                 // Falabella no siempre manda la moneda; si no viene, se usa la
                 // del país de envío y, en último caso, la guardada al conectar.
@@ -1878,16 +1887,26 @@ export class SyncService {
 
     private async applyMeliOrder(resource: string, connectionId: string): Promise<void> {
         const connection = await this.getValidConnectionById(connectionId);
-        const userId = connection.owner.id;
         const orderId = resource.split('/').pop() as string;
         const order = await this.meliApi.getOrder(connection.accessToken, orderId);
+        await this.applyMeliOrderData(connection, order);
+    }
 
-        if (order.status !== 'paid') return; // only confirmed sales move stock
+    /**
+     * Aplica una venta de Mercado Libre ya leída: la guarda, descuenta el stock
+     * y propaga el nuevo stock a las demás cuentas. Devuelve true si era nueva.
+     * Es idempotente: la misma venta nunca se aplica dos veces a la misma cuenta.
+     */
+    private async applyMeliOrderData(connection: MarketplaceConnection, order: any): Promise<boolean> {
+        const userId = connection.owner.id;
+        const orderId = String(order.id);
+
+        if (order.status !== 'paid') return false; // only confirmed sales move stock
 
         // Idempotency: never apply the same order twice to the same account (webhooks can repeat)
         const dedupeKey = `meli:order-applied:${connection.id}:${orderId}`;
         const firstTime = await this.redis.set(dedupeKey, '1', 'EX', 60 * 60 * 24 * 30, 'NX');
-        if (!firstTime) return;
+        if (!firstTime) return false;
 
         // Persist the sale — feeds the client sales report and orders panel
         try {
@@ -1895,6 +1914,8 @@ export class SyncService {
                 marketplace: 'mercadolibre',
                 externalId: String(orderId),
                 owner: { id: userId } as any,
+                store: connection.store ? ({ id: connection.store.id } as any) : null,
+                connection: { id: connection.id } as any,
                 totalAmount: Number(order.total_amount || 0),
                 currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
@@ -1977,6 +1998,99 @@ export class SyncService {
                     connectionId: other.connection.id,
                 });
             }
+        }
+        return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Ventas: ponerse al día sin depender de los avisos de los canales
+    // ─────────────────────────────────────────────────────────────
+
+    /** Ventana que se revisa en cada pasada: sobra para cubrir una caída de varias horas. */
+    private static readonly ORDER_LOOKBACK_HOURS = 48;
+
+    /** Trae las ventas recientes de una cuenta de Mercado Libre y aplica las nuevas. */
+    async pollMeliOrders(connectionId: string): Promise<{ nuevos: number; revisados: number }> {
+        const connection = await this.getValidConnectionById(connectionId);
+        const desde = new Date(Date.now() - SyncService.ORDER_LOOKBACK_HOURS * 3600_000);
+        const ordenes = await this.meliApi.searchOrders(connection.accessToken, connection.externalUserId, desde);
+
+        let nuevos = 0;
+        for (const orden of ordenes) {
+            if (await this.applyMeliOrderData(connection, orden)) nuevos++;
+        }
+        return { nuevos, revisados: ordenes.length };
+    }
+
+    /** Ventas recientes de una cuenta, sea del canal que sea. */
+    private async pollConnection(connection: MarketplaceConnection): Promise<{ nuevos: number; revisados: number }> {
+        if (connection.marketplace === 'falabella') {
+            const r = await this.processFalabellaOrders({ userId: connection.owner.id, connectionId: connection.id });
+            return { nuevos: r.nuevos, revisados: r.revisados };
+        }
+        if (connection.marketplace === 'mercadolibre') {
+            return this.pollMeliOrders(connection.id);
+        }
+        return { nuevos: 0, revisados: 0 };
+    }
+
+    private async pollConnections(connections: MarketplaceConnection[]) {
+        const cuentas: { id: string; marketplace: string; nombre: string; nuevos: number; revisados: number; error?: string }[] = [];
+        // Una a una: así no se lanzan decenas de consultas a la vez a los canales.
+        for (const c of connections) {
+            const nombre = c.label || c.externalNickname || c.externalUserId;
+            try {
+                const r = await this.pollConnection(c);
+                cuentas.push({ id: c.id, marketplace: c.marketplace, nombre, ...r });
+            } catch (error: any) {
+                // Una cuenta caída no debe impedir que se revisen las demás.
+                console.warn(`[Sync] Ventas de ${c.marketplace} (${nombre}): ${error?.message}`);
+                cuentas.push({ id: c.id, marketplace: c.marketplace, nombre, nuevos: 0, revisados: 0, error: error?.message ?? 'Error desconocido' });
+            }
+        }
+        return { cuentas, totalNuevos: cuentas.reduce((s, c) => s + c.nuevos, 0) };
+    }
+
+    /** Pasada periódica: ventas recientes de TODAS las cuentas activas de ventas. */
+    async pollAllOrders() {
+        const cuentas = await this.connectionRepository.find({
+            where: [
+                { marketplace: 'falabella', status: 'active' },
+                { marketplace: 'mercadolibre', status: 'active' },
+            ],
+            relations: { owner: true, store: true },
+            order: { createdAt: 'ASC' },
+        });
+        return this.pollConnections(cuentas);
+    }
+
+    /** «Actualizar ventas ahora»: lo mismo, solo para las cuentas de una tienda. */
+    async syncStoreOrders(storeId: string) {
+        const cuentas = await this.connectionRepository.find({
+            where: { store: { id: storeId }, status: 'active' },
+            relations: { owner: true, store: true },
+            order: { createdAt: 'ASC' },
+        });
+        return this.pollConnections(cuentas.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre'));
+    }
+
+    /**
+     * Programa la consulta periódica de ventas. Los canales pueden avisar por
+     * webhook, pero eso depende de que alguien lo haya configurado y de que el
+     * aviso llegue; esta pasada garantiza que ninguna venta se quede sin entrar.
+     * ORDER_POLL_MINUTES=0 la desactiva.
+     */
+    async onModuleInit() {
+        const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
+        if (!(minutos > 0)) return;
+        try {
+            await this.syncQueue.upsertJobScheduler(
+                'poll-orders',
+                { every: minutos * 60_000 },
+                { name: 'poll-orders', data: {}, opts: { removeOnComplete: true, removeOnFail: 20 } },
+            );
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo programar la consulta periódica de ventas: ${error?.message}`);
         }
     }
 

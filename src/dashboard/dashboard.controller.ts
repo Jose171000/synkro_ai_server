@@ -5,6 +5,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { DashboardService } from './dashboard.service';
+import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 
 @ApiTags('dashboard')
 @ApiBearerAuth()
@@ -14,12 +15,14 @@ export class DashboardController {
     constructor(private readonly dashboard: DashboardService) { }
 
     @Get('summary')
+    @UseGuards(StoreAccessGuard)
+    @RequireStoreRole('viewer')
     @ApiOperation({
-        summary: 'Resumen del negocio de la cuenta',
-        description: 'Canales conectados, catálogo, ventas del mes contra el anterior, stock en riesgo y avisos pendientes.',
+        summary: 'Resumen del negocio de la tienda activa',
+        description: 'Canales conectados, catálogo, ventas del mes contra el anterior y stock en riesgo de la tienda indicada en X-Store-Id; y los avisos pendientes de la persona.',
     })
     getSummary(@Req() req) {
-        return this.dashboard.getSummary(req.user.id);
+        return this.dashboard.getSummary({ userId: req.user.id, storeId: req.store.storeId });
     }
 
     @Get('accounts')

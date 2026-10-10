@@ -5,6 +5,8 @@ import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { parseAmount } from '../common/parse-amount';
+import { Store } from '../stores/entities/store.entity';
+import { StoresService } from '../stores/stores.service';
 
 export interface DayPoint {
     date: string;          // YYYY-MM-DD
@@ -19,17 +21,32 @@ export class ReportsService {
         private readonly orderRepository: Repository<MarketplaceOrder>,
         @InjectRepository(ClientProfile)
         private readonly profileRepository: Repository<ClientProfile>,
+        @InjectRepository(Store)
+        private readonly storeRepository: Repository<Store>,
+        private readonly stores: StoresService,
     ) { }
+
+    /**
+     * El perfil del cliente (reporte externo y Google Sheet) es de la cuenta,
+     * no de cada tienda. Se asocia a la tienda ORIGINAL de su dueño: es la que
+     * existía cuando se configuró. Las demás tiendas parten con sus métricas
+     * propias, sin heredar las de otra.
+     */
+    private async legacyProfile(storeId: string): Promise<ClientProfile | null> {
+        const store = await this.storeRepository.findOne({ where: { id: storeId }, relations: { owner: true } });
+        if (!store) return null;
+        const original = await this.stores.defaultStoreId(store.owner.id);
+        if (original !== storeId) return null;
+        return this.profileRepository.findOne({ where: { user: { id: store.owner.id } } });
+    }
 
     /**
      * Reporte externo configurado por el administrador para este usuario
      * (AppScript, Looker Studio...). Se sirve aparte del reporte nativo
      * para que el cliente vea ambos.
      */
-    async getReportConfig(userId: string) {
-        const profile = await this.profileRepository.findOne({
-            where: { user: { id: userId } },
-        });
+    async getReportConfig(storeId: string) {
+        const profile = await this.legacyProfile(storeId);
         return {
             embedUrl: profile?.reportEmbedUrl || null,
             embedTitle: profile?.reportEmbedTitle || 'Reporte detallado',
@@ -97,7 +114,7 @@ export class ReportsService {
      *  - marketplace_orders (real orders synced from marketplaces)
      *  - the client's Google Sheet published as CSV (legacy AppScript data)
      */
-    async getSalesReport(userId: string, from?: string, to?: string) {
+    async getSalesReport(storeId: string, from?: string, to?: string) {
         const end = to || new Date().toISOString().slice(0, 10);
         const start = from || new Date(Date.now() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -107,7 +124,7 @@ export class ReportsService {
             .addSelect('"o"."marketplace"', 'channel')
             .addSelect('SUM("o"."totalAmount")', 'sales')
             .addSelect('COUNT(*)', 'orders')
-            .where('"o"."ownerId" = :userId', { userId })
+            .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
             .groupBy('date').addGroupBy('"o"."marketplace"')
             .orderBy('date', 'ASC')
@@ -130,7 +147,7 @@ export class ReportsService {
 
         // ── Fuente 2: Google Sheets (CSV publicado) ──
         let sheetError: string | null = null;
-        const profile = await this.profileRepository.findOne({ where: { user: { id: userId } } });
+        const profile = await this.legacyProfile(storeId);
 
         if (profile?.sheetCsvUrl) {
             try {
@@ -154,6 +171,25 @@ export class ReportsService {
             }
         }
 
+        // ── Por cuenta: una tienda puede tener varias del mismo canal ──
+        const porCuenta = await this.orderRepository.createQueryBuilder('o')
+            .leftJoin('o.connection', 'c')
+            .select('"o"."connectionId"', 'connectionId')
+            .addSelect('"o"."marketplace"', 'channel')
+            .addSelect('MAX(COALESCE("c"."label", "c"."externalNickname", "c"."externalUserId"))', 'label')
+            .addSelect('SUM("o"."totalAmount")', 'sales')
+            .addSelect('COUNT(*)', 'orders')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
+            .orderBy('SUM("o"."totalAmount")', 'DESC')
+            .getRawMany();
+
+        const ultima = await this.orderRepository.createQueryBuilder('o')
+            .select('MAX("o"."orderDate")', 'last')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .getRawOne();
+
         const byDay = [...byDayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
         const byChannel = [...byChannelMap.values()].sort((a, b) => b.sales - a.sales);
         const totalSales = byDay.reduce((s, d) => s + d.sales, 0);
@@ -168,6 +204,15 @@ export class ReportsService {
             },
             byDay,
             byChannel,
+            byAccount: porCuenta.map(r => ({
+                connectionId: r.connectionId,
+                channel: r.channel,
+                label: r.label ?? null,
+                sales: Math.round(Number(r.sales) * 100) / 100,
+                orders: Number(r.orders),
+            })),
+            /** Cuándo entró la última venta de la tienda: sirve para saber si los canales están jalando. */
+            lastOrderAt: ultima?.last ?? null,
             sources: {
                 marketplaces: rows.length > 0,
                 sheets: Boolean(profile?.sheetCsvUrl),

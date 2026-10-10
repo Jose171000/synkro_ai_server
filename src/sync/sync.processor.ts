@@ -10,6 +10,7 @@ import { ChangeRequestsService } from './change-requests.service';
  *  - 'falabella-feed': check how a batch sent to Falabella turned out
  *  - 'falabella-order': pull recent Falabella orders after a webhook ping
  *  - 'meli-order': apply a Mercado Libre sale to local stock and propagate
+ *  - 'poll-orders': periodic pass that pulls recent sales from every account
  */
 @Processor('marketplace-sync-queue')
 export class SyncProcessor extends WorkerHost {
@@ -69,6 +70,11 @@ export class SyncProcessor extends WorkerHost {
                 // cómo fue y, si aún no terminó, se reprograma solo.
                 const { feedRecordId, userId } = job.data;
                 return this.syncService.checkFalabellaFeed(feedRecordId, userId);
+            }
+
+            case 'poll-orders': {
+                // Pasada periódica: ventas recientes de todas las cuentas.
+                return this.syncService.pollAllOrders();
             }
 
             case 'falabella-order': {

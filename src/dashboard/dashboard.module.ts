@@ -9,6 +9,7 @@ import { Product } from '../products/entities/product.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
+import { StoresModule } from '../stores/stores.module';
 
 @Module({
     imports: [
@@ -16,6 +17,7 @@ import { ClientProfile } from '../admin/entities/client-profile.entity';
             MarketplaceConnection, ListingLink, MarketplaceOrder,
             Product, Notification, User, ClientProfile,
         ]),
+        StoresModule,
     ],
     controllers: [DashboardController],
     providers: [DashboardService],

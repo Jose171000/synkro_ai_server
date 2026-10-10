@@ -1,5 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index, Unique } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { Store } from '../../stores/entities/store.entity';
+import { MarketplaceConnection } from './marketplace-connection.entity';
 
 /**
  * A confirmed sale pulled from a marketplace (via webhook or backfill).
@@ -20,6 +22,15 @@ export class MarketplaceOrder {
     @ManyToOne(() => User, { nullable: false })
     @Index()
     owner: User;
+
+    /** Tienda a la que pertenece la venta: es la que la ve en sus analíticas. */
+    @ManyToOne(() => Store, { onDelete: 'SET NULL', nullable: true })
+    @Index()
+    store: Store | null;
+
+    /** Cuenta del canal por la que entró la venta. */
+    @ManyToOne(() => MarketplaceConnection, { onDelete: 'SET NULL', nullable: true })
+    connection: MarketplaceConnection | null;
 
     @Column('decimal', { precision: 12, scale: 2 })
     totalAmount: number;

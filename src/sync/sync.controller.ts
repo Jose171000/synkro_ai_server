@@ -334,6 +334,21 @@ export class SyncController {
         return this.syncService.processFalabellaOrders({ userId: scope.userId, storeId: scope.storeId, connectionId });
     }
 
+    @Post('orders/sync')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Actualiza las ventas de todas las cuentas de la tienda ahora',
+        description:
+            'Trae las ventas de las últimas 48 horas de cada cuenta de Falabella y Mercado Libre, ' +
+            'registra las nuevas y descuenta el stock. No duplica las ya registradas. ' +
+            'Cada cuenta responde por separado: si una falla, las demás se revisan igual.',
+    })
+    syncStoreOrders(@Req() req) {
+        return this.syncService.syncStoreOrders(scopeOf(req).storeId);
+    }
+
     // ── Webhooks ─────────────────────────────────────────────────
 
     // Public: Mercado Libre POSTs notifications here (configure the URL in DevCenter).

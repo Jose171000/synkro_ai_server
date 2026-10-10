@@ -167,6 +167,24 @@ export class MeliApiService {
     }
 
     /** Fetches an order (used when processing sale notifications). */
+    /**
+     * Ventas recientes de un vendedor. Sirve para ponerse al día sin depender
+     * de las notificaciones de Mercado Libre, que hay que configurar a mano en
+     * su panel de desarrolladores y se pierden si el servidor está caído.
+     */
+    async searchOrders(accessToken: string, sellerId: string, since: Date): Promise<any[]> {
+        const { data } = await this.http.get('/orders/search', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: {
+                seller: sellerId,
+                'order.date_created.from': since.toISOString().replace('Z', '-00:00'),
+                sort: 'date_desc',
+                limit: 50,
+            },
+        });
+        return Array.isArray(data?.results) ? data.results : [];
+    }
+
     async getOrder(accessToken: string, orderId: string): Promise<any> {
         const { data } = await this.http.get(`/orders/${orderId}`, {
             headers: { Authorization: `Bearer ${accessToken}` },

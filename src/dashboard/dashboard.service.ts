@@ -31,11 +31,12 @@ export class DashboardService {
     ) { }
 
     /**
-     * Resumen del negocio de una cuenta: lo que su dueño necesita ver al
-     * entrar. Todo sale de datos que el sistema ya tiene — no hay métricas
+     * Resumen del negocio de una tienda: lo que su dueño necesita ver al
+     * entrar. Los avisos son de la persona; todo lo demás, de la tienda. Todo sale de datos que el sistema ya tiene — no hay métricas
      * inventadas ni de relleno.
      */
-    async getSummary(userId: string) {
+    async getSummary(scope: { userId: string; storeId: string }) {
+        const { userId, storeId } = scope;
         const desdeEsteMes = inicioDeMes();
         const desdeMesPasado = inicioDeMes(-1);
 
@@ -49,33 +50,35 @@ export class DashboardService {
             porCanal,
             avisos,
         ] = await Promise.all([
-            this.connections.find({ where: { owner: { id: userId } } }),
+            this.connections.find({ where: { store: { id: storeId } }, order: { createdAt: 'ASC' } }),
 
             this.products
                 .createQueryBuilder('p')
                 .select('COUNT(*)', 'total')
                 .addSelect(`COUNT(*) FILTER (WHERE p.status = 'draft')`, 'borradores')
-                .where('p.ownerId = :userId', { userId })
+                .where('(p."storeId" = :storeId OR (p."storeId" IS NULL AND p."ownerId" = :userId))', { storeId, userId })
                 .getRawOne(),
 
             this.listings
                 .createQueryBuilder('l')
-                .innerJoin('l.product', 'p')
+                .innerJoin('l.connection', 'c')
                 .select(`COUNT(*) FILTER (WHERE l."syncStatus" = 'published')`, 'publicados')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'error')`, 'conError')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'pending')`, 'pendientes')
-                .where('p.ownerId = :userId', { userId })
+                .where('c."storeId" = :storeId', { storeId })
                 .getRawOne(),
 
-            this.sumarVentas(userId, desdeEsteMes),
-            this.sumarVentas(userId, desdeMesPasado, desdeEsteMes),
+            this.sumarVentas(storeId, desdeEsteMes),
+            this.sumarVentas(storeId, desdeMesPasado, desdeEsteMes),
 
             this.products
                 .createQueryBuilder('p')
                 .innerJoin(ListingLink, 'l', `l."productId" = p.id AND l."syncStatus" = 'published'`)
+                .innerJoin(MarketplaceConnection, 'c', 'c.id = l."connectionId"')
                 .select(['p.id AS id', 'p.name AS name', 'p.sku AS sku', 'p.stock AS stock'])
-                .where('p.ownerId = :userId', { userId })
+                .where('c."storeId" = :storeId', { storeId })
                 .andWhere('p.stock <= :umbral', { umbral: LOW_STOCK_THRESHOLD })
+                .groupBy('p.id')
                 .orderBy('p.stock', 'ASC')
                 .limit(8)
                 .getRawMany(),
@@ -85,7 +88,7 @@ export class DashboardService {
                 .select('o.marketplace', 'marketplace')
                 .addSelect('COUNT(*)', 'pedidos')
                 .addSelect('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
-                .where('o.ownerId = :userId', { userId })
+                .where('o."storeId" = :storeId', { storeId })
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
                 .groupBy('o.marketplace')
                 .getRawMany(),
@@ -135,13 +138,13 @@ export class DashboardService {
         };
     }
 
-    /** Pedidos e importe de una cuenta en un rango de fechas. */
-    private async sumarVentas(userId: string, desde: Date, hasta?: Date) {
+    /** Pedidos e importe de una tienda en un rango de fechas. */
+    private async sumarVentas(storeId: string, desde: Date, hasta?: Date) {
         const qb = this.orders
             .createQueryBuilder('o')
             .select('COUNT(*)', 'pedidos')
             .addSelect('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
-            .where('o.ownerId = :userId', { userId })
+            .where('o."storeId" = :storeId', { storeId })
             .andWhere('o."orderDate" >= :desde', { desde });
 
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
