@@ -77,6 +77,11 @@ export class SyncProcessor extends WorkerHost {
                 return this.syncService.pollAllOrders();
             }
 
+            case 'sync-listings': {
+                // Pasada periódica: estado de las publicaciones de todas las cuentas.
+                return this.syncService.refreshAllListings();
+            }
+
             case 'falabella-order': {
                 // Se consultan los pedidos recientes: el aviso solo dice que
                 // algo pasó, los datos buenos vienen de la API.

@@ -133,7 +133,12 @@ export class MeliApiService {
     async updateItem(
         accessToken: string,
         itemId: string,
-        changes: { available_quantity?: number; price?: number },
+        changes: {
+            available_quantity?: number;
+            price?: number;
+            /** Para publicaciones con variantes: stock y precio van por variante, no por publicación. */
+            variations?: { id: string | number; available_quantity?: number; price?: number }[];
+        },
     ): Promise<void> {
         await this.http.put(`/items/${itemId}`, changes, {
             headers: { Authorization: `Bearer ${accessToken}` },
@@ -167,6 +172,68 @@ export class MeliApiService {
     }
 
     /** Fetches an order (used when processing sale notifications). */
+    /**
+     * Ids de TODAS las publicaciones de un vendedor. Usa el modo «scan» de ML,
+     * que no tiene el tope de 1.000 resultados de la paginación normal.
+     */
+    async listSellerItemIds(accessToken: string, sellerId: string, max = 5000): Promise<{ ids: string[]; incompleto: boolean }> {
+        const ids: string[] = [];
+        let scrollId: string | undefined;
+        for (let i = 0; i < 100 && ids.length < max; i++) {
+            const { data } = await this.http.get(`/users/${sellerId}/items/search`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                params: { search_type: 'scan', limit: 100, ...(scrollId ? { scroll_id: scrollId } : {}) },
+            });
+            const lote: string[] = Array.isArray(data?.results) ? data.results : [];
+            if (!lote.length) return { ids, incompleto: false };
+            ids.push(...lote);
+            scrollId = data?.scroll_id ?? scrollId;
+            if (!scrollId) break;
+        }
+        return { ids: ids.slice(0, max), incompleto: ids.length >= max };
+    }
+
+    /** Datos de varias publicaciones (ML admite hasta 20 por llamada). */
+    async getItems(accessToken: string, ids: string[]): Promise<{ items: any[]; notFound: string[] }> {
+        const items: any[] = [];
+        const notFound: string[] = [];
+        for (let i = 0; i < ids.length; i += 20) {
+            const { data } = await this.http.get('/items', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                params: { ids: ids.slice(i, i + 20).join(',') },
+            });
+            for (const r of Array.isArray(data) ? data : []) {
+                if (r?.code === 200 && r?.body) items.push(r.body);
+                else if (r?.code === 404) notFound.push(String(r?.body?.id ?? r?.id ?? ''));
+            }
+        }
+        return { items, notFound: notFound.filter(Boolean) };
+    }
+
+    /** Una página de ventas de un rango de fechas, para traer el historial. */
+    async searchOrdersPage(
+        accessToken: string,
+        sellerId: string,
+        options: { from: Date; to?: Date; offset: number; limit?: number },
+    ): Promise<{ results: any[]; total: number }> {
+        const fecha = (d: Date) => d.toISOString().replace('Z', '-00:00');
+        const { data } = await this.http.get('/orders/search', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: {
+                seller: sellerId,
+                'order.date_created.from': fecha(options.from),
+                ...(options.to ? { 'order.date_created.to': fecha(options.to) } : {}),
+                sort: 'date_desc',
+                limit: options.limit ?? 50,
+                offset: options.offset,
+            },
+        });
+        return {
+            results: Array.isArray(data?.results) ? data.results : [],
+            total: Number(data?.paging?.total ?? 0),
+        };
+    }
+
     /**
      * Ventas recientes de un vendedor. Sirve para ponerse al día sin depender
      * de las notificaciones de Mercado Libre, que hay que configurar a mano en

@@ -379,6 +379,52 @@ export class SyncController {
         return this.ordersQuery.detail(scopeOf(req).storeId, req.store.role, id);
     }
 
+    @Post('mercadolibre/listings/import')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Trae las publicaciones que ya existen en una cuenta de Mercado Libre',
+        description:
+            'Lee todas las publicaciones de la cuenta y las enlaza con el catálogo por SKU; cada variante es un producto. ' +
+            'Con dryRun=true no escribe nada: solo informa de qué pasaría.',
+    })
+    @ApiQuery({ name: 'dryRun', required: false, type: Boolean })
+    @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta de Mercado Libre; obligatoria si la tienda tiene varias.' })
+    importMeliListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string) {
+        return this.syncService.importMeliListings(scopeOf(req), connectionId, { dryRun: dryRun === 'true' });
+    }
+
+    @Post('listings/refresh')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Actualiza ahora el estado de las publicaciones de la tienda',
+        description:
+            'Vuelve a leer en cada cuenta el estado, los precios, el stock del canal y la foto de lo que ya está enlazado. ' +
+            'No crea productos ni cambia el stock de Synkro.',
+    })
+    refreshListings(@Req() req) {
+        return this.syncService.refreshStoreListings(scopeOf(req).storeId);
+    }
+
+    @Post('orders/import-history')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Importa el historial de ventas de las cuentas de la tienda',
+        description:
+            'Deja la constancia de las ventas de los últimos N días (hasta 365) SIN tocar el stock ni avisar: ' +
+            'esas ventas ya ocurrieron. Las últimas 48 horas las trae la consulta normal, que sí descuenta el stock.',
+    })
+    @ApiQuery({ name: 'days', required: false, example: 90 })
+    @ApiQuery({ name: 'connectionId', required: false })
+    importOrderHistory(@Req() req, @Query('days') days?: string, @Query('connectionId') connectionId?: string) {
+        return this.syncService.importOrderHistory(scopeOf(req), Number(days) || 90, connectionId);
+    }
+
     @Post('orders/sync')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

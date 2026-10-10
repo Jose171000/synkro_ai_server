@@ -65,6 +65,13 @@ export class ListingLink {
     @Column({ type: 'varchar', nullable: true })
     parentSku: string | null;
 
+    /**
+     * Variante de la publicación a la que corresponde este producto (Mercado
+     * Libre maneja stock y precio por variante). Nulo si no tiene variantes.
+     */
+    @Column({ type: 'varchar', nullable: true })
+    variationId: string | null;
+
     @Column({ type: 'timestamptz', nullable: true })
     lastSyncedAt: Date;
 

@@ -21,6 +21,7 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
 import { normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { filasDeItemMeli, MeliListingRow } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
@@ -1449,10 +1450,15 @@ export class SyncService implements OnModuleInit {
 
         try {
             const connection = await this.getValidConnectionById(link.connection.id);
-            await this.meliApi.updateItem(connection.accessToken, link.externalId, {
-                available_quantity: product.stock,
-                price: Number(product.price),
-            });
+            // Con variantes, Mercado Libre pide stock y precio de CADA variante:
+            // mandarlos a nivel de publicación lo rechaza.
+            await this.meliApi.updateItem(
+                connection.accessToken,
+                link.externalId,
+                link.variationId
+                    ? { variations: [{ id: link.variationId, available_quantity: product.stock, price: Number(product.price) }] }
+                    : { available_quantity: product.stock, price: Number(product.price) },
+            );
             link.lastStockSynced = product.stock;
             link.lastPriceSynced = product.price;
             link.lastSyncedAt = new Date();
@@ -1729,9 +1735,7 @@ export class SyncService implements OnModuleInit {
             : ref.storeId
                 ? await this.resolveConnection(ref.storeId, 'falabella')
                 : await this.getValidConnection(ref.userId, 'falabella');
-        const userId = ref.userId;
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
-        const monedaCuenta = connection.currency ?? undefined;
         const desde = new Date(Date.now() - (options.desdeHoras ?? 48) * 60 * 60 * 1000);
 
         const pedidos = await this.falabellaApi.getOrders(credentials, {
@@ -1739,6 +1743,26 @@ export class SyncService implements OnModuleInit {
             limit: 100,
         });
 
+        const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false);
+        if (r.nuevos) {
+            console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados.`);
+        }
+        return { ...r, revisados: pedidos.length };
+    }
+
+    /**
+     * Guarda los pedidos de Falabella que aún no están. Con `soloRegistro` solo
+     * deja constancia de la venta (historial): ni baja el stock ni avisa, porque
+     * esas ventas ya ocurrieron y el stock actual las refleja.
+     */
+    private async registrarPedidosFalabella(
+        userId: string,
+        connection: MarketplaceConnection,
+        pedidos: any[],
+        soloRegistro: boolean,
+    ): Promise<{ nuevos: number; repetidos: number; completados: number }> {
+        const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
+        const monedaCuenta = connection.currency ?? undefined;
         let nuevos = 0;
         let repetidos = 0;
         let completados = 0;
@@ -1788,7 +1812,7 @@ export class SyncService implements OnModuleInit {
                 totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
                 currency: moneda,
                 itemsCount: Number((pedido as any).ItemsCount ?? items.length ?? 1),
-                items: norm.lines,
+                items: norm.lines as any,
                 orderNumber: norm.orderNumber,
                 customerName: norm.customerName,
                 shipByDate: norm.shipByDate,
@@ -1797,6 +1821,7 @@ export class SyncService implements OnModuleInit {
                 orderDate: (pedido as any).CreatedAt ? new Date((pedido as any).CreatedAt) : new Date(),
             }));
             nuevos++;
+            if (soloRegistro) continue;
 
             // El stock que había antes y el que quedó después de ESTA venta se
             // guardan en cada línea: es lo que permite auditar la venta luego.
@@ -1807,11 +1832,7 @@ export class SyncService implements OnModuleInit {
                 });
             }
         }
-
-        if (nuevos) {
-            console.log(`[Sync] Falabella: ${nuevos} pedidos nuevos, ${repetidos} ya registrados.`);
-        }
-        return { nuevos, repetidos, revisados: pedidos.length, completados };
+        return { nuevos, repetidos, completados };
     }
 
     /** Descuenta stock y avisa por cada línea vendida en Falabella. */
@@ -1936,7 +1957,11 @@ export class SyncService implements OnModuleInit {
      * y propaga el nuevo stock a las demás cuentas. Devuelve true si era nueva.
      * Es idempotente: la misma venta nunca se aplica dos veces a la misma cuenta.
      */
-    private async applyMeliOrderData(connection: MarketplaceConnection, order: any): Promise<boolean> {
+    private async applyMeliOrderData(
+        connection: MarketplaceConnection,
+        order: any,
+        options: { soloRegistro?: boolean } = {},
+    ): Promise<boolean> {
         const userId = connection.owner.id;
         const orderId = String(order.id);
 
@@ -1951,7 +1976,9 @@ export class SyncService implements OnModuleInit {
             return false;
         }
 
-        const shipment = await this.fetchMeliShipment(connection, order);
+        // En el historial no se consulta el envío de cada venta: son cientos y
+        // ya no hay nada que despachar.
+        const shipment = options.soloRegistro ? null : await this.fetchMeliShipment(connection, order);
         const norm = normalizeMeliOrder(order, shipment);
 
         // Persist the sale — feeds the client sales report and orders panel
@@ -1966,18 +1993,20 @@ export class SyncService implements OnModuleInit {
                 totalAmount: Number(order.total_amount || 0),
                 currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
-                items: norm.lines,
+                items: norm.lines as any,
                 orderNumber: norm.orderNumber,
                 customerName: norm.customerName,
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
                 status: order.status,
-                orderDate: order.date_closed ? new Date(order.date_closed) : new Date(),
+                orderDate: order.date_closed ? new Date(order.date_closed) : (order.date_created ? new Date(order.date_created) : new Date()),
             }));
         } catch (error: any) {
             // UQ violation = ya registrada (carrera entre webhooks) — seguir sin romper
             console.warn(`[Sync] Orden ${orderId} no persistida: ${error?.message}`);
         }
+        // Historial: queda la constancia de la venta, sin tocar el stock ni avisar.
+        if (options.soloRegistro) return true;
 
         const efectos: Record<string, StockEffect> = {};
 
@@ -1986,17 +2015,27 @@ export class SyncService implements OnModuleInit {
             const quantity = Number(orderItem?.quantity || 0);
             if (!externalId || !quantity) continue;
 
-            const link = await this.listingLinkRepository.findOne({
-                where: { marketplace: 'mercadolibre', externalId, connection: { id: connection.id } },
-                relations: { product: true },
-            });
+            // Con variantes, el enlace es el de ESA variante; si no, el de la publicación.
+            const variacion = orderItem?.item?.variation_id != null ? String(orderItem.item.variation_id) : null;
+            let link = variacion
+                ? await this.listingLinkRepository.findOne({
+                    where: { marketplace: 'mercadolibre', externalId, variationId: variacion, connection: { id: connection.id } },
+                    relations: { product: true },
+                })
+                : null;
+            if (!link) {
+                link = await this.listingLinkRepository.findOne({
+                    where: { marketplace: 'mercadolibre', externalId, connection: { id: connection.id } },
+                    relations: { product: true },
+                });
+            }
             if (!link) continue;
 
             const product = link.product;
             const stockAntes = product.stock;
             product.stock = Math.max(0, stockAntes - quantity);
             await this.productRepository.save(product);
-            efectos[String(externalId)] = { productId: product.id, stockBefore: stockAntes, stockAfter: product.stock };
+            efectos[`${externalId}:${variacion ?? ''}`] = { productId: product.id, stockBefore: stockAntes, stockAfter: product.stock };
             console.log(`[Sync] Venta ML ${orderId}: ${quantity}x ${product.sku} → stock ${product.stock}`);
 
             await this.notifications.notify(userId, {
@@ -2053,7 +2092,10 @@ export class SyncService implements OnModuleInit {
         // Cada línea recuerda el stock de antes y de después de esta venta.
         if (guardada && Object.keys(efectos).length) {
             await this.orderRepository.update(guardada.id, {
-                items: norm.lines.map(l => (l.channelItemId && efectos[l.channelItemId] ? { ...l, ...efectos[l.channelItemId] } : l)) as any,
+                items: norm.lines.map(l => {
+                    const e = efectos[`${l.channelItemId ?? ''}:${l.channelVariationId ?? ''}`] ?? efectos[`${l.channelItemId ?? ''}:`];
+                    return e ? { ...l, ...e } : l;
+                }) as any,
             });
         }
         return true;
@@ -2087,6 +2129,7 @@ export class SyncService implements OnModuleInit {
             items: norm.lines as any,
         });
     }
+
 
     // ─────────────────────────────────────────────────────────────
     // Ventas: ponerse al día sin depender de los avisos de los canales
@@ -2178,6 +2221,384 @@ export class SyncService implements OnModuleInit {
         } catch (error: any) {
             console.warn(`[Sync] No se pudo programar la consulta periódica de ventas: ${error?.message}`);
         }
+
+        // Estado de las publicaciones en los canales (precio, stock, estado, foto).
+        const minutosPublicaciones = Number(process.env.LISTING_SYNC_MINUTES ?? 30);
+        if (!(minutosPublicaciones > 0)) return;
+        try {
+            await this.syncQueue.upsertJobScheduler(
+                'sync-listings',
+                { every: minutosPublicaciones * 60_000 },
+                { name: 'sync-listings', data: {}, opts: { removeOnComplete: true, removeOnFail: 20 } },
+            );
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo programar la revisión periódica de publicaciones: ${error?.message}`);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Mercado Libre: traer las publicaciones que ya existen
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Trae todas las publicaciones de una cuenta de Mercado Libre y las enlaza
+     * con el catálogo de la tienda por SKU. Una publicación con variantes da un
+     * producto por cada variante (cada una con su SKU, stock y foto).
+     *
+     * Con `dryRun` no escribe nada: sirve para enseñar la previsualización
+     * antes de crear productos nuevos. Las publicaciones sin SKU no se pueden
+     * enlazar y se cuentan aparte para que se pueda corregir en Mercado Libre.
+     */
+    async importMeliListings(
+        scope: SyncScope,
+        connectionId: string | undefined,
+        options: { dryRun?: boolean } = {},
+    ) {
+        const userId = scope.userId;
+        const connection = await this.resolveConnection(scope.storeId, 'mercadolibre', connectionId);
+        const { ids, incompleto } = await this.meliApi.listSellerItemIds(connection.accessToken, connection.externalUserId);
+        const { items } = await this.meliApi.getItems(connection.accessToken, ids);
+
+        let sumaNotas = 0;
+        let conNota = 0;
+        const resumen = {
+            publicaciones: items.length,
+            total: 0,
+            yaEnCatalogo: 0,
+            nuevas: 0,
+            enlazadas: 0,
+            enOtraTienda: 0,
+            sinSku: 0,
+            incompleto,
+            porEstado: {} as Record<string, number>,
+            notaMedia: null as number | null,
+            ejemplos: [] as { sku: string; nombre: string; estado: string; nota: number | null; enCatalogo: boolean }[],
+        };
+
+        for (const item of items) {
+            const { rows, sinSku } = filasDeItemMeli(item);
+            resumen.sinSku += sinSku;
+
+            for (const fila of rows) {
+                resumen.total++;
+                resumen.porEstado[fila.status] = (resumen.porEstado[fila.status] ?? 0) + 1;
+                if (fila.quality !== null) { sumaNotas += fila.quality; conNota++; }
+
+                const encontrado = await this.findProductBySku(scope, fila.sku);
+                if (encontrado.otraTienda) { resumen.enOtraTienda++; continue; }
+                let product = encontrado.product;
+                const estabaEnCatalogo = !!product;
+                if (estabaEnCatalogo) resumen.yaEnCatalogo++; else resumen.nuevas++;
+
+                if (resumen.ejemplos.length < 10) {
+                    resumen.ejemplos.push({
+                        sku: fila.sku,
+                        nombre: fila.title.slice(0, 80),
+                        estado: fila.status,
+                        nota: fila.quality,
+                        enCatalogo: estabaEnCatalogo,
+                    });
+                }
+                if (options.dryRun) continue;
+
+                // Un producto que aún no existe se crea como borrador: es la
+                // constancia de que la publicación existe, no algo listo para
+                // publicar en otros canales.
+                if (!product) {
+                    product = await this.productRepository.save(this.productRepository.create({
+                        sku: fila.sku,
+                        name: (fila.variation ? `${fila.title} - ${fila.variation}` : fila.title).slice(0, 250),
+                        description: '',
+                        price: fila.regularPrice ?? undefined,
+                        stock: fila.stock,
+                        status: 'draft',
+                        owner: { id: userId } as any,
+                        store: { id: scope.storeId } as any,
+                        images: fila.images.slice(0, 10).map(url => ({ url })) as any,
+                    }));
+                }
+
+                await this.guardarEnlaceMeli(connection, product, fila);
+                resumen.enlazadas++;
+            }
+        }
+
+        resumen.notaMedia = conNota > 0 ? Math.round(sumaNotas / conNota) : null;
+
+        if (!options.dryRun && resumen.enlazadas > 0) {
+            await this.notifications.notify(userId, {
+                type: 'import',
+                severity: incompleto || resumen.sinSku ? 'warning' : 'success',
+                title: `Mercado Libre: ${resumen.enlazadas} publicaciones importadas`,
+                body:
+                    `${resumen.yaEnCatalogo} ya estaban en tu catálogo y ${resumen.nuevas} se crearon como borrador.` +
+                    (resumen.sinSku ? ` ${resumen.sinSku} no tienen SKU y no se pudieron enlazar.` : '') +
+                    (incompleto ? ' El catálogo es muy grande y quedaron publicaciones sin leer.' : ''),
+                marketplace: 'mercadolibre',
+                meta: { total: resumen.total, porEstado: resumen.porEstado, sinSku: resumen.sinSku },
+            });
+        }
+        return resumen;
+    }
+
+    /** Crea o actualiza el enlace de un producto con una publicación (o variante) de Mercado Libre. */
+    private async guardarEnlaceMeli(
+        connection: MarketplaceConnection,
+        product: Product,
+        fila: MeliListingRow,
+    ): Promise<void> {
+        let enlace = await this.listingLinkRepository.findOne({
+            where: { product: { id: product.id }, connection: { id: connection.id } },
+        });
+        if (!enlace) {
+            enlace = this.listingLinkRepository.create({
+                marketplace: 'mercadolibre',
+                product: { id: product.id } as any,
+                connection: { id: connection.id } as any,
+            });
+        }
+        this.aplicarFilaMeli(enlace, fila);
+        await this.listingLinkRepository.save(enlace);
+    }
+
+    /** Copia a un enlace lo que Mercado Libre muestra hoy de la publicación. */
+    private aplicarFilaMeli(enlace: ListingLink, fila: MeliListingRow): void {
+        enlace.externalId = fila.externalId;
+        enlace.variationId = fila.variationId;
+        enlace.permalink = fila.permalink ?? enlace.permalink ?? (null as any);
+        enlace.syncStatus = fila.status;
+        enlace.lastStockSynced = fila.stock;
+        enlace.lastPriceSynced = fila.regularPrice as any;
+        enlace.regularPrice = fila.regularPrice;
+        enlace.salePrice = fila.salePrice;
+        enlace.imageUrl = fila.imageUrl;
+        enlace.variation = fila.variation;
+        enlace.qualityScore = fila.quality;
+        enlace.lastSyncedAt = new Date();
+        enlace.lastError = fila.status === 'error'
+            ? 'Mercado Libre bloqueó o suspendió la publicación.'
+            : (null as any);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Publicaciones: mantenerlas al día sin que nadie pulse nada
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Vuelve a leer en el canal lo que ya está enlazado y actualiza el estado,
+     * los precios, el stock del canal y la foto de cada publicación. NO crea
+     * productos ni toca el stock de Synkro: si el canal difiere, el tablero lo
+     * muestra como desfase y se corrige desde la revisión.
+     */
+    async refreshMeliLinks(connectionId: string): Promise<{ revisadas: number; actualizadas: number; ausentes: number }> {
+        const connection = await this.getValidConnectionById(connectionId);
+        const enlaces = await this.listingLinkRepository.find({
+            where: { connection: { id: connection.id }, marketplace: 'mercadolibre' },
+            relations: { product: true },
+        });
+        const ids = [...new Set(enlaces.map(e => e.externalId).filter(Boolean))];
+        if (!ids.length) return { revisadas: 0, actualizadas: 0, ausentes: 0 };
+
+        const { items, notFound } = await this.meliApi.getItems(connection.accessToken, ids);
+        const filas = new Map<string, MeliListingRow>();
+        for (const item of items) {
+            for (const f of filasDeItemMeli(item).rows) filas.set(`${f.externalId}:${f.variationId ?? ''}`, f);
+        }
+
+        let actualizadas = 0;
+        let ausentes = 0;
+        for (const enlace of enlaces) {
+            const fila = filas.get(`${enlace.externalId}:${enlace.variationId ?? ''}`);
+            if (fila) {
+                this.aplicarFilaMeli(enlace, fila);
+                await this.listingLinkRepository.save(enlace);
+                actualizadas++;
+            } else if (notFound.includes(enlace.externalId)) {
+                // Mercado Libre ya no conoce la publicación: se marca para que no se intente actualizar.
+                enlace.syncStatus = 'paused';
+                enlace.lastError = 'La publicación ya no existe en Mercado Libre.';
+                await this.listingLinkRepository.save(enlace);
+                ausentes++;
+            }
+        }
+        return { revisadas: enlaces.length, actualizadas, ausentes };
+    }
+
+    /** Lo mismo para una cuenta de Falabella: lee el catálogo y actualiza lo enlazado por SKU. */
+    async refreshFalabellaLinks(connectionId: string): Promise<{ revisadas: number; actualizadas: number; ausentes: number }> {
+        const connection = await this.getValidConnectionById(connectionId);
+        const enlaces = await this.listingLinkRepository.find({
+            where: { connection: { id: connection.id }, marketplace: 'falabella' },
+            relations: { product: true },
+        });
+        if (!enlaces.length) return { revisadas: 0, actualizadas: 0, ausentes: 0 };
+
+        const { productos, incompleto } = await this.falabellaApi.getAllProducts(this.credentialsOf(connection));
+        const porSku = new Map(productos.map(p => [String(p.SellerSku ?? '').trim(), p]));
+
+        let actualizadas = 0;
+        let ausentes = 0;
+        for (const enlace of enlaces) {
+            const ficha = porSku.get(enlace.product.sku);
+            if (!ficha) {
+                // Solo se da por ausente si la lectura fue completa: una lectura cortada no prueba nada.
+                if (!incompleto && enlace.syncStatus === 'published') {
+                    enlace.syncStatus = 'paused';
+                    enlace.lastError = 'La ficha ya no aparece en el Seller Center de Falabella.';
+                    await this.listingLinkRepository.save(enlace);
+                    ausentes++;
+                }
+                continue;
+            }
+            const unidad = unidadPrincipal(ficha);
+            const { regular, descuento } = preciosDeUnidad(unidad);
+            const imagenes = imagenesDeFicha(ficha);
+            const estado = this.estadoDeFicha(ficha);
+
+            enlace.syncStatus = estado;
+            enlace.lastStockSynced = Number(unidad.Stock ?? 0) || 0;
+            enlace.lastPriceSynced = regular as any;
+            enlace.regularPrice = regular;
+            enlace.salePrice = descuento;
+            enlace.imageUrl = imagenes[0] ?? enlace.imageUrl;
+            enlace.qualityScore = this.notaDeFicha(ficha);
+            enlace.permalink = ficha.Url ?? enlace.permalink ?? (null as any);
+            enlace.lastSyncedAt = new Date();
+            enlace.lastError = estado === 'error' ? 'Falabella rechazó la ficha en su control de calidad.' : (null as any);
+            await this.listingLinkRepository.save(enlace);
+            actualizadas++;
+        }
+        return { revisadas: enlaces.length, actualizadas, ausentes };
+    }
+
+    private async refreshConnections(connections: MarketplaceConnection[]) {
+        const cuentas: { id: string; marketplace: string; nombre: string; revisadas: number; actualizadas: number; ausentes: number; error?: string }[] = [];
+        // Una a una: Falabella limita las lecturas seguidas y ML las cuenta por aplicación.
+        for (const c of connections) {
+            const nombre = c.label || c.externalNickname || c.externalUserId;
+            try {
+                const r = c.marketplace === 'falabella'
+                    ? await this.refreshFalabellaLinks(c.id)
+                    : await this.refreshMeliLinks(c.id);
+                cuentas.push({ id: c.id, marketplace: c.marketplace, nombre, ...r });
+            } catch (error: any) {
+                console.warn(`[Sync] Publicaciones de ${c.marketplace} (${nombre}): ${error?.message}`);
+                cuentas.push({ id: c.id, marketplace: c.marketplace, nombre, revisadas: 0, actualizadas: 0, ausentes: 0, error: error?.message ?? 'Error desconocido' });
+            }
+        }
+        return { cuentas };
+    }
+
+    /** Pasada periódica: el estado de las publicaciones de TODAS las cuentas de ventas. */
+    async refreshAllListings() {
+        const cuentas = await this.connectionRepository.find({
+            where: [
+                { marketplace: 'falabella', status: 'active' },
+                { marketplace: 'mercadolibre', status: 'active' },
+            ],
+            relations: { owner: true, store: true },
+            order: { createdAt: 'ASC' },
+        });
+        return this.refreshConnections(cuentas);
+    }
+
+    /** «Actualizar publicaciones ahora»: lo mismo, solo para las cuentas de una tienda. */
+    async refreshStoreListings(storeId: string) {
+        const cuentas = await this.connectionRepository.find({
+            where: { store: { id: storeId }, status: 'active' },
+            relations: { owner: true, store: true },
+            order: { createdAt: 'ASC' },
+        });
+        return this.refreshConnections(cuentas.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre'));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Ventas: historial
+    // ─────────────────────────────────────────────────────────────
+
+    /** Tope de ventas que se leen por cuenta en una importación de historial. */
+    private static readonly HISTORY_MAX_ORDERS = 600;
+
+    /**
+     * Importa el historial de ventas de las cuentas de una tienda: deja la
+     * constancia de cada venta (cliente, productos, importes) pero NO toca el
+     * stock ni avisa, porque esas ventas ya ocurrieron y el stock actual ya las
+     * refleja. Las últimas 48 horas las trae la consulta normal, que sí
+     * descuenta el stock, así que el historial llega hasta ahí.
+     */
+    async importOrderHistory(scope: SyncScope, days: number, connectionId?: string) {
+        const dias = Math.min(Math.max(Math.trunc(days) || 90, 1), 365);
+        const hasta = new Date(Date.now() - SyncService.ORDER_LOOKBACK_HOURS * 3600_000);
+        const desde = new Date(Date.now() - dias * 24 * 3600_000);
+
+        const deLaTienda = await this.connectionRepository.find({
+            where: { store: { id: scope.storeId }, status: 'active' },
+            relations: { owner: true, store: true },
+            order: { createdAt: 'ASC' },
+        });
+        let cuentas = deLaTienda.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre');
+        if (connectionId) {
+            cuentas = cuentas.filter(c => c.id === connectionId);
+            if (!cuentas.length) throw new NotFoundException('Esa cuenta no pertenece a esta tienda o no vende por ventas.');
+        }
+
+        const resultado: { id: string; marketplace: string; nombre: string; registradas: number; yaRegistradas: number; incompleto: boolean; error?: string }[] = [];
+        for (const c of cuentas) {
+            const nombre = c.label || c.externalNickname || c.externalUserId;
+            try {
+                const conRelaciones = c.owner && c.store ? c : await this.getValidConnectionById(c.id);
+                const r = c.marketplace === 'falabella'
+                    ? await this.historialFalabella(conRelaciones, desde, hasta)
+                    : await this.historialMeli(conRelaciones, desde, hasta);
+                resultado.push({ id: c.id, marketplace: c.marketplace, nombre, ...r });
+            } catch (error: any) {
+                console.warn(`[Sync] Historial de ${c.marketplace} (${nombre}): ${error?.message}`);
+                resultado.push({ id: c.id, marketplace: c.marketplace, nombre, registradas: 0, yaRegistradas: 0, incompleto: false, error: error?.message ?? 'Error desconocido' });
+            }
+        }
+        return {
+            dias,
+            cuentas: resultado,
+            totalRegistradas: resultado.reduce((s, c) => s + c.registradas, 0),
+        };
+    }
+
+    private async historialFalabella(connection: MarketplaceConnection, desde: Date, hasta: Date) {
+        const credentials = this.credentialsOf(connection);
+        let registradas = 0;
+        let yaRegistradas = 0;
+        let leidas = 0;
+        let incompleto = false;
+
+        for (let offset = 0; ; offset += 100) {
+            const pedidos = await this.falabellaApi.getOrders(credentials, { createdAfter: desde, createdBefore: hasta, limit: 100, offset });
+            if (!pedidos.length) break;
+            leidas += pedidos.length;
+            const r = await this.registrarPedidosFalabella(connection.owner.id, connection, pedidos, true);
+            registradas += r.nuevos;
+            yaRegistradas += r.repetidos;
+            if (pedidos.length < 100) break;
+            if (leidas >= SyncService.HISTORY_MAX_ORDERS) { incompleto = true; break; }
+        }
+        return { registradas, yaRegistradas, incompleto };
+    }
+
+    private async historialMeli(connection: MarketplaceConnection, desde: Date, hasta: Date) {
+        let registradas = 0;
+        let yaRegistradas = 0;
+        let incompleto = false;
+
+        for (let offset = 0; ; offset += 50) {
+            const { results, total } = await this.meliApi.searchOrdersPage(connection.accessToken, connection.externalUserId, { from: desde, to: hasta, offset });
+            if (!results.length) break;
+            for (const orden of results) {
+                if (await this.applyMeliOrderData(connection, orden, { soloRegistro: true })) registradas++;
+                else yaRegistradas++;
+            }
+            if (offset + results.length >= total) break;
+            if (offset + results.length >= SyncService.HISTORY_MAX_ORDERS) { incompleto = true; break; }
+        }
+        return { registradas, yaRegistradas, incompleto };
     }
 
     // ─────────────────────────────────────────────────────────────

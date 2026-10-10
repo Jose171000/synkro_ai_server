@@ -23,6 +23,8 @@ export interface OrderLine {
     shippingType?: string | null;
     /** Id de la línea o del ítem en el canal. */
     channelItemId?: string | null;
+    /** Variante de la publicación (Mercado Libre), si la hay. */
+    channelVariationId?: string | null;
     /** Se completan al descontar el stock de la venta. */
     productId?: string | null;
     stockBefore?: number | null;
@@ -229,6 +231,7 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
         carrier: texto(shipment?.tracking_method),
         shippingType: texto(opcion?.name) ?? texto(shipment?.logistic_type),
         channelItemId: texto(i?.item?.id),
+        channelVariationId: texto(i?.item?.variation_id),
     }));
 
     const limite = texto(opcion?.estimated_handling_limit?.date);
