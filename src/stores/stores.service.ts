@@ -256,7 +256,10 @@ export class StoresService {
                 token,
                 days: INVITATION_DAYS,
             });
-        } catch {
+        } catch (error: any) {
+            // Sin esto el motivo (remitente no validado, clave inválida…) no se vería en ningún sitio.
+            const detalle = error?.response?.data ? JSON.stringify(error.response.data) : error?.message;
+            console.warn(`[Stores] No se pudo enviar la invitación a ${clean}: ${detalle}`);
             emailSent = false;
         }
         return { email: clean, role, expiresAt, emailSent };
