@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, Index } from 'typeorm';
 import { User } from '../../../users/entities/user.entity';
+import { MarketplaceConnection } from '../../entities/marketplace-connection.entity';
 
 /**
  * Un envío en lote a Falabella.
@@ -50,6 +51,10 @@ export class MarketplaceFeed {
 
     @ManyToOne(() => User)
     owner: User;
+
+    /** Cuenta de Falabella a la que se envió el lote. */
+    @ManyToOne(() => MarketplaceConnection, { onDelete: 'SET NULL', nullable: true })
+    connection: MarketplaceConnection | null;
 
     @CreateDateColumn()
     createdAt: Date;

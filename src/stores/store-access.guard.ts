@@ -12,7 +12,8 @@ export const RequireStoreRole = (role: StoreRole = 'viewer') => SetMetadata(STOR
  * Protege las rutas que dependen de una tienda.
  *
  * La tienda activa llega en la cabecera `X-Store-Id` (o en `:storeId` de la
- * ruta). NUNCA se confía en ella: se comprueba contra la tabla de miembros en
+ * ruta). Si no llega ninguna (un cliente anterior a las tiendas) se usa la
+ * tienda por defecto del usuario. NUNCA se confía en ella: se comprueba contra la tabla de miembros en
  * cada petición, así que quitarle el acceso a alguien tiene efecto inmediato.
  * Va después de JwtAuthGuard. Deja `request.store` con { storeId, role }.
  */
@@ -32,9 +33,15 @@ export class StoreAccessGuard implements CanActivate {
         const request = context.switchToHttp().getRequest();
         const userId = request.user?.id;
         const header = request.headers?.['x-store-id'];
-        const storeId = request.params?.storeId ?? (Array.isArray(header) ? header[0] : header);
+        let storeId = request.params?.storeId ?? (Array.isArray(header) ? header[0] : header);
 
-        if (!userId || !storeId) throw new ForbiddenException(NO_STORE_ACCESS);
+        if (!userId) throw new ForbiddenException(NO_STORE_ACCESS);
+
+        if (!storeId) {
+            await this.stores.ensureDefaultStore(userId);
+            storeId = (await this.stores.defaultStoreId(userId)) ?? undefined;
+        }
+        if (!storeId) throw new ForbiddenException(NO_STORE_ACCESS);
 
         request.store = await this.stores.requireAccess(userId, String(storeId), minimum);
         return true;

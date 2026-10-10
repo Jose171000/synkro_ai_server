@@ -25,16 +25,16 @@ export class SyncProcessor extends WorkerHost {
 
         switch (job.name) {
             case 'publish': {
-                const { productId, userId, marketplace } = job.data;
+                const { productId, userId, storeId, marketplace, connectionId } = job.data;
                 if (marketplace === 'mercadolibre') {
-                    const link = await this.syncService.publishToMeli(productId, userId);
+                    const link = await this.syncService.publishToMeli(productId, userId, connectionId);
                     return { status: 'published', externalId: link.externalId };
                 }
                 if (marketplace === 'falabella') {
                     // Publicar de a uno pasa por el mismo camino que el lote:
                     // así hay una sola forma de hablar con Falabella, y un
                     // producto suelto es simplemente un lote de uno.
-                    const resultado = await this.syncService.publishBatchToFalabella(userId, [productId]);
+                    const resultado = await this.syncService.publishBatchToFalabella({ userId, storeId }, connectionId, [productId]);
                     if (resultado.enviados === 0) {
                         throw new Error(resultado.rechazados[0]?.motivo || 'El producto no cumple los requisitos de Falabella.');
                     }
@@ -44,14 +44,14 @@ export class SyncProcessor extends WorkerHost {
             }
 
             case 'inventory': {
-                const { productId, userId, marketplace, changeRequestId } = job.data;
+                const { productId, marketplace, connectionId, changeRequestId } = job.data;
                 try {
                     let result: any;
                     if (marketplace === 'mercadolibre') {
-                        await this.syncService.pushInventoryToMeli(productId, userId);
+                        await this.syncService.pushInventoryToMeli(productId, connectionId);
                         result = { status: 'synced' };
                     } else if (marketplace === 'falabella') {
-                        result = await this.syncService.pushInventoryToFalabella(productId, userId);
+                        result = await this.syncService.pushInventoryToFalabella(productId, connectionId);
                     } else {
                         throw new Error(`Marketplace no soportado aún: ${marketplace}`);
                     }
@@ -74,8 +74,8 @@ export class SyncProcessor extends WorkerHost {
             case 'falabella-order': {
                 // Se consultan los pedidos recientes: el aviso solo dice que
                 // algo pasó, los datos buenos vienen de la API.
-                const { userId } = job.data;
-                return this.syncService.processFalabellaOrders(userId);
+                const { userId, connectionId } = job.data;
+                return this.syncService.processFalabellaOrders({ userId, connectionId });
             }
 
             case 'meli-order': {

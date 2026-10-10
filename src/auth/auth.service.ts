@@ -13,6 +13,7 @@ import { PasswordReset } from './entities/password-reset.entity';
 import { ConfigService } from '@nestjs/config';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
+import { StoresService } from '../stores/stores.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
@@ -23,6 +24,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private mailService: MailService,
+    private storesService: StoresService,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(PasswordReset)
@@ -57,6 +59,13 @@ export class AuthService {
       url: registerDto.url,
       role,
     });
+
+    // Si su correo tenía una invitación a una tienda, la cuenta nace «por
+    // invitación»: entra a esa tienda pero no puede crear tiendas propias.
+    // No debe impedir el registro si esta comprobación falla.
+    await this.storesService.flagIfInvited(user.id, user.email).catch(err =>
+      console.error('[AuthService] No se pudo comprobar la invitación:', err.message),
+    );
 
     const tokens = await this.generateTokens(user);
 

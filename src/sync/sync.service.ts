@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -19,6 +19,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
+import { StoresService } from '../stores/stores.service';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
@@ -33,6 +34,22 @@ const ATRIBUTOS_YA_CUBIERTOS = new Set([
 
 /** Por debajo de estas unidades se avisa que un producto se agota. */
 const LOW_STOCK_THRESHOLD = 5;
+
+/** Cuántas cuentas del mismo canal admite una tienda. */
+export const MAX_ACCOUNTS_PER_MARKETPLACE = 3;
+
+/** Quién actúa y en qué tienda: todo lo que toca canales se hace dentro de una tienda. */
+export interface SyncScope {
+    userId: string;
+    storeId: string;
+}
+
+const MARKETPLACE_NAMES: Record<string, string> = {
+    mercadolibre: 'Mercado Libre',
+    falabella: 'Falabella',
+    yavendio: 'Yavendió',
+};
+const nombreCanal = (id: string) => MARKETPLACE_NAMES[id] ?? id;
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
@@ -59,7 +76,68 @@ export class SyncService {
         private readonly falabellaApi: FalabellaApiService,
         private readonly notifications: NotificationsService,
         private readonly changeRequests: ChangeRequestsService,
+        private readonly stores: StoresService,
     ) { }
+
+    // ─────────────────────────────────────────────────────────────
+    // Cuentas de canales de una tienda
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Busca la cuenta del canal que se está conectando o, si es nueva, la
+     * prepara. Reconectar una cuenta que ya está en la tienda la actualiza;
+     * una cuenta distinta del mismo canal cuenta para el límite.
+     */
+    private async findOrCreateConnection(
+        scope: SyncScope,
+        marketplace: string,
+        externalUserId: string,
+    ): Promise<MarketplaceConnection> {
+        const existing = await this.connectionRepository.findOne({
+            where: { marketplace, externalUserId, store: { id: scope.storeId } },
+        });
+        if (existing) return existing;
+
+        const total = await this.connectionRepository.count({
+            where: { marketplace, store: { id: scope.storeId } },
+        });
+        if (total >= MAX_ACCOUNTS_PER_MARKETPLACE) {
+            throw new BadRequestException(
+                `Una tienda admite hasta ${MAX_ACCOUNTS_PER_MARKETPLACE} cuentas de ${nombreCanal(marketplace)}. ` +
+                `Desconecta una para poder agregar otra.`,
+            );
+        }
+        return this.connectionRepository.create({
+            marketplace,
+            externalUserId,
+            store: { id: scope.storeId } as any,
+            owner: { id: scope.userId } as any,
+        });
+    }
+
+    /**
+     * Al conectar una cuenta nueva se recuperan las publicaciones que quedaron
+     * sin cuenta cuando se desconectó una anterior del mismo canal, para no
+     * perder el enlace con lo que ya estaba publicado.
+     */
+    private async readoptOrphanLinks(scope: SyncScope, marketplace: string, connectionId: string): Promise<void> {
+        const huerfanas = await this.listingLinkRepository.find({
+            where: { marketplace, connection: IsNull(), product: { store: { id: scope.storeId } } },
+        });
+        for (const link of huerfanas) {
+            link.connection = { id: connectionId } as any;
+            await this.listingLinkRepository.save(link);
+        }
+    }
+
+    /** Las tres filas de una cuenta nueva o recién actualizada se guardan igual. */
+    private async saveConnection(scope: SyncScope, connection: MarketplaceConnection, label?: string | null) {
+        const isNew = !connection.id;
+        if (label !== undefined && label !== null && label.trim()) connection.label = label.trim().slice(0, 60);
+        const saved = await this.connectionRepository.save(connection);
+        if (isNew) await this.readoptOrphanLinks(scope, saved.marketplace, saved.id);
+        return saved;
+    }
 
     // ─────────────────────────────────────────────────────────────
     // OAuth: connect a Mercado Libre seller account
@@ -67,86 +145,165 @@ export class SyncService {
 
     /**
      * Generates the Mercado Libre authorization URL. The random `state` is
-     * stored in Redis mapped to the user so the public callback can know
-     * which Synkro account initiated the flow (and reject forged callbacks).
+     * stored in Redis mapped to the user AND the store, so the public callback
+     * knows which store the new account belongs to (and rejects forged callbacks).
      */
-    async getMeliAuthUrl(userId: string): Promise<{ authUrl: string }> {
+    async getMeliAuthUrl(scope: SyncScope, label?: string): Promise<{ authUrl: string }> {
         this.meliApi.assertConfigured();
         const state = randomUUID();
-        await this.redis.setex(`meli:oauth-state:${state}`, OAUTH_STATE_TTL_SECONDS, userId);
+        await this.redis.setex(
+            `meli:oauth-state:${state}`,
+            OAUTH_STATE_TTL_SECONDS,
+            JSON.stringify({ userId: scope.userId, storeId: scope.storeId, label: label?.trim() || null }),
+        );
         return { authUrl: this.meliApi.buildAuthUrl(state) };
     }
 
     /** Public callback: exchanges the code and persists the connection. */
-    async handleMeliCallback(code: string, state: string): Promise<{ marketplace: string; nickname: string }> {
+    async handleMeliCallback(code: string, state: string): Promise<{ marketplace: string; nickname: string; storeId: string }> {
         if (!code || !state) {
             throw new BadRequestException('Faltan los parámetros code y state.');
         }
 
         const stateKey = `meli:oauth-state:${state}`;
-        const userId = await this.redis.get(stateKey);
-        if (!userId) {
+        const raw = await this.redis.get(stateKey);
+        if (!raw) {
             throw new BadRequestException('El state de OAuth es inválido o expiró. Vuelve a iniciar la conexión.');
         }
         await this.redis.del(stateKey);
 
+        // Un state viejo guardaba solo el id del usuario: se acepta y se asigna
+        // a su tienda por defecto, para no tirar conexiones a medio hacer.
+        let parsed: { userId: string; storeId?: string; label?: string | null };
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            parsed = { userId: raw };
+        }
+        const userId = parsed.userId;
+        const storeId = parsed.storeId ?? (await this.stores.defaultStoreId(userId));
+        if (!userId || !storeId) {
+            throw new BadRequestException('No se pudo determinar la tienda de esta conexión.');
+        }
+        const scope: SyncScope = { userId, storeId };
+
         const tokens = await this.meliApi.exchangeCode(code);
         const profile = await this.meliApi.getMe(tokens.accessToken);
 
-        // Upsert: reconnecting overwrites the previous credentials
-        let connection = await this.connectionRepository.findOne({
-            where: { marketplace: 'mercadolibre', owner: { id: userId } },
-        });
-        if (!connection) {
-            connection = this.connectionRepository.create({
-                marketplace: 'mercadolibre',
-                owner: { id: userId } as any,
-            });
-        }
-
-        connection.externalUserId = tokens.externalUserId;
+        // Upsert: reconnecting the same account overwrites its credentials
+        const connection = await this.findOrCreateConnection(scope, 'mercadolibre', tokens.externalUserId);
         connection.externalNickname = profile.nickname;
         connection.accessToken = tokens.accessToken;
         connection.refreshToken = tokens.refreshToken;
         connection.expiresAt = new Date(Date.now() + tokens.expiresIn * 1000);
         connection.status = 'active';
 
-        await this.connectionRepository.save(connection);
-        return { marketplace: 'mercadolibre', nickname: profile.nickname };
+        await this.saveConnection(scope, connection, parsed.label);
+        return { marketplace: 'mercadolibre', nickname: profile.nickname, storeId };
     }
 
-    async getConnections(userId: string) {
+    /** Cuentas conectadas de una tienda (sin credenciales). */
+    async getConnections(storeId: string) {
         const connections = await this.connectionRepository.find({
-            where: { owner: { id: userId } },
+            where: { store: { id: storeId } },
+            order: { createdAt: 'ASC' },
         });
         // Never expose credentials to the frontend
         return connections.map(({ accessToken, refreshToken, secrets, ...safe }) => safe);
     }
 
-    async disconnect(userId: string, marketplace: string) {
-        const connection = await this.connectionRepository.findOne({
-            where: { marketplace, owner: { id: userId } },
-        });
+    /**
+     * Desconecta una cuenta. Se acepta el id de la cuenta o, por compatibilidad,
+     * el nombre del canal cuando la tienda solo tiene una de ese canal.
+     */
+    async disconnect(storeId: string, ref: string) {
+        const porId = /^[0-9a-f-]{36}$/i.test(ref);
+        let connection: MarketplaceConnection | null = null;
+
+        if (porId) {
+            connection = await this.connectionRepository.findOne({ where: { id: ref, store: { id: storeId } } });
+        } else {
+            const todas = await this.connectionRepository.find({ where: { marketplace: ref, store: { id: storeId } } });
+            if (todas.length > 1) {
+                throw new BadRequestException(
+                    `Esta tienda tiene ${todas.length} cuentas de ${nombreCanal(ref)}. Indica cuál desconectar.`,
+                );
+            }
+            connection = todas[0] ?? null;
+        }
         if (!connection) {
-            throw new NotFoundException(`No hay una conexión activa con ${marketplace}.`);
+            throw new NotFoundException('No hay una cuenta conectada con ese nombre en esta tienda.');
         }
         await this.connectionRepository.remove(connection);
-        return { message: `Conexión con ${marketplace} eliminada.` };
+        return { message: `Cuenta de ${nombreCanal(connection.marketplace)} desconectada.` };
     }
 
     /**
-     * Returns a valid access token for the user's connection,
-     * refreshing it transparently if it is about to expire.
+     * La cuenta a usar para un canal dentro de una tienda. Si se indica cuál,
+     * se valida que sea de la tienda; si no, solo vale cuando hay una sola:
+     * con varias, adivinar podría publicar en la cuenta equivocada.
      */
-    private async getValidConnection(userId: string, marketplace: string): Promise<MarketplaceConnection> {
-        const connection = await this.connectionRepository.findOne({
-            where: { marketplace, owner: { id: userId }, status: 'active' },
+    async resolveConnection(storeId: string, marketplace: string, connectionId?: string): Promise<MarketplaceConnection> {
+        if (connectionId) {
+            const found = await this.connectionRepository.findOne({
+                where: { id: connectionId, marketplace, store: { id: storeId } },
+                select: { id: true },
+            });
+            if (!found) throw new NotFoundException(`Esa cuenta de ${nombreCanal(marketplace)} no pertenece a esta tienda.`);
+            return this.getValidConnectionById(found.id);
+        }
+
+        const todas = await this.connectionRepository.find({
+            where: { marketplace, store: { id: storeId }, status: 'active' },
+            select: { id: true },
+            order: { createdAt: 'ASC' },
         });
-        if (!connection) {
+        if (todas.length === 0) {
             throw new BadRequestException(
-                `No tienes una cuenta de ${marketplace} conectada. Ve a Marketplaces y conéctala primero.`,
+                `Esta tienda no tiene una cuenta de ${nombreCanal(marketplace)} conectada. Ve a Marketplaces y conéctala primero.`,
             );
         }
+        if (todas.length > 1) {
+            throw new BadRequestException(
+                `Esta tienda tiene ${todas.length} cuentas de ${nombreCanal(marketplace)} conectadas. Indica cuál usar.`,
+            );
+        }
+        return this.getValidConnectionById(todas[0].id);
+    }
+
+    /**
+     * Para flujos que aún llegan sin tienda (el CRM de Yavendió, jobs encolados
+     * antes de este cambio): la primera cuenta activa del usuario en el canal.
+     */
+    private async getValidConnection(userId: string, marketplace: string): Promise<MarketplaceConnection> {
+        const first = await this.connectionRepository.findOne({
+            where: { marketplace, owner: { id: userId }, status: 'active' },
+            select: { id: true },
+            order: { createdAt: 'ASC' },
+        });
+        if (!first) {
+            throw new BadRequestException(
+                `No tienes una cuenta de ${nombreCanal(marketplace)} conectada. Ve a Marketplaces y conéctala primero.`,
+            );
+        }
+        return this.getValidConnectionById(first.id);
+    }
+
+    /**
+     * Returns the connection with a valid access token,
+     * refreshing it transparently if it is about to expire.
+     */
+    private async getValidConnectionById(connectionId: string): Promise<MarketplaceConnection> {
+        const connection = await this.connectionRepository.findOne({
+            where: { id: connectionId, status: 'active' },
+            relations: { owner: true, store: true },
+        });
+        if (!connection) {
+            throw new BadRequestException('Esa cuenta ya no está conectada. Ve a Marketplaces y conéctala de nuevo.');
+        }
+        const marketplace = connection.marketplace;
+        const nombre = nombreCanal(marketplace);
+        const notifyUserId = connection.owner.id;
 
         // Si la credencial no se pudo descifrar (clave cambiada o fila alterada)
         // llega como null: se marca la conexión como rota y se pide reconectar,
@@ -155,15 +312,15 @@ export class SyncService {
             // update() y no save(): guardar la entidad completa reescribiría
             // el token ilegible como NULL y perderíamos el dato cifrado.
             await this.connectionRepository.update(connection.id, { status: 'error' });
-            await this.notifications.notify(userId, {
+            await this.notifications.notify(notifyUserId, {
                 type: 'connection',
                 severity: 'error',
-                title: `No se pueden leer las credenciales de ${marketplace}`,
+                title: `No se pueden leer las credenciales de ${nombre}`,
                 body: 'Vuelve a conectar la cuenta desde Marketplaces para seguir publicando y recibiendo ventas.',
                 marketplace,
             });
             throw new BadRequestException(
-                `No se pudieron leer las credenciales guardadas de ${marketplace}. Reconecta tu cuenta.`,
+                `No se pudieron leer las credenciales guardadas de ${nombre}. Reconecta tu cuenta.`,
             );
         }
 
@@ -184,17 +341,17 @@ export class SyncService {
             } catch (error) {
                 connection.status = 'error';
                 await this.connectionRepository.save(connection);
-                await this.notifications.notify(userId, {
+                await this.notifications.notify(notifyUserId, {
                     type: 'connection',
                     severity: 'error',
-                    title: `Se cayó la conexión con ${marketplace}`,
+                    title: `Se cayó la conexión con ${nombre}`,
                     body:
                         `La sesión caducó y no se pudo renovar sola. Hasta que la reconectes, ` +
                         `no se publican productos ni se registran sus ventas.`,
                     marketplace,
                 });
                 throw new BadRequestException(
-                    `La sesión con ${marketplace} expiró y no se pudo renovar. Reconecta tu cuenta.`,
+                    `La sesión con ${nombre} expiró y no se pudo renovar. Reconecta tu cuenta.`,
                 );
             }
         }
@@ -207,15 +364,19 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * Conecta la cuenta de Yavendió del usuario a partir de una API key que
-     * él mismo pega. A diferencia de Mercado Libre no hay OAuth: la clave ES
+     * Conecta una cuenta de Yavendió a la tienda a partir de una API key que
+     * el usuario pega. A diferencia de Mercado Libre no hay OAuth: la clave ES
      * la credencial, así que antes de guardarla se comprueba contra la API
      * pidiendo el perfil de la empresa. Así el usuario sabe al instante si
      * la clave sirve, y de paso vemos a qué cuenta pertenece.
      *
      * La clave nunca vuelve al frontend y se guarda cifrada.
      */
-    async connectYavendio(userId: string, apiKey: string): Promise<{ marketplace: string; nickname: string }> {
+    async connectYavendio(
+        scope: SyncScope,
+        apiKey: string,
+        label?: string,
+    ): Promise<{ id: string; marketplace: string; nickname: string }> {
         const trimmed = (apiKey || '').trim();
         if (!trimmed) {
             throw new BadRequestException('Pega la API key de Yavendió para conectar la cuenta.');
@@ -225,17 +386,7 @@ export class SyncService {
         // llegamos a guardar nada.
         const company = await this.yavendioApi.getCompany(trimmed);
 
-        let connection = await this.connectionRepository.findOne({
-            where: { marketplace: 'yavendio', owner: { id: userId } },
-        });
-        if (!connection) {
-            connection = this.connectionRepository.create({
-                marketplace: 'yavendio',
-                owner: { id: userId } as any,
-            });
-        }
-
-        connection.externalUserId = company.id;
+        const connection = await this.findOrCreateConnection(scope, 'yavendio', String(company.id));
         connection.externalNickname = company.name;
         connection.accessToken = trimmed;
         connection.refreshToken = null as any;
@@ -248,8 +399,8 @@ export class SyncService {
         };
         connection.status = 'active';
 
-        await this.connectionRepository.save(connection);
-        return { marketplace: 'yavendio', nickname: company.name };
+        const saved = await this.saveConnection(scope, connection, label);
+        return { id: saved.id, marketplace: 'yavendio', nickname: company.name };
     }
 
     /**
@@ -266,19 +417,20 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * Conecta la cuenta del Seller Center de Falabella. Necesita dos datos:
-     * el UserID (que es el correo de la cuenta) y la API key. Los dos viajan
-     * en cada petición —el correo como parámetro y la clave como secreto que
-     * firma la llamada— así que el correo se guarda legible y la clave cifrada.
+     * Conecta una cuenta del Seller Center de Falabella a la tienda. Necesita
+     * dos datos: el UserID (que es el correo de la cuenta) y la API key. Los
+     * dos viajan en cada petición —el correo como parámetro y la clave como
+     * secreto que firma la llamada— así que el correo se guarda legible y la
+     * clave cifrada.
      *
-     * Antes de guardar nada se hace una consulta real de marcas: si la firma
-     * o la clave están mal, Falabella rechaza todo por igual y es mejor que
-     * el usuario se entere aquí y no cuando intente publicar.
+     * Antes de guardar nada se hace una consulta real: si la firma o la clave
+     * están mal, Falabella rechaza todo por igual y es mejor que el usuario se
+     * entere aquí y no cuando intente publicar.
      */
     async connectFalabella(
-        ownerId: string,
-        credentials: FalabellaCredentials & { country?: string },
-    ): Promise<{ marketplace: string; nickname: string; currency: string }> {
+        scope: SyncScope,
+        credentials: FalabellaCredentials & { country?: string; label?: string },
+    ): Promise<{ id: string; marketplace: string; nickname: string; currency: string }> {
         const userId = (credentials.userId || '').trim();
         const apiKey = (credentials.apiKey || '').trim();
         if (!userId || !apiKey) {
@@ -287,17 +439,7 @@ export class SyncService {
 
         await this.falabellaApi.verifyCredentials({ userId, apiKey });
 
-        let connection = await this.connectionRepository.findOne({
-            where: { marketplace: 'falabella', owner: { id: ownerId } },
-        });
-        if (!connection) {
-            connection = this.connectionRepository.create({
-                marketplace: 'falabella',
-                owner: { id: ownerId } as any,
-            });
-        }
-
-        connection.externalUserId = userId;
+        const connection = await this.findOrCreateConnection(scope, 'falabella', userId);
         connection.externalNickname = userId;
         connection.accessToken = apiKey;
         connection.refreshToken = null as any;
@@ -310,29 +452,76 @@ export class SyncService {
         connection.currency =
             monedaDePais(credentials.country) ?? connection.currency ?? monedaPorDefecto();
 
-        await this.connectionRepository.save(connection);
-        return { marketplace: 'falabella', nickname: userId, currency: connection.currency };
+        const saved = await this.saveConnection(scope, connection, credentials.label);
+        return { id: saved.id, marketplace: 'falabella', nickname: userId, currency: saved.currency ?? monedaPorDefecto() };
     }
 
     /**
-     * Moneda guardada para una cuenta en un marketplace.
+     * Moneda guardada para una cuenta.
      * Devuelve `undefined` si no se guardó, para que quien llame decida.
      */
-    private async monedaDeCuenta(
-        ownerId: string,
-        marketplace: string,
-    ): Promise<string | undefined> {
+    private async monedaDeCuenta(connectionId: string): Promise<string | undefined> {
         const connection = await this.connectionRepository.findOne({
-            where: { marketplace, owner: { id: ownerId } },
+            where: { id: connectionId },
             select: { id: true, currency: true },
         });
         return connection?.currency ?? undefined;
     }
 
-    /** Credenciales descifradas de Falabella. Interna: ningún endpoint las expone. */
-    async getFalabellaCredentials(ownerId: string): Promise<FalabellaCredentials> {
-        const connection = await this.getValidConnection(ownerId, 'falabella');
+    private credentialsOf(connection: MarketplaceConnection): FalabellaCredentials {
         return { userId: connection.externalUserId, apiKey: connection.accessToken };
+    }
+
+    /**
+     * Producto de la tienda por su SKU. Si el SKU existe pero pertenece a otra
+     * tienda del mismo dueño, se avisa en vez de pisarlo: dos tiendas no
+     * comparten el stock de un producto.
+     */
+    private async findProductBySku(
+        scope: SyncScope,
+        sku: string,
+    ): Promise<{ product: Product | null; otraTienda: boolean }> {
+        const found = await this.productRepository.findOne({
+            where: [
+                { sku, store: { id: scope.storeId } },
+                { sku, owner: { id: scope.userId } },
+            ],
+            relations: { store: true },
+        });
+        if (!found) return { product: null, otraTienda: false };
+        if (found.store && found.store.id !== scope.storeId) return { product: null, otraTienda: true };
+        if (!found.store) {
+            await this.productRepository.update(found.id, { store: { id: scope.storeId } } as any);
+            found.store = { id: scope.storeId } as any;
+        }
+        return { product: found, otraTienda: false };
+    }
+
+    /** Credenciales descifradas de una cuenta de Falabella. Interna: ningún endpoint las expone. */
+    async getFalabellaCredentials(connectionId: string): Promise<FalabellaCredentials> {
+        const connection = await this.getValidConnectionById(connectionId);
+        return { userId: connection.externalUserId, apiKey: connection.accessToken };
+    }
+
+    /**
+     * Producto de la tienda por su id. Un producto sin tienda asignada (de
+     * antes de este cambio) se acepta si es del usuario y se adopta: pasa a
+     * la tienda desde la que se usa.
+     */
+    private async findScopedProduct(scope: SyncScope, productId: string): Promise<Product> {
+        const product = await this.productRepository.findOne({
+            where: [
+                { id: productId, store: { id: scope.storeId } },
+                { id: productId, store: IsNull(), owner: { id: scope.userId } },
+            ],
+            relations: { store: true },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+        if (!product.store) {
+            await this.productRepository.update(product.id, { store: { id: scope.storeId } } as any);
+            product.store = { id: scope.storeId } as any;
+        }
+        return product;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -390,10 +579,13 @@ export class SyncService {
      * productos nuevos sin avisar.
      */
     async importFalabellaListings(
-        userId: string,
+        scope: SyncScope,
+        connectionId: string | undefined,
         options: { dryRun?: boolean } = {},
     ) {
-        const credentials = await this.getFalabellaCredentials(userId);
+        const userId = scope.userId;
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const credentials = this.credentialsOf(connection);
         const { productos, incompleto } = await this.falabellaApi.getAllProducts(credentials);
 
         let sumaNotas = 0;
@@ -404,6 +596,8 @@ export class SyncService {
             yaEnCatalogo: 0,
             nuevas: 0,
             enlazadas: 0,
+            /** Fichas cuyo SKU ya existe en otra tienda tuya: no se tocan. */
+            enOtraTienda: 0,
             incompleto,
             porEstado: {} as Record<string, number>,
             /** Media de la nota de calidad que pone Falabella. */
@@ -423,9 +617,12 @@ export class SyncService {
             resumen.porEstado[estado] = (resumen.porEstado[estado] ?? 0) + 1;
             if (nota !== null) { sumaNotas += nota; conNota++; }
 
-            let product = await this.productRepository.findOne({
-                where: { sku, owner: { id: userId } },
-            });
+            const encontrado = await this.findProductBySku(scope, sku);
+            if (encontrado.otraTienda) {
+                resumen.enOtraTienda++;
+                continue;
+            }
+            let product = encontrado.product;
             const estabaEnCatalogo = !!product;
 
             if (estabaEnCatalogo) resumen.yaEnCatalogo++;
@@ -470,6 +667,7 @@ export class SyncService {
                     stock: existencias,
                     status: 'draft',
                     owner: { id: userId } as any,
+                    store: { id: scope.storeId } as any,
                     // Cada variante es su propio SKU en Falabella, con su imagen.
                     images: imagenes.map(url => ({ url })) as any,
                 });
@@ -479,12 +677,13 @@ export class SyncService {
             const externalId = String(producto.ShopSku ?? sku);
 
             let enlace = await this.listingLinkRepository.findOne({
-                where: { marketplace: 'falabella', product: { id: product.id } },
+                where: { product: { id: product.id }, connection: { id: connection.id } },
             });
             if (!enlace) {
                 enlace = this.listingLinkRepository.create({
                     marketplace: 'falabella',
                     product: { id: product.id } as any,
+                    connection: { id: connection.id } as any,
                 });
             }
 
@@ -545,21 +744,27 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
 
     /** Enqueues one publish job per marketplace and returns immediately. */
-    async enqueuePublish(productId: string, userId: string, marketplaces: string[]) {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
-        if (!product) {
-            throw new NotFoundException('Producto no encontrado');
-        }
+    async enqueuePublish(
+        scope: SyncScope,
+        productId: string,
+        marketplaces: string[],
+        connectionIds: Record<string, string> = {},
+    ) {
+        const product = await this.findScopedProduct(scope, productId);
         if (product.price === null || product.price === undefined) {
             throw new BadRequestException('El producto necesita un precio antes de publicarse.');
         }
 
         for (const marketplace of marketplaces) {
             // Validate the connection now so the user gets an immediate error
-            await this.getValidConnection(userId, marketplace);
-            await this.syncQueue.add('publish', { productId, userId, marketplace });
+            const connection = await this.resolveConnection(scope.storeId, marketplace, connectionIds[marketplace]);
+            await this.syncQueue.add('publish', {
+                productId,
+                userId: scope.userId,
+                storeId: scope.storeId,
+                marketplace,
+                connectionId: connection.id,
+            });
         }
 
         return {
@@ -568,16 +773,14 @@ export class SyncService {
     }
 
     /** Executed by the queue processor: actually publishes on Mercado Libre. */
-    async publishToMeli(productId: string, userId: string): Promise<ListingLink> {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
+    async publishToMeli(productId: string, userId: string, connectionId: string): Promise<ListingLink> {
+        const product = await this.productRepository.findOne({ where: { id: productId } });
         if (!product) {
             throw new NotFoundException('Producto no encontrado');
         }
 
         let link = await this.listingLinkRepository.findOne({
-            where: { marketplace: 'mercadolibre', product: { id: productId } },
+            where: { product: { id: productId }, connection: { id: connectionId } },
         });
         if (link?.syncStatus === 'published') {
             return link; // already live — inventory updates go through syncInventory
@@ -587,12 +790,13 @@ export class SyncService {
                 marketplace: 'mercadolibre',
                 externalId: '',
                 product,
+                connection: { id: connectionId } as any,
                 syncStatus: 'pending',
             });
         }
 
         try {
-            const connection = await this.getValidConnection(userId, 'mercadolibre');
+            const connection = await this.getValidConnectionById(connectionId);
             const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
             const payload = this.buildMeliItemPayload(product, categoryId);
             const created = await this.meliApi.createItem(connection.accessToken, payload);
@@ -699,9 +903,9 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
 
     /** Categorías de Falabella donde se puede publicar, filtradas por texto. */
-    async searchFalabellaCategories(userId: string, term: string): Promise<FalabellaCategory[]> {
-        const credentials = await this.getFalabellaCredentials(userId);
-        return this.falabellaApi.searchCategories(credentials, term);
+    async searchFalabellaCategories(scope: SyncScope, term: string, connectionId?: string): Promise<FalabellaCategory[]> {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        return this.falabellaApi.searchCategories(this.credentialsOf(connection), term);
     }
 
     /**
@@ -709,9 +913,9 @@ export class SyncService {
      * cuáles son obligatorios, cómo se llaman en castellano y qué valores
      * admiten. Se marcan los que la plataforma ya cubre por su cuenta.
      */
-    async getFalabellaCategoryFields(userId: string, categoryId: string) {
-        const credentials = await this.getFalabellaCredentials(userId);
-        const attributes = await this.falabellaApi.getCategoryAttributes(credentials, categoryId);
+    async getFalabellaCategoryFields(scope: SyncScope, categoryId: string, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const attributes = await this.falabellaApi.getCategoryAttributes(this.credentialsOf(connection), categoryId);
 
         return attributes
             .filter(a => a.isMandatory && !ATRIBUTOS_YA_CUBIERTOS.has(a.name))
@@ -733,7 +937,7 @@ export class SyncService {
      * generales obligaría a que todo producto los conociera.
      */
     async prepareFalabellaProduct(
-        userId: string,
+        scope: SyncScope,
         productId: string,
         datos: {
             categoryId: string;
@@ -744,12 +948,7 @@ export class SyncService {
             attributes?: Record<string, string>;
         },
     ) {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
-        if (!product) {
-            throw new NotFoundException('Producto no encontrado');
-        }
+        const product = await this.findScopedProduct(scope, productId);
 
         product.packageWidth = datos.packageWidth;
         product.packageLength = datos.packageLength;
@@ -770,7 +969,9 @@ export class SyncService {
 
         // Se comprueba con las reglas reales de publicación: así el usuario
         // sabe en el momento si el producto ya puede salir o le falta algo.
-        const credentials = await this.getFalabellaCredentials(userId).catch(() => null);
+        const credentials = await this.resolveConnection(scope.storeId, 'falabella')
+            .then(c => this.credentialsOf(c))
+            .catch(() => null);
         let listo = true;
         let motivo: string | undefined;
         if (credentials) {
@@ -922,7 +1123,8 @@ export class SyncService {
      * integración sin poner nada en el escaparate.
      */
     async publishBatchToFalabella(
-        userId: string,
+        scope: SyncScope,
+        connectionId: string | undefined,
         productIds: string[],
         options: { status?: 'active' | 'inactive' } = {},
     ) {
@@ -930,13 +1132,26 @@ export class SyncService {
             throw new BadRequestException('Selecciona al menos un producto para publicar.');
         }
 
-        const credentials = await this.getFalabellaCredentials(userId);
+        const userId = scope.userId;
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const credentials = this.credentialsOf(connection);
 
         const products = await this.productRepository.find({
-            where: productIds.map(id => ({ id, owner: { id: userId } })) as any,
+            where: productIds.flatMap(id => [
+                { id, store: { id: scope.storeId } },
+                { id, store: IsNull(), owner: { id: userId } },
+            ]) as any,
+            relations: { store: true },
         });
         if (!products.length) {
             throw new NotFoundException('No se encontraron productos que publicar.');
+        }
+        // Los productos de antes de las tiendas pasan a la tienda desde la que se publican.
+        for (const p of products) {
+            if (!p.store) {
+                await this.productRepository.update(p.id, { store: { id: scope.storeId } } as any);
+                p.store = { id: scope.storeId } as any;
+            }
         }
 
         const aceptados: { product: Product; input: FalabellaProductInput }[] = [];
@@ -1000,18 +1215,20 @@ export class SyncService {
                 status: 'pending',
                 totalRecords: lote.length,
                 owner: { id: userId } as any,
+                connection: { id: connection.id } as any,
             }));
 
             // El enlace queda pendiente: Falabella confirma después si entró.
             for (const { product } of lote) {
                 let link = await this.listingLinkRepository.findOne({
-                    where: { marketplace: 'falabella', product: { id: product.id } },
+                    where: { product: { id: product.id }, connection: { id: connection.id } },
                 });
                 if (!link) {
                     link = this.listingLinkRepository.create({
                         marketplace: 'falabella',
                         externalId: product.sku,
                         product,
+                        connection: { id: connection.id } as any,
                     });
                 }
                 link.syncStatus = 'pending';
@@ -1045,10 +1262,16 @@ export class SyncService {
      * Si Falabella sigue procesando, se vuelve a preguntar más tarde.
      */
     async checkFalabellaFeed(feedRecordId: string, userId: string): Promise<{ status: string }> {
-        const feed = await this.feedRepository.findOne({ where: { id: feedRecordId } });
+        const feed = await this.feedRepository.findOne({
+            where: { id: feedRecordId },
+            relations: { connection: true },
+        });
         if (!feed) return { status: 'desconocido' };
 
-        const credentials = await this.getFalabellaCredentials(userId);
+        // Un lote anterior a las cuentas por tienda usa la primera cuenta del usuario.
+        const feedConnectionId = feed.connection?.id
+            ?? (await this.getValidConnection(userId, 'falabella')).id;
+        const credentials = await this.getFalabellaCredentials(feedConnectionId);
         const estado = await this.falabellaApi.getFeedStatus(credentials, feed.externalFeedId);
 
         feed.status = estado.status;
@@ -1072,12 +1295,12 @@ export class SyncService {
 
         // Los feeds de precio o stock no publican nada: se tratan aparte.
         if (feed.action !== 'ProductCreate') {
-            return this.aplicarResultadoActualizacion(feed, userId, erroresPorSku, estado);
+            return this.aplicarResultadoActualizacion(feed, userId, feedConnectionId, erroresPorSku, estado);
         }
 
         for (const sku of feed.skus || []) {
             const link = await this.listingLinkRepository.findOne({
-                where: { marketplace: 'falabella', externalId: sku },
+                where: { connection: { id: feedConnectionId }, product: { sku } },
                 relations: { product: true },
             });
             if (!link) continue;
@@ -1140,32 +1363,37 @@ export class SyncService {
      * Updates local stock/price and enqueues a push to every marketplace
      * where the product is published.
      */
-    async updateInventory(productId: string, userId: string, dto: UpdateInventoryDto) {
+    async updateInventory(scope: SyncScope, productId: string, dto: UpdateInventoryDto) {
         if (dto.stock === undefined && dto.price === undefined) {
             throw new BadRequestException('Envía al menos stock o price.');
         }
 
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
-        if (!product) {
-            throw new NotFoundException('Producto no encontrado');
-        }
+        const product = await this.findScopedProduct(scope, productId);
 
+        // Solo las publicaciones de ESTA tienda: el producto puede estar en
+        // cuentas de otra tienda del mismo dueño y esas no se tocan desde aquí.
         const links = await this.listingLinkRepository.find({
-            where: { product: { id: productId }, syncStatus: 'published' },
+            where: {
+                product: { id: productId },
+                syncStatus: 'published',
+                connection: { store: { id: scope.storeId } },
+            },
+            relations: { connection: true },
         });
 
         // Modo revisión: el cambio espera aprobación y no toca ni el producto
         // ni los canales. Sin canales publicados no hay nada que revisar.
-        if (links.length && (await this.changeRequests.isReviewMode(userId))) {
+        if (links.length && (await this.changeRequests.isReviewMode(scope.storeId))) {
             const solicitudes = await this.changeRequests.createFromInventory(
-                userId, product, dto, links.map(l => l.marketplace),
+                scope,
+                product,
+                dto,
+                links.map(l => ({ marketplace: l.marketplace, connectionId: l.connection!.id })),
             );
             return {
                 pending: solicitudes.length,
                 message: solicitudes.length
-                    ? `Cambio en revisión: ${solicitudes.length} solicitud(es) esperan aprobación antes de enviarse a ${links.map(l => l.marketplace).join(', ')}.`
+                    ? `Cambio en revisión: ${solicitudes.length} solicitud(es) esperan aprobación antes de enviarse a ${[...new Set(links.map(l => nombreCanal(l.marketplace)))].join(', ')}.`
                     : 'No hay cambios respecto a los valores actuales.',
             };
         }
@@ -1177,30 +1405,35 @@ export class SyncService {
         for (const link of links) {
             await this.syncQueue.add('inventory', {
                 productId,
-                userId,
+                userId: scope.userId,
                 marketplace: link.marketplace,
+                connectionId: link.connection!.id,
             });
         }
 
         return {
             message: links.length
-                ? `Inventario actualizado. Sincronizando con: ${links.map(l => l.marketplace).join(', ')}.`
+                ? `Inventario actualizado. Sincronizando con: ${[...new Set(links.map(l => nombreCanal(l.marketplace)))].join(', ')}.`
                 : 'Inventario actualizado localmente. El producto aún no está publicado en ningún marketplace.',
         };
     }
 
     /** Executed by the queue processor: pushes current stock/price to Mercado Libre. */
-    async pushInventoryToMeli(productId: string, userId: string): Promise<void> {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
+    async pushInventoryToMeli(productId: string, connectionId?: string): Promise<void> {
+        const product = await this.productRepository.findOne({ where: { id: productId } });
         const link = await this.listingLinkRepository.findOne({
-            where: { marketplace: 'mercadolibre', product: { id: productId }, syncStatus: 'published' },
+            where: {
+                marketplace: 'mercadolibre',
+                product: { id: productId },
+                syncStatus: 'published',
+                ...(connectionId ? { connection: { id: connectionId } } : {}),
+            },
+            relations: { connection: true },
         });
-        if (!product || !link) return;
+        if (!product || !link || !link.connection) return;
 
         try {
-            const connection = await this.getValidConnection(userId, 'mercadolibre');
+            const connection = await this.getValidConnectionById(link.connection.id);
             await this.meliApi.updateItem(connection.accessToken, link.externalId, {
                 available_quantity: product.stock,
                 price: Number(product.price),
@@ -1228,15 +1461,19 @@ export class SyncService {
      */
     async pushInventoryToFalabella(
         productId: string,
-        userId: string,
+        connectionId?: string,
     ): Promise<{ status: string; feeds: string[] }> {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
+        const product = await this.productRepository.findOne({ where: { id: productId } });
         const link = await this.listingLinkRepository.findOne({
-            where: { marketplace: 'falabella', product: { id: productId }, syncStatus: 'published' },
+            where: {
+                marketplace: 'falabella',
+                product: { id: productId },
+                syncStatus: 'published',
+                ...(connectionId ? { connection: { id: connectionId } } : {}),
+            },
+            relations: { connection: { owner: true } },
         });
-        if (!product || !link) return { status: 'omitido', feeds: [] };
+        if (!product || !link || !link.connection) return { status: 'omitido', feeds: [] };
 
         const precioCambio =
             link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
@@ -1247,20 +1484,21 @@ export class SyncService {
         // El SKU del vendedor es lo que casa con la ficha de Falabella.
         const sellerSku = product.sku;
         const feeds: string[] = [];
+        const ownerId = link.connection.owner.id;
 
         try {
-            const credentials = await this.getFalabellaCredentials(userId);
+            const credentials = await this.getFalabellaCredentials(link.connection.id);
             const opts = { operatorCode: this.falabellaOperatorCode };
 
             if (precioCambio) {
                 feeds.push(await this.registrarFeedFalabella(
-                    userId, 'ProductUpdate', sellerSku,
+                    ownerId, link.connection.id, 'ProductUpdate', sellerSku,
                     await this.falabellaApi.updatePrice(credentials, sellerSku, Number(product.price), opts),
                 ));
             }
             if (stockCambio) {
                 feeds.push(await this.registrarFeedFalabella(
-                    userId, 'UpdateStock', sellerSku,
+                    ownerId, link.connection.id, 'UpdateStock', sellerSku,
                     await this.falabellaApi.updateStock(credentials, [{ sellerSku, quantity: product.stock }], opts),
                 ));
             }
@@ -1282,6 +1520,7 @@ export class SyncService {
     /** Anota un feed de actualización y programa la consulta de su resultado. */
     private async registrarFeedFalabella(
         userId: string,
+        connectionId: string,
         action: 'ProductUpdate' | 'UpdateStock',
         sku: string,
         externalFeedId: string,
@@ -1294,6 +1533,7 @@ export class SyncService {
             status: 'pending',
             totalRecords: 1,
             owner: { id: userId } as any,
+            connection: { id: connectionId } as any,
         }));
         await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId }, { delay: 30_000 });
         return externalFeedId;
@@ -1307,6 +1547,7 @@ export class SyncService {
     private async aplicarResultadoActualizacion(
         feed: MarketplaceFeed,
         userId: string,
+        connectionId: string,
         erroresPorSku: Map<string, string>,
         estado: { failedRecords: number; errors: { sku?: string; message: string }[] },
     ) {
@@ -1315,8 +1556,9 @@ export class SyncService {
             (/error|canceled/i.test(feed.status) || estado.failedRecords > 0) && erroresPorSku.size === 0;
 
         for (const sku of feed.skus || []) {
+            // Se busca por el SKU del producto: en fichas importadas el externalId es el ShopSku.
             const link = await this.listingLinkRepository.findOne({
-                where: { marketplace: 'falabella', externalId: sku },
+                where: { connection: { id: connectionId }, product: { sku } },
             });
             if (!link) continue;
 
@@ -1372,7 +1614,7 @@ export class SyncService {
      * uno apuntando a Yuju; borrarlo le dejaría sin recibir sus ventas allí
      * mientras dure la convivencia entre ambos sistemas.
      */
-    async registerFalabellaWebhook(userId: string) {
+    async registerFalabellaWebhook(scope: SyncScope, connectionId?: string) {
         if (!this.publicApiUrl) {
             throw new BadRequestException(
                 'Falta configurar PUBLIC_API_URL: sin la dirección pública de este servidor, ' +
@@ -1380,13 +1622,7 @@ export class SyncService {
             );
         }
 
-        const connection = await this.connectionRepository.findOne({
-            where: { marketplace: 'falabella', owner: { id: userId }, status: 'active' },
-        });
-        if (!connection) {
-            throw new BadRequestException('Conecta primero tu cuenta de Falabella.');
-        }
-
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
 
         // El testigo se conserva entre llamadas: si ya había uno, se reutiliza
@@ -1440,6 +1676,7 @@ export class SyncService {
 
         await this.syncQueue.add('falabella-order', {
             userId: connection.owner.id,
+            connectionId: connection.id,
             hint: body?.payload?.OrderId ?? body?.OrderId ?? null,
         });
         return { received: true };
@@ -1466,9 +1703,20 @@ export class SyncService {
      * perdido no deja una venta sin registrar, y sirve igual para ponerse al
      * día a mano después de una caída.
      */
-    async processFalabellaOrders(userId: string, options: { desdeHoras?: number } = {}) {
-        const credentials = await this.getFalabellaCredentials(userId);
-        const monedaCuenta = await this.monedaDeCuenta(userId, 'falabella');
+    async processFalabellaOrders(
+        ref: { userId: string; storeId?: string; connectionId?: string },
+        options: { desdeHoras?: number } = {},
+    ) {
+        // Un aviso sin cuenta (encolado antes de este cambio) usa la primera
+        // cuenta de Falabella del usuario.
+        const connection = ref.connectionId
+            ? await this.getValidConnectionById(ref.connectionId)
+            : ref.storeId
+                ? await this.resolveConnection(ref.storeId, 'falabella')
+                : await this.getValidConnection(ref.userId, 'falabella');
+        const userId = ref.userId;
+        const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
+        const monedaCuenta = connection.currency ?? undefined;
         const desde = new Date(Date.now() - (options.desdeHoras ?? 48) * 60 * 60 * 1000);
 
         const pedidos = await this.falabellaApi.getOrders(credentials, {
@@ -1514,7 +1762,7 @@ export class SyncService {
             }));
             nuevos++;
 
-            await this.aplicarVentaFalabella(userId, externalId, items, pedido);
+            await this.aplicarVentaFalabella(userId, connection, externalId, items, pedido);
         }
 
         if (nuevos) {
@@ -1526,16 +1774,22 @@ export class SyncService {
     /** Descuenta stock y avisa por cada línea vendida en Falabella. */
     private async aplicarVentaFalabella(
         userId: string,
+        connection: MarketplaceConnection,
         orderId: string,
         items: any[],
         pedido: any,
     ): Promise<void> {
+        const storeId = connection.store?.id;
         for (const item of items) {
             const sku = item?.Sku;
             if (!sku) continue;
 
+            // El producto de la tienda de esta cuenta; si es anterior a las
+            // tiendas (sin tienda asignada), el del dueño.
             const product = await this.productRepository.findOne({
-                where: { sku, owner: { id: userId } },
+                where: storeId
+                    ? [{ sku, store: { id: storeId } }, { sku, store: IsNull(), owner: { id: userId } }]
+                    : [{ sku, owner: { id: userId } }],
             });
             if (!product) {
                 console.warn(`[Sync] Venta Falabella ${orderId}: SKU ${sku} no está en el catálogo.`);
@@ -1568,16 +1822,18 @@ export class SyncService {
                 });
             }
 
-            // Propagar el nuevo stock a los demás canales donde esté publicado.
+            // Propagar el nuevo stock a las demás cuentas donde esté publicado.
             const otros = await this.listingLinkRepository.find({
                 where: { product: { id: product.id }, syncStatus: 'published' },
+                relations: { connection: true },
             });
             for (const enlace of otros) {
-                if (enlace.marketplace === 'falabella') continue;
+                if (!enlace.connection || enlace.connection.id === connection.id) continue;
                 await this.syncQueue.add('inventory', {
                     productId: product.id,
                     userId,
                     marketplace: enlace.marketplace,
+                    connectionId: enlace.connection.id,
                 });
             }
         }
@@ -1605,24 +1861,31 @@ export class SyncService {
 
     /** Executed by the queue processor: applies a Mercado Libre sale to local stock. */
     async processMeliOrder(resource: string, meliUserId: string): Promise<void> {
-        const connection = await this.connectionRepository.findOne({
+        // La misma cuenta de Mercado Libre puede estar conectada en más de una
+        // tienda; la venta se aplica en cada una cuyo catálogo tenga el ítem.
+        const connections = await this.connectionRepository.find({
             where: { marketplace: 'mercadolibre', externalUserId: meliUserId, status: 'active' },
-            relations: { owner: true },
+            select: { id: true },
         });
-        if (!connection) {
+        if (!connections.length) {
             console.warn(`[Sync] Notificación de ML para un seller no conectado: ${meliUserId}`);
             return;
         }
+        for (const { id } of connections) {
+            await this.applyMeliOrder(resource, id);
+        }
+    }
 
+    private async applyMeliOrder(resource: string, connectionId: string): Promise<void> {
+        const connection = await this.getValidConnectionById(connectionId);
         const userId = connection.owner.id;
         const orderId = resource.split('/').pop() as string;
-        const validConnection = await this.getValidConnection(userId, 'mercadolibre');
-        const order = await this.meliApi.getOrder(validConnection.accessToken, orderId);
+        const order = await this.meliApi.getOrder(connection.accessToken, orderId);
 
         if (order.status !== 'paid') return; // only confirmed sales move stock
 
-        // Idempotency: never apply the same order twice (webhooks can repeat)
-        const dedupeKey = `meli:order-applied:${orderId}`;
+        // Idempotency: never apply the same order twice to the same account (webhooks can repeat)
+        const dedupeKey = `meli:order-applied:${connection.id}:${orderId}`;
         const firstTime = await this.redis.set(dedupeKey, '1', 'EX', 60 * 60 * 24 * 30, 'NX');
         if (!firstTime) return;
 
@@ -1633,7 +1896,7 @@ export class SyncService {
                 externalId: String(orderId),
                 owner: { id: userId } as any,
                 totalAmount: Number(order.total_amount || 0),
-                currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(userId, 'mercadolibre')),
+                currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
                 items: (order.order_items || []).map((i: any) => ({
                     sku: i?.item?.seller_sku || null,
@@ -1655,7 +1918,7 @@ export class SyncService {
             if (!externalId || !quantity) continue;
 
             const link = await this.listingLinkRepository.findOne({
-                where: { marketplace: 'mercadolibre', externalId },
+                where: { marketplace: 'mercadolibre', externalId, connection: { id: connection.id } },
                 relations: { product: true },
             });
             if (!link) continue;
@@ -1700,16 +1963,18 @@ export class SyncService {
                 });
             }
 
-            // Propagate the new stock to every OTHER channel where it's published
+            // Propagate the new stock to every OTHER account where it's published
             const otherLinks = await this.listingLinkRepository.find({
                 where: { product: { id: product.id }, syncStatus: 'published' },
+                relations: { connection: true },
             });
             for (const other of otherLinks) {
-                if (other.marketplace === 'mercadolibre') continue;
+                if (!other.connection || other.connection.id === connection.id) continue;
                 await this.syncQueue.add('inventory', {
                     productId: product.id,
                     userId,
                     marketplace: other.marketplace,
+                    connectionId: other.connection.id,
                 });
             }
         }
@@ -1720,26 +1985,17 @@ export class SyncService {
     // ─────────────────────────────────────────────────────────────
 
     /** All the user's listings across marketplaces, for the Marketplaces UI. */
-    async getAllListings(userId: string) {
+    async getAllListings(storeId: string) {
         const links = await this.listingLinkRepository.find({
-            where: { product: { owner: { id: userId } } },
-            relations: { product: true },
+            where: { connection: { store: { id: storeId } } },
+            relations: { product: true, connection: true },
             order: { updatedAt: 'DESC' },
         });
 
-        // La moneda depende del canal: la misma cuenta puede vender en soles
-        // en Mercado Libre y en pesos en Falabella Colombia. Sin esto la
-        // pantalla pintaba un símbolo de dólar sobre precios en soles.
-        const conexiones = await this.connectionRepository.find({
-            where: { owner: { id: userId } },
-            select: { id: true, marketplace: true, currency: true },
-        });
-        const monedaPorCanal = new Map(
-            conexiones.map(c => [c.marketplace, c.currency ?? monedaPorDefecto()]),
-        );
-
         return links.map(l => ({
-            currency: monedaPorCanal.get(l.marketplace) ?? monedaPorDefecto(),
+            // La moneda depende de la cuenta: la misma tienda puede vender en
+            // soles en Mercado Libre y en pesos en una cuenta de Falabella Colombia.
+            currency: l.connection?.currency ?? monedaPorDefecto(),
             id: l.id,
             productId: l.product.id,
             productName: l.product.name,
@@ -1747,6 +2003,8 @@ export class SyncService {
             stock: l.product.stock,
             price: l.product.price,
             marketplace: l.marketplace,
+            connectionId: l.connection?.id ?? null,
+            accountLabel: l.connection?.label || l.connection?.externalNickname || null,
             externalId: l.externalId,
             permalink: l.permalink,
             syncStatus: l.syncStatus,
@@ -1768,25 +2026,18 @@ export class SyncService {
      * revisión ni toca ningún marketplace: es un dato solo de la web propia,
      * que se enviará a WooCommerce cuando esa conexión exista.
      */
-    async setWebPrice(productId: string, userId: string, webPrice: number | null) {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
-        if (!product) throw new NotFoundException('Producto no encontrado');
+    async setWebPrice(scope: SyncScope, productId: string, webPrice: number | null) {
+        const product = await this.findScopedProduct(scope, productId);
         product.webPrice = webPrice;
         await this.productRepository.save(product);
         return { productId, webPrice, message: webPrice === null ? 'Precio web quitado.' : 'Precio web guardado.' };
     }
 
-    async getProductSyncStatus(productId: string, userId: string) {
-        const product = await this.productRepository.findOne({
-            where: { id: productId, owner: { id: userId } },
-        });
-        if (!product) {
-            throw new NotFoundException('Producto no encontrado');
-        }
+    async getProductSyncStatus(scope: SyncScope, productId: string) {
+        const product = await this.findScopedProduct(scope, productId);
         const links = await this.listingLinkRepository.find({
-            where: { product: { id: productId } },
+            where: { product: { id: productId }, connection: { store: { id: scope.storeId } } },
+            relations: { connection: true },
         });
         return {
             productId,
@@ -1795,6 +2046,8 @@ export class SyncService {
             price: product.price,
             listings: links.map(l => ({
                 marketplace: l.marketplace,
+                connectionId: l.connection?.id ?? null,
+                accountLabel: l.connection?.label || l.connection?.externalNickname || null,
                 externalId: l.externalId,
                 permalink: l.permalink,
                 syncStatus: l.syncStatus,

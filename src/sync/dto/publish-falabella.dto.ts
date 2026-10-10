@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsUUID } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsUUID, IsOptional } from 'class-validator';
 
 export class PublishFalabellaDto {
     @ApiProperty({
@@ -10,4 +10,12 @@ export class PublishFalabellaDto {
     @ArrayNotEmpty({ message: 'Selecciona al menos un producto para publicar.' })
     @IsUUID('4', { each: true })
     productIds: string[];
+
+    @ApiProperty({
+        description: 'Cuenta de Falabella donde publicar. Obligatoria si la tienda tiene varias.',
+        required: false,
+    })
+    @IsOptional()
+    @IsUUID('4')
+    connectionId?: string;
 }

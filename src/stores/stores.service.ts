@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, MoreThan, Repository } from 'typeorm';
 import { MailService } from '../mail/mail.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/user-role';
@@ -68,7 +68,42 @@ export class StoresService {
 
     // ── Tiendas ──────────────────────────────────────────────────
 
+    /**
+     * Solo quien se registró por su cuenta puede crear tiendas. Las cuentas
+     * nacidas de una invitación entran a las tiendas de otros pero no tienen
+     * un espacio propio. El administrador de la agencia puede siempre.
+     */
+    async canCreateStores(userId: string): Promise<boolean> {
+        const user = await this.users.findOne({
+            where: { id: userId },
+            select: { id: true, role: true, createdFromInvitation: true },
+        });
+        if (!user) return false;
+        return user.role === UserRole.ADMIN || !user.createdFromInvitation;
+    }
+
+    /**
+     * Marca la cuenta como «nacida de una invitación» si, al registrarse, su
+     * correo tiene una invitación vigente. Se llama justo después de crear la cuenta.
+     */
+    async flagIfInvited(userId: string, email: string): Promise<boolean> {
+        const pendiente = await this.invitations.exist({
+            where: { email: (email ?? '').trim().toLowerCase(), acceptedAt: IsNull(), expiresAt: MoreThan(new Date()) },
+        });
+        if (pendiente) await this.users.update({ id: userId }, { createdFromInvitation: true });
+        return pendiente;
+    }
+
     async create(userId: string, name: string) {
+        if (!(await this.canCreateStores(userId))) {
+            throw new ForbiddenException(
+                'Tu cuenta se creó por invitación, así que no puede crear tiendas propias. Pídele al dueño de tu tienda lo que necesites.',
+            );
+        }
+        return this.createUnchecked(userId, name);
+    }
+
+    private async createUnchecked(userId: string, name: string) {
         const clean = (name ?? '').trim();
         if (clean.length < 2) throw new BadRequestException('Ponle un nombre a la tienda (mínimo 2 caracteres).');
 
@@ -77,19 +112,69 @@ export class StoresService {
         return { id: store.id, name: store.name, role: 'owner' as StoreRole };
     }
 
+    /**
+     * Quien se registró por su cuenta y todavía no tiene ninguna tienda recibe
+     * la suya (con el nombre de su empresa, o el suyo). Las cuentas por
+     * invitación no reciben una: entran a las de otros.
+     */
+    async ensureDefaultStore(userId: string): Promise<void> {
+        const user = await this.users.findOne({
+            where: { id: userId },
+            select: { id: true, name: true, lastName: true, nameCompany: true, createdFromInvitation: true },
+        });
+        if (!user || user.createdFromInvitation) return;
+        if (await this.members.exist({ where: { user: { id: userId } } })) return;
+
+        const nombre = (user.nameCompany || `${user.name ?? ''} ${user.lastName ?? ''}`).trim() || 'Mi tienda';
+        await this.createUnchecked(userId, nombre);
+    }
+
+    /** La tienda que se usa cuando una petición no dice cuál: la más antigua de las suyas. */
+    async defaultStoreId(userId: string): Promise<string | null> {
+        const own = await this.members.findOne({
+            where: { user: { id: userId }, role: 'owner' },
+            relations: { store: true },
+            order: { createdAt: 'ASC' },
+        });
+        if (own) return own.store.id;
+        const any = await this.members.findOne({
+            where: { user: { id: userId } },
+            relations: { store: true },
+            order: { createdAt: 'ASC' },
+        });
+        return any?.store.id ?? null;
+    }
+
     /** Las tiendas a las que el usuario tiene acceso (el desplegable del selector). */
     async listMine(userId: string) {
+        await this.ensureDefaultStore(userId);
         const rows = await this.members.find({
             where: { user: { id: userId } },
             relations: { store: true },
             order: { createdAt: 'ASC' },
         });
-        return rows.map(m => ({
-            id: m.store.id,
-            name: m.store.name,
-            role: m.role,
-            publicEnabled: m.store.publicEnabled,
-        }));
+        return {
+            stores: rows.map(m => ({
+                id: m.store.id,
+                name: m.store.name,
+                role: m.role,
+                publicEnabled: m.store.publicEnabled,
+            })),
+            canCreateStores: await this.canCreateStores(userId),
+        };
+    }
+
+    // ── Ajustes de la tienda ─────────────────────────────────────
+
+    async getReviewMode(storeId: string): Promise<boolean> {
+        const store = await this.stores.findOne({ where: { id: storeId }, select: { id: true, syncReviewMode: true } });
+        // Ante la duda se revisa: es el lado seguro.
+        return store?.syncReviewMode ?? true;
+    }
+
+    async setReviewMode(storeId: string, enabled: boolean) {
+        await this.stores.update({ id: storeId }, { syncReviewMode: enabled });
+        return { reviewMode: enabled };
     }
 
     async rename(userId: string, storeId: string, name: string) {

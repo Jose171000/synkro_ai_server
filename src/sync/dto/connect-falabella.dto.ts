@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PAISES_FALABELLA } from '../../common/currency';
 
 export class ConnectFalabellaDto {
@@ -31,4 +31,9 @@ export class ConnectFalabellaDto {
         message: `El país debe ser uno de: ${PAISES_FALABELLA.join(', ')}.`,
     })
     country?: string;
+    @ApiProperty({ description: 'Nombre para distinguir esta cuenta de otras del mismo canal.', required: false, example: 'Cuenta principal' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(60)
+    label?: string;
 }

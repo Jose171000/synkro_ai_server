@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, Unique } from 'typeorm';
 import { Product } from 'src/products/entities/product.entity';
+import { MarketplaceConnection } from './marketplace-connection.entity';
 
 /**
  * Links an internal product with the listing actually published on a
@@ -7,7 +8,7 @@ import { Product } from 'src/products/entities/product.entity';
  * of truth for what is live on each channel and its sync state.
  */
 @Entity('listing_links')
-@Unique('UQ_listing_product_marketplace', ['product', 'marketplace'])
+@Unique('UQ_listing_product_connection', ['product', 'connection'])
 export class ListingLink {
     @PrimaryGeneratedColumn('uuid')
     id: string;
@@ -72,6 +73,14 @@ export class ListingLink {
 
     @ManyToOne(() => Product, { onDelete: 'CASCADE' })
     product: Product;
+
+    /**
+     * Cuenta del canal en la que está publicado. Cuando se desconecta la
+     * cuenta queda en nulo y al volver a conectarla se recupera, para no
+     * perder el enlace con lo ya publicado.
+     */
+    @ManyToOne(() => MarketplaceConnection, { onDelete: 'SET NULL', nullable: true })
+    connection: MarketplaceConnection | null;
 
     @CreateDateColumn()
     createdAt: Date;

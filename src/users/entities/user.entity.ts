@@ -52,6 +52,14 @@ export class User {
     @Column({ default: true })
     syncReviewMode: boolean;
 
+    /**
+     * true cuando la cuenta se creó a partir de una invitación a una tienda.
+     * Esas cuentas entran a tiendas ajenas pero no pueden crear tiendas propias:
+     * solo quien se registró por su cuenta es dueño de su espacio.
+     */
+    @Column({ default: false })
+    createdFromInvitation: boolean;
+
     @OneToMany(() => RefreshToken, refreshToken => refreshToken.user)
     refreshTokens: RefreshToken[];
 

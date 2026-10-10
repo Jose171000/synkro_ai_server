@@ -31,6 +31,13 @@ export class Store {
     @Column({ default: false })
     publicEnabled: boolean;
 
+    /**
+     * Modo revisión de la tienda: los cambios de precio y stock esperan
+     * aprobación del dueño antes de llegar a los canales.
+     */
+    @Column({ default: true })
+    syncReviewMode: boolean;
+
     @CreateDateColumn()
     createdAt: Date;
 

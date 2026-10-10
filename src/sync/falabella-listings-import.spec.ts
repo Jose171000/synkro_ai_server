@@ -13,6 +13,7 @@ import { FalabellaApiService, FalabellaBusinessUnit, FalabellaProduct } from './
 import { NotificationsService } from '../notifications/notifications.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { ChangeRequestsService } from './change-requests.service';
+import { StoresService } from '../stores/stores.service';
 
 /**
  * Traer de un clic las publicaciones que ya existen en Falabella.
@@ -24,6 +25,7 @@ import { ChangeRequestsService } from './change-requests.service';
  */
 
 const USUARIO = 'usuario-1';
+const SCOPE = { userId: USUARIO, storeId: 'tienda-1' };
 
 /**
  * Construye una ficha con la forma REAL que devuelve Falabella, comprobada
@@ -71,8 +73,11 @@ describe('importFalabellaListings', () => {
         };
 
         const repoProductos = {
-            findOne: jest.fn(async ({ where }: any) =>
-                productos.find(p => p.sku === where.sku) ?? null),
+            findOne: jest.fn(async ({ where }: any) => {
+                const w = Array.isArray(where) ? where[0] : where;
+                return productos.find(p => p.sku === w.sku) ?? null;
+            }),
+            update: jest.fn(),
             create: jest.fn((d: any) => ({ ...d })),
             save: jest.fn(async (p: any) => {
                 const guardado = { ...p, id: p.id ?? `prod-${productos.length + 1}` };
@@ -95,10 +100,21 @@ describe('importFalabellaListings', () => {
 
         const vacio = { findOne: jest.fn(), find: jest.fn(), save: jest.fn(), create: jest.fn() };
 
+        // La cuenta de Falabella de la tienda: una sola, así que se elige sola.
+        const cuenta = {
+            id: 'cuenta-1', marketplace: 'falabella', externalUserId: 'a@b.com', accessToken: 'clave',
+            status: 'active', currency: 'PEN', owner: { id: USUARIO }, store: { id: 'tienda-1' },
+        };
+        const repoConexiones = {
+            ...vacio,
+            find: jest.fn().mockResolvedValue([{ id: cuenta.id }]),
+            findOne: jest.fn().mockResolvedValue(cuenta),
+        };
+
         const modulo = await Test.createTestingModule({
             providers: [
                 SyncService,
-                { provide: getRepositoryToken(MarketplaceConnection), useValue: vacio },
+                { provide: getRepositoryToken(MarketplaceConnection), useValue: repoConexiones },
                 { provide: getRepositoryToken(ListingLink), useValue: repoEnlaces },
                 { provide: getRepositoryToken(MarketplaceOrder), useValue: vacio },
                 { provide: getRepositoryToken(MarketplaceFeed), useValue: vacio },
@@ -110,6 +126,7 @@ describe('importFalabellaListings', () => {
                 { provide: FalabellaApiService, useValue: falabella },
                 { provide: NotificationsService, useValue: { notify: notificar } },
                 { provide: ChangeRequestsService, useValue: {} },
+                { provide: StoresService, useValue: {} },
             ],
         }).compile();
 
@@ -124,7 +141,7 @@ describe('importFalabellaListings', () => {
         const { repoProductos } = await construir([ficha()]);
         productos.push({ id: 'prod-existente', sku: 'SKU-1', name: 'Gafas' });
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.total).toBe(1);
         expect(resumen.yaEnCatalogo).toBe(1);
@@ -145,7 +162,7 @@ describe('importFalabellaListings', () => {
     it('crea como borrador la publicación que no está en el catálogo', async () => {
         await construir([ficha({ SellerSku: 'NUEVO-1', Name: 'Reloj' })]);
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.nuevas).toBe(1);
         expect(productos[0]).toMatchObject({
@@ -161,7 +178,7 @@ describe('importFalabellaListings', () => {
         // figuraba como "Visible" algo que el comprador no podía ver.
         await construir([ficha({ QCStatus: 'rejected' }, { Status: 'active' })]);
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.porEstado).toEqual({ error: 1 });
         expect(enlaces[0].syncStatus).toBe('error');
@@ -177,7 +194,7 @@ describe('importFalabellaListings', () => {
             ficha({ SellerSku: 'D' }, { Status: 'active', IsPublished: '0' }),
         ]);
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.porEstado).toEqual({ published: 1, paused: 2, pending: 1 });
     });
@@ -187,7 +204,7 @@ describe('importFalabellaListings', () => {
             ficha({ SellerSku: 'NUEVO-1' }),
         ]);
 
-        const resumen = await service.importFalabellaListings(USUARIO, { dryRun: true });
+        const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
 
         expect(resumen.total).toBe(1);
         expect(resumen.nuevas).toBe(1);
@@ -200,7 +217,7 @@ describe('importFalabellaListings', () => {
     it('no guarda precio cero: un producto sin precio no es un producto regalado', async () => {
         await construir([ficha({}, { Price: '0', SpecialPrice: undefined })]);
 
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(productos[0].price).toBeUndefined();
         expect(enlaces[0].lastPriceSynced).toBeNull();
@@ -211,7 +228,7 @@ describe('importFalabellaListings', () => {
         // el siguiente envío dejaría el regular por debajo de la promoción.
         await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90' })]);
 
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(productos[0].price).toBe(199.9);
         expect(enlaces[0].lastPriceSynced).toBe(199.9);
@@ -228,7 +245,7 @@ describe('importFalabellaListings', () => {
             Images: { Image: ['https://img.falabella/rojo.jpg', 'https://img.falabella/rojo-2.jpg'] },
         })]);
 
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(enlaces[0].imageUrl).toBe('https://img.falabella/rojo.jpg');
         expect(enlaces[0].variation).toBe('M / Rojo');
@@ -244,7 +261,7 @@ describe('importFalabellaListings', () => {
         productos.push({ id: 'p-viejo', sku: 'SKU-1', name: 'Gafas', price: 149.9 });
         enlaces.push({ marketplace: 'falabella', product: { id: 'p-viejo' }, lastPriceSynced: 149.9 });
 
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(productos[0].price).toBe(199.9);
         expect(repoProductos.save).toHaveBeenCalled();
@@ -255,7 +272,7 @@ describe('importFalabellaListings', () => {
         productos.push({ id: 'p-editado', sku: 'SKU-1', name: 'Gafas', price: 170 });
         enlaces.push({ marketplace: 'falabella', product: { id: 'p-editado' }, lastPriceSynced: 149.9 });
 
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(productos[0].price).toBe(170);
     });
@@ -263,7 +280,7 @@ describe('importFalabellaListings', () => {
     it('salta las fichas sin SKU en vez de romperse', async () => {
         await construir([ficha({ SellerSku: '' as any }), ficha({ SellerSku: 'OK-1' })]);
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.enlazadas).toBe(1);
     });
@@ -271,7 +288,7 @@ describe('importFalabellaListings', () => {
     it('avisa cuando el catálogo era demasiado grande y quedó a medias', async () => {
         await construir([ficha()], true);
 
-        const resumen = await service.importFalabellaListings(USUARIO);
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
         expect(resumen.incompleto).toBe(true);
         expect(notificar).toHaveBeenCalledWith(
@@ -282,17 +299,53 @@ describe('importFalabellaListings', () => {
 
     it('al repetir la importación actualiza el enlace en vez de duplicarlo', async () => {
         await construir([ficha({}, { Status: 'active', IsPublished: '1' })]);
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
         expect(enlaces).toHaveLength(1);
 
         falabella.getAllProducts.mockResolvedValue({
             productos: [ficha({}, { Status: 'inactive', Stock: '0' })],
             incompleto: false,
         });
-        await service.importFalabellaListings(USUARIO);
+        await service.importFalabellaListings(SCOPE, undefined);
 
         expect(enlaces).toHaveLength(1);
         expect(enlaces[0].syncStatus).toBe('paused');
         expect(enlaces[0].lastStockSynced).toBe(0);
+    });
+
+    it('cada publicación queda ligada a la cuenta de la que se importó', async () => {
+        await construir([ficha()]);
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(enlaces[0].connection).toEqual({ id: 'cuenta-1' });
+    });
+
+    it('el producto nuevo nace en la tienda desde la que se importa', async () => {
+        await construir([ficha({ SellerSku: 'NUEVO-9' })]);
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(productos[0].store).toEqual({ id: 'tienda-1' });
+    });
+
+    it('un SKU que ya existe en OTRA tienda del mismo dueño no se toca ni se enlaza', async () => {
+        await construir([ficha({ SellerSku: 'COMPARTIDO' })]);
+        productos.push({ id: 'p-otra', sku: 'COMPARTIDO', name: 'Otro', store: { id: 'tienda-2' } });
+
+        const resumen = await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(resumen.enOtraTienda).toBe(1);
+        expect(resumen.enlazadas).toBe(0);
+        expect(enlaces).toHaveLength(0);
+    });
+
+    it('un producto anterior a las tiendas (sin tienda) se adopta en la tienda que importa', async () => {
+        const { repoProductos } = await construir([ficha()]);
+        productos.push({ id: 'p-viejo', sku: 'SKU-1', name: 'Gafas' });
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(repoProductos.update).toHaveBeenCalledWith('p-viejo', { store: { id: 'tienda-1' } });
     });
 });

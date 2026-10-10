@@ -1,24 +1,34 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, Unique } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
+import { Store } from '../../stores/entities/store.entity';
 import { encryptedJsonTransformer, encryptedTextTransformer } from '../../common/crypto/encrypted-column.transformer';
 
 /**
  * Stores the credentials that link a Synkro user with their seller account on
  * an external marketplace (Mercado Libre, Yavendió, Falabella...).
- * One row per (user, marketplace).
+ * Una fila por cuenta del canal dentro de una tienda: una tienda admite hasta
+ * 3 cuentas del mismo marketplace.
  *
  * Todo lo que sea secreto se guarda CIFRADO en la base de datos: las columnas
  * marcadas con un transformador se cifran al escribir y se descifran al leer,
  * de forma transparente para el resto del código.
  */
 @Entity('marketplace_connections')
-@Unique('UQ_connection_marketplace_owner', ['marketplace', 'owner'])
+@Unique('UQ_connection_store_marketplace_account', ['store', 'marketplace', 'externalUserId'])
 export class MarketplaceConnection {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
     @Column()
     marketplace: string; // 'mercadolibre' | 'yavendio' | 'falabella'
+
+    /** La tienda a la que pertenece esta cuenta conectada. */
+    @ManyToOne(() => Store, { onDelete: 'CASCADE', nullable: true })
+    store: Store | null;
+
+    /** Nombre con el que la tienda distingue esta cuenta de otras del mismo canal. */
+    @Column({ type: 'varchar', nullable: true })
+    label: string | null;
 
     // Seller ID on the external platform (e.g. Mercado Libre user id).
     // No es un secreto y se busca por él cuando llega un webhook, así que

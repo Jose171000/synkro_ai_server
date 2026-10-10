@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, Unique } from "typeorm";
 import { User } from "src/users/entities/user.entity";
+import { Store } from "../../stores/entities/store.entity";
 import { ProductImage } from "./product-image.entity";
 
 @Entity('products')
@@ -89,6 +90,10 @@ export class Product {
 
     @ManyToOne(() => User)
     owner: User;
+
+    /** Tienda a la que pertenece el producto. Nulo en productos aún sin asignar. */
+    @ManyToOne(() => Store, { onDelete: 'SET NULL', nullable: true })
+    store: Store | null;
 
     @CreateDateColumn()
     createdAt: Date;

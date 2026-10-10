@@ -1,6 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
 import { Product } from '../../products/entities/product.entity';
 import { User } from '../../users/entities/user.entity';
+import { Store } from '../../stores/entities/store.entity';
+import { MarketplaceConnection } from './marketplace-connection.entity';
 
 export type ChangeRequestField = 'price' | 'stock';
 export type ChangeRequestStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'error';
@@ -21,6 +23,14 @@ export class SyncChangeRequest {
 
     @ManyToOne(() => Product, { onDelete: 'CASCADE' })
     product: Product;
+
+    /** Tienda en la que se pidió el cambio: quien la revisa es su equipo. */
+    @ManyToOne(() => Store, { onDelete: 'CASCADE', nullable: true })
+    store: Store | null;
+
+    /** Cuenta del canal a la que irá el cambio. */
+    @ManyToOne(() => MarketplaceConnection, { onDelete: 'CASCADE', nullable: true })
+    connection: MarketplaceConnection | null;
 
     @Column()
     marketplace: string;

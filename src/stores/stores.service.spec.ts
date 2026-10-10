@@ -24,7 +24,7 @@ function construir(estado: {
     const tiendas = estado.tiendas ?? [];
     const invitaciones = estado.invitaciones ?? [];
 
-    const repoUsuarios = { findOne: jest.fn(async ({ where }: any) => usuarios[where.id] ?? null) };
+    const repoUsuarios = { findOne: jest.fn(async ({ where }: any) => usuarios[where.id] ?? null), update: jest.fn() };
     const repoTiendas = {
         exist: jest.fn(async ({ where }: any) => tiendas.some(t => t.id === where.id)),
         findOne: jest.fn(async ({ where }: any) =>
@@ -47,13 +47,15 @@ function construir(estado: {
                 m.storeId === where.store?.id &&
                 (where.user?.id ? m.userId === where.user.id : porCorreo ? m.userId === porCorreo : true)) ?? null;
         }),
-        exist: jest.fn(async () => false),
+        exist: jest.fn(async ({ where }: any) => miembros.some(m => m.userId === where.user?.id)),
+        find: jest.fn(async () => []),
         save: jest.fn(async (m: any) => m),
         create: jest.fn((d: any) => d),
     };
     const repoInvit = {
         findOne: jest.fn(async ({ where }: any) => invitaciones.find(i => i.tokenHash === where.tokenHash) ?? null),
         update: jest.fn(async () => ({ affected: 1 })),
+        exist: jest.fn(async ({ where }: any) => invitaciones.some(i => i.email === where.email && !i.acceptedAt && i.expiresAt > new Date())),
         delete: jest.fn(async () => ({ affected: 1 })),
         save: jest.fn(async (i: any) => i),
         create: jest.fn((d: any) => d),
@@ -65,7 +67,7 @@ function construir(estado: {
         repoTiendas as any, repoMiembros as any, repoInvit as any,
         repoUsuarios as any, repoEnlaces as any, correo as any,
     );
-    return { service, repoMiembros, repoInvit, repoTiendas, correo };
+    return { service, repoMiembros, repoInvit, repoTiendas, repoUsuarios, correo };
 }
 
 describe('acceso a una tienda', () => {
@@ -235,5 +237,64 @@ describe('enlace público', () => {
 
         const apagado = await service.setPublicLink('ana', STORE_A, false);
         expect(apagado).toEqual({ publicEnabled: false, url: null });
+    });
+});
+
+describe('quién puede crear tiendas', () => {
+    const usuarios = {
+        propio: { id: 'propio', role: 'user', createdFromInvitation: false, name: 'Ana', lastName: 'Ruiz', nameCompany: 'Rivesi Home' },
+        invitado: { id: 'invitado', role: 'user', createdFromInvitation: true, name: 'Luz', lastName: 'M' },
+        root: { id: 'root', role: 'admin', createdFromInvitation: true },
+    };
+
+    it('quien se registró por su cuenta puede crear tiendas', async () => {
+        const { service, repoTiendas } = construir({ usuarios });
+        await expect(service.create('propio', 'Mi segunda tienda')).resolves.toMatchObject({ name: 'Mi segunda tienda', role: 'owner' });
+        expect(repoTiendas.save).toHaveBeenCalled();
+    });
+
+    it('una cuenta nacida de una invitación NO puede crear tiendas', async () => {
+        const { service, repoTiendas } = construir({ usuarios });
+        await expect(service.create('invitado', 'Intento')).rejects.toThrow(/por invitación/i);
+        expect(repoTiendas.save).not.toHaveBeenCalled();
+    });
+
+    it('el administrador de la agencia siempre puede', async () => {
+        const { service } = construir({ usuarios });
+        await expect(service.canCreateStores('root')).resolves.toBe(true);
+    });
+
+    it('al registrarse con un correo invitado, la cuenta se marca como invitada', async () => {
+        const { service, repoUsuarios } = construir({
+            usuarios,
+            invitaciones: [{ email: 'luz@x.com', acceptedAt: null, expiresAt: new Date(Date.now() + 3600_000), tokenHash: 'x' }],
+        });
+        await expect(service.flagIfInvited('invitado', ' Luz@X.com ')).resolves.toBe(true);
+        expect(repoUsuarios.update).toHaveBeenCalledWith({ id: 'invitado' }, { createdFromInvitation: true });
+    });
+
+    it('sin invitación vigente, o con una caducada, la cuenta no se marca', async () => {
+        const sin = construir({ usuarios });
+        await expect(sin.service.flagIfInvited('propio', 'ana@x.com')).resolves.toBe(false);
+        expect(sin.repoUsuarios.update).not.toHaveBeenCalled();
+
+        const vencida = construir({
+            usuarios,
+            invitaciones: [{ email: 'ana@x.com', acceptedAt: null, expiresAt: new Date(Date.now() - 1000), tokenHash: 'x' }],
+        });
+        await expect(vencida.service.flagIfInvited('propio', 'ana@x.com')).resolves.toBe(false);
+    });
+
+    it('quien se registró solo recibe su tienda; el invitado no recibe ninguna', async () => {
+        const propio = construir({ usuarios });
+        const lista = await propio.service.listMine('propio');
+        expect(propio.repoTiendas.save).toHaveBeenCalledWith(expect.objectContaining({ name: 'Rivesi Home' }));
+        expect(lista.canCreateStores).toBe(true);
+
+        const invitado = construir({ usuarios });
+        const suya = await invitado.service.listMine('invitado');
+        expect(invitado.repoTiendas.save).not.toHaveBeenCalled();
+        expect(suya.stores).toEqual([]);
+        expect(suya.canCreateStores).toBe(false);
     });
 });

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, MaxLength } from 'class-validator';
 
 export class ConnectYavendioDto {
     @ApiProperty({
@@ -9,4 +9,9 @@ export class ConnectYavendioDto {
     @IsString()
     @IsNotEmpty({ message: 'Pega la API key de Yavendió para conectar la cuenta.' })
     apiKey: string;
+    @ApiProperty({ description: 'Nombre para distinguir esta cuenta de otras del mismo canal.', required: false, example: 'Cuenta principal' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(60)
+    label?: string;
 }

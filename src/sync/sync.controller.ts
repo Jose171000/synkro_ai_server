@@ -1,9 +1,10 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
-import { SyncService } from './sync.service';
+import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { SyncScope, SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
@@ -14,9 +15,19 @@ import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
 import { ChangeRequestsService } from './change-requests.service';
 
+/** Quién actúa y en qué tienda: la tienda la fija StoreAccessGuard tras comprobar el acceso. */
+const scopeOf = (req: any): SyncScope => ({ userId: req.user.id, storeId: req.store.storeId });
+
+/**
+ * Todo lo de canales ocurre dentro de una tienda: la tienda activa llega en
+ * la cabecera X-Store-Id y se comprueba en cada petición. Los roles se aplican
+ * así: lector mira; editor propone cambios de precio y stock; dueño conecta
+ * cuentas, publica, importa y aprueba.
+ */
 @ApiTags('sync')
 @Controller('sync')
 @RequireSection('marketplaces')
+@ApiHeader({ name: 'X-Store-Id', required: false, description: 'Tienda activa. Sin ella se usa la tienda por defecto del usuario.' })
 export class SyncController {
     constructor(
         private readonly syncService: SyncService,
@@ -27,21 +38,24 @@ export class SyncController {
 
     @Get('connections')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Lista las cuentas de marketplaces conectadas del usuario' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Cuentas de marketplaces conectadas a la tienda (sin credenciales)' })
     getConnections(@Req() req) {
-        return this.syncService.getConnections(req.user.id);
+        return this.syncService.getConnections(scopeOf(req).storeId);
     }
 
     @Get('mercadolibre/auth-url')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
-        summary: 'Genera la URL de autorización OAuth de Mercado Libre',
-        description: 'El frontend redirige al usuario a esta URL; al autorizar, Mercado Libre llama a /sync/mercadolibre/callback.',
+        summary: 'Genera la URL de autorización OAuth de Mercado Libre para esta tienda',
+        description: 'El frontend redirige al usuario a esta URL; al autorizar, Mercado Libre llama a /sync/mercadolibre/callback. Una tienda admite hasta 3 cuentas.',
     })
-    getMeliAuthUrl(@Req() req) {
-        return this.syncService.getMeliAuthUrl(req.user.id);
+    @ApiQuery({ name: 'label', required: false, description: 'Nombre para distinguir esta cuenta de otras del mismo canal.' })
+    getMeliAuthUrl(@Req() req, @Query('label') label?: string) {
+        return this.syncService.getMeliAuthUrl(scopeOf(req), label);
     }
 
     // Public: Mercado Libre redirects the seller's browser here after authorizing.
@@ -57,7 +71,9 @@ export class SyncController {
         const frontend = process.env.FRONTEND_URL || 'http://localhost:8080';
         try {
             const result = await this.syncService.handleMeliCallback(code, state);
-            return res.redirect(`${frontend}/?meli=connected&nickname=${encodeURIComponent(result.nickname)}`);
+            return res.redirect(
+                `${frontend}/?meli=connected&nickname=${encodeURIComponent(result.nickname)}&store=${encodeURIComponent(result.storeId)}`,
+            );
         } catch (error: any) {
             const message = error?.response?.message || error?.message || 'Error al conectar con Mercado Libre';
             return res.redirect(`${frontend}/?meli=error&message=${encodeURIComponent(message)}`);
@@ -66,40 +82,49 @@ export class SyncController {
 
     @Post('yavendio/connect')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
-        summary: 'Conecta la cuenta de Yavendió del usuario con su API key',
-        description: 'Valida la clave contra Yavendió antes de guardarla cifrada. La clave nunca se devuelve.',
+        summary: 'Conecta una cuenta de Yavendió a la tienda con su API key',
+        description: 'Valida la clave contra Yavendió antes de guardarla cifrada. La clave nunca se devuelve. Una tienda admite hasta 3 cuentas.',
     })
     connectYavendio(@Body() dto: ConnectYavendioDto, @Req() req) {
-        return this.syncService.connectYavendio(req.user.id, dto.apiKey);
+        return this.syncService.connectYavendio(scopeOf(req), dto.apiKey, dto.label);
     }
 
     @Post('falabella/connect')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
-        summary: 'Conecta la cuenta de Falabella Seller Center',
-        description: 'Comprueba las credenciales con una consulta real antes de guardarlas. La API key se guarda cifrada y nunca se devuelve.',
+        summary: 'Conecta una cuenta de Falabella Seller Center a la tienda',
+        description: 'Comprueba las credenciales con una consulta real antes de guardarlas. La API key se guarda cifrada y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
     })
     connectFalabella(@Body() dto: ConnectFalabellaDto, @Req() req) {
-        return this.syncService.connectFalabella(req.user.id, { userId: dto.userId, apiKey: dto.apiKey, country: dto.country });
+        return this.syncService.connectFalabella(scopeOf(req), {
+            userId: dto.userId,
+            apiKey: dto.apiKey,
+            country: dto.country,
+            label: dto.label,
+        });
     }
 
     @Get('listings')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Lista todas las publicaciones del usuario en los marketplaces' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Publicaciones de la tienda en todas sus cuentas de marketplaces' })
     getListings(@Req() req) {
-        return this.syncService.getAllListings(req.user.id);
+        return this.syncService.getAllListings(scopeOf(req).storeId);
     }
 
-    @Delete('connections/:marketplace')
+    @Delete('connections/:connectionId')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Desconecta una cuenta de marketplace' })
-    disconnect(@Param('marketplace') marketplace: string, @Req() req) {
-        return this.syncService.disconnect(req.user.id, marketplace);
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Desconecta una cuenta de marketplace (por su id)' })
+    disconnect(@Param('connectionId') connectionId: string, @Req() req) {
+        return this.syncService.disconnect(scopeOf(req).storeId, connectionId);
     }
 
     // ── Publishing & inventory ───────────────────────────────────
@@ -107,52 +132,57 @@ export class SyncController {
     @Post('products/:id/publish')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Publica un producto en los marketplaces indicados (asíncrono)',
-        description: 'Encola un job por marketplace. Requiere cuenta conectada, precio definido y categoría generada por la IA.',
+        description: 'Encola un job por marketplace. Si la tienda tiene varias cuentas del canal hay que indicar cuál en connectionIds.',
     })
     publish(@Param('id') id: string, @Body() dto: PublishProductDto, @Req() req) {
-        return this.syncService.enqueuePublish(id, req.user.id, dto.marketplaces);
+        return this.syncService.enqueuePublish(scopeOf(req), id, dto.marketplaces, dto.connectionIds);
     }
 
     @Get('falabella/categories')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Busca categorías de Falabella donde publicar',
         description: 'Solo devuelve categorías finales, con su ruta completa. El árbol se guarda en memoria porque pesa y tarda.',
     })
-    searchFalabellaCategories(@Query('search') search: string, @Req() req) {
-        return this.syncService.searchFalabellaCategories(req.user.id, search || '');
+    searchFalabellaCategories(@Query('search') search: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.searchFalabellaCategories(scopeOf(req), search || '', connectionId);
     }
 
     @Get('falabella/categories/:categoryId/fields')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Datos obligatorios que pide una categoría de Falabella',
         description: 'Devuelve solo lo que hay que pedirle a la persona: los campos que la plataforma ya envía por su cuenta quedan fuera.',
     })
-    getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req) {
-        return this.syncService.getFalabellaCategoryFields(req.user.id, categoryId);
+    getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.getFalabellaCategoryFields(scopeOf(req), categoryId, connectionId);
     }
 
     @Patch('falabella/products/:id/preparation')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Guarda la categoría, medidas y atributos que Falabella exige',
         description: 'Al guardar comprueba con las reglas reales de publicación y responde si el producto ya puede salir o qué le falta.',
     })
     prepareFalabella(@Param('id') id: string, @Body() dto: PrepareFalabellaDto, @Req() req) {
-        return this.syncService.prepareFalabellaProduct(req.user.id, id, dto);
+        return this.syncService.prepareFalabellaProduct(scopeOf(req), id, dto);
     }
 
     @Post('falabella/publish')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Publica varios productos en Falabella en un solo envío',
         description:
@@ -161,15 +191,16 @@ export class SyncController {
             'los que no cumplían los requisitos. El resultado real llega después: Falabella procesa en diferido.',
     })
     publishFalabella(@Body() dto: PublishFalabellaDto, @Req() req) {
-        return this.syncService.publishBatchToFalabella(req.user.id, dto.productIds);
+        return this.syncService.publishBatchToFalabella(scopeOf(req), dto.connectionId, dto.productIds);
     }
 
     @Patch('products/:id/inventory')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
     @ApiOperation({
         summary: 'Actualiza stock/precio y lo sincroniza con los canales publicados',
-        description: 'Con el modo revisión encendido (por defecto) no toca los canales: crea solicitudes pendientes y responde 202.',
+        description: 'Con el modo revisión de la tienda encendido (por defecto) no toca los canales: crea solicitudes pendientes y responde 202.',
     })
     async updateInventory(
         @Param('id') id: string,
@@ -177,94 +208,103 @@ export class SyncController {
         @Req() req,
         @Res({ passthrough: true }) res: Response,
     ) {
-        const result = await this.syncService.updateInventory(id, req.user.id, dto);
+        const result = await this.syncService.updateInventory(scopeOf(req), id, dto);
         if ('pending' in result) res.status(HttpStatus.ACCEPTED);
         return result;
     }
 
     @Patch('products/:id/web-price')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
     @ApiOperation({
         summary: 'Fija el precio con descuento de la tienda web',
         description: 'No se envía a ningún marketplace ni pasa por revisión; se usará cuando exista la conexión con WooCommerce.',
     })
     setWebPrice(@Param('id') id: string, @Body() dto: WebPriceDto, @Req() req) {
-        return this.syncService.setWebPrice(id, req.user.id, dto.webPrice);
+        return this.syncService.setWebPrice(scopeOf(req), id, dto.webPrice);
     }
 
     // ── Modo revisión: cola de aprobación ────────────────────────
 
     @Get('change-requests')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Lista las solicitudes de cambio de precio/stock del usuario' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Solicitudes de cambio de precio/stock de la tienda' })
     @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error'] })
     listChangeRequests(@Req() req, @Query('status') status?: string) {
-        return this.changeRequests.list(req.user.id, status);
+        return this.changeRequests.list(scopeOf(req), status);
     }
 
     @Post('change-requests/:id/approve')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({ summary: 'Aprueba un cambio: lo aplica al producto y lo envía al canal (asíncrono)' })
     approveChangeRequest(@Param('id') id: string, @Req() req) {
-        return this.changeRequests.approve(id, req.user.id);
+        return this.changeRequests.approve(id, scopeOf(req));
     }
 
     @Post('change-requests/:id/reject')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({ summary: 'Rechaza un cambio: no toca el producto ni el canal' })
     rejectChangeRequest(@Param('id') id: string, @Body() dto: RejectChangeDto, @Req() req) {
-        return this.changeRequests.reject(id, req.user.id, dto.reason);
+        return this.changeRequests.reject(id, scopeOf(req), dto.reason);
     }
 
     @Get('settings')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Ajustes de sincronización del usuario' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Ajustes de sincronización de la tienda' })
     async getSyncSettings(@Req() req) {
-        return { reviewMode: await this.changeRequests.isReviewMode(req.user.id) };
+        return { reviewMode: await this.changeRequests.isReviewMode(scopeOf(req).storeId) };
     }
 
     @Patch('settings/review-mode')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Enciende o apaga el modo revisión de cambios de inventario' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Enciende o apaga el modo revisión de la tienda' })
     setReviewMode(@Body() dto: ReviewModeDto, @Req() req) {
-        return this.changeRequests.setReviewMode(req.user.id, dto.enabled);
+        return this.changeRequests.setReviewMode(scopeOf(req).storeId, dto.enabled);
     }
 
     @Get('products/:id/status')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
-    @ApiOperation({ summary: 'Estado de sincronización del producto en cada marketplace' })
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Estado de sincronización del producto en cada cuenta de marketplace' })
     getStatus(@Param('id') id: string, @Req() req) {
-        return this.syncService.getProductSyncStatus(id, req.user.id);
+        return this.syncService.getProductSyncStatus(scopeOf(req), id);
     }
 
     @Post('falabella/webhook/register')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Pide a Falabella que avise de cada venta',
         description:
             'Registra un webhook propio con una dirección única para esta cuenta. Se añade a los que ya existan: ' +
             'si la cuenta tiene otro sistema conectado, sigue recibiendo sus avisos.',
     })
-    registerFalabellaWebhook(@Req() req) {
-        return this.syncService.registerFalabellaWebhook(req.user.id);
+    registerFalabellaWebhook(@Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.registerFalabellaWebhook(scopeOf(req), connectionId);
     }
 
     @Post('falabella/listings/import')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
-        summary: 'Trae de un clic las publicaciones que ya existen en Falabella',
+        summary: 'Trae de un clic las publicaciones que ya existen en una cuenta de Falabella',
         description:
-            'Lee el catálogo completo de la cuenta y lo enlaza con el catálogo de Synkro. ' +
+            'Lee el catálogo completo de la cuenta y lo enlaza con el catálogo de la tienda. ' +
             'Con dryRun=true no escribe nada: solo informa de qué pasaría, para poder ' +
             'enseñar la previsualización antes de crear productos.',
     })
@@ -274,21 +314,24 @@ export class SyncController {
         type: Boolean,
         description: 'true para previsualizar sin guardar nada.',
     })
-    importFalabellaListings(@Req() req, @Query('dryRun') dryRun?: string) {
-        return this.syncService.importFalabellaListings(req.user.id, {
+    @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta de Falabella; obligatoria si la tienda tiene varias.' })
+    importFalabellaListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string) {
+        return this.syncService.importFalabellaListings(scopeOf(req), connectionId, {
             dryRun: dryRun === 'true',
         });
     }
 
     @Post('falabella/orders/sync')
     @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard)
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
     @ApiOperation({
         summary: 'Trae los pedidos recientes de Falabella',
         description: 'Sirve para ponerse al día si algún aviso se perdió. No duplica los ya registrados.',
     })
-    syncFalabellaOrders(@Req() req) {
-        return this.syncService.processFalabellaOrders(req.user.id);
+    syncFalabellaOrders(@Req() req, @Query('connectionId') connectionId?: string) {
+        const scope = scopeOf(req);
+        return this.syncService.processFalabellaOrders({ userId: scope.userId, storeId: scope.storeId, connectionId });
     }
 
     // ── Webhooks ─────────────────────────────────────────────────
