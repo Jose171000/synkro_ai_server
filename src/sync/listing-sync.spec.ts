@@ -482,6 +482,19 @@ describe('historial de ventas', () => {
         expect(r.totalRegistradas).toBe(1);
     });
 
+    it('renueva el token vencido de Mercado Libre antes de pedir el historial', async () => {
+        const vencida = cuenta({ expiresAt: new Date(Date.now() - 3600_000), refreshToken: 'r1' });
+        const { service, meli } = await construir({ conexiones: [vencida] });
+        meli.refreshTokens.mockResolvedValue({ accessToken: 'nuevo', refreshToken: 'r2', expiresIn: 21600 });
+        meli.searchOrdersPage.mockResolvedValue({ results: [ordenMl(1)], total: 1 });
+
+        const r = await service.importOrderHistory(SCOPE, 90);
+
+        expect(meli.refreshTokens).toHaveBeenCalledWith('r1');
+        expect(meli.searchOrdersPage.mock.calls[0][0]).toBe('nuevo');
+        expect(r.totalRegistradas).toBe(1);
+    });
+
     it('limita los días entre 1 y 365 y solo acepta cuentas de la tienda', async () => {
         const { service, meli } = await construir({ conexiones: [cuenta()] });
 

@@ -2004,6 +2004,11 @@ export class SyncService implements OnModuleInit {
         } catch (error: any) {
             // UQ violation = ya registrada (carrera entre webhooks) — seguir sin romper
             console.warn(`[Sync] Orden ${orderId} no persistida: ${error?.message}`);
+            // Si el fallo no es «ya existe», se libera la marca para reintentar en la próxima consulta.
+            if (error?.code !== '23505') {
+                await this.redis.del(dedupeKey);
+                return false;
+            }
         }
         // Historial: queda la constancia de la venta, sin tocar el stock ni avisar.
         if (options.soloRegistro) return true;
@@ -2147,6 +2152,10 @@ export class SyncService implements OnModuleInit {
         let nuevos = 0;
         for (const orden of ordenes) {
             if (await this.applyMeliOrderData(connection, orden)) nuevos++;
+        }
+        if (ordenes.length) {
+            const estados = [...new Set(ordenes.map((o: any) => o?.status))].join(',');
+            console.log(`[Sync] Mercado Libre ${connection.externalNickname}: ${ordenes.length} ventas leídas (${estados}), ${nuevos} nuevas`);
         }
         return { nuevos, revisados: ordenes.length };
     }
@@ -2546,7 +2555,7 @@ export class SyncService implements OnModuleInit {
         for (const c of cuentas) {
             const nombre = c.label || c.externalNickname || c.externalUserId;
             try {
-                const conRelaciones = c.owner && c.store ? c : await this.getValidConnectionById(c.id);
+                const conRelaciones = await this.getValidConnectionById(c.id); // renueva el token si venció
                 const r = c.marketplace === 'falabella'
                     ? await this.historialFalabella(conRelaciones, desde, hasta)
                     : await this.historialMeli(conRelaciones, desde, hasta);
