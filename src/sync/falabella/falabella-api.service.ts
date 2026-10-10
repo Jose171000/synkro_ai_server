@@ -420,7 +420,7 @@ export class FalabellaApiService {
         if (!items.length) {
             throw new BadRequestException('No hay stock que actualizar en Falabella.');
         }
-        const xml = buildStockUpdateXml(items, { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
+        const xml = buildStockUpdateXml(items);
         const feedId = await this.postFeed(credentials, 'UpdateStock', xml);
         this.logger.log(`Stock de ${items.length} producto(s) enviado a Falabella. Feed ${feedId}.`);
         return feedId;

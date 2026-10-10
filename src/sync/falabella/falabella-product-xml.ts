@@ -151,20 +151,19 @@ export function buildPriceUpdateXml(
     return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
 }
 
-/** XML para cambiar solo el stock de fichas ya publicadas (UpdateStock). */
-export function buildStockUpdateXml(
-    items: { sellerSku: string; quantity: number }[],
-    options: BuildOptions,
-): string {
+/**
+ * XML para cambiar el stock de fichas ya publicadas (UpdateStock).
+ * Es otro formato que el del alta: va dentro de <Warehouse> con <Quantity>, sin
+ * unidad de negocio. Con una sola bodega no se manda ninguna (usa la principal).
+ * https://developers.falabella.com/docs/products/updatestock
+ */
+export function buildStockUpdateXml(items: { sellerSku: string; quantity: number }[]): string {
     const cuerpo = items
         .map(item =>
-            '<Product>' +
+            '<Stock>' +
             tag('SellerSku', item.sellerSku) +
-            '<BusinessUnits><BusinessUnit>' +
-            tag('OperatorCode', options.operatorCode) +
-            tag('Stock', Math.max(0, Math.trunc(item.quantity))) +
-            '</BusinessUnit></BusinessUnits>' +
-            '</Product>')
+            `<Quantity>${Math.max(0, Math.trunc(item.quantity))}</Quantity>` +
+            '</Stock>')
         .join('');
-    return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+    return `<?xml version="1.0" encoding="UTF-8"?><Request><Warehouse>${cuerpo}</Warehouse></Request>`;
 }

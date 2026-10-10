@@ -136,15 +136,20 @@ describe('XML de actualización de precio y stock', () => {
     it('el stock se manda entero y nunca negativo', () => {
         const xml = buildStockUpdateXml(
             [{ sellerSku: 'A-1', quantity: 7.9 }, { sellerSku: 'B', quantity: -3 }],
-            OPCIONES,
         );
-        expect(xml.match(/<Product>/g)).toHaveLength(2);
-        expect(xml).toContain('<Stock>7</Stock>');
-        expect(xml).toContain('<Stock>0</Stock>'); // tag() omite vacíos, no ceros
+        expect(xml.match(/<Stock>/g)).toHaveLength(2);
+        expect(xml).toContain('<Quantity>7</Quantity>');
+        expect(xml).toContain('<Quantity>0</Quantity>');
         expect(xml).not.toContain('<Price>');
     });
 
+    it('usa el formato oficial de UpdateStock: Warehouse > Stock > SellerSku + Quantity', () => {
+        expect(buildStockUpdateXml([{ sellerSku: '177-001-316', quantity: 20 }])).toBe(
+            '<?xml version="1.0" encoding="UTF-8"?><Request><Warehouse><Stock><SellerSku>177-001-316</SellerSku><Quantity>20</Quantity></Stock></Warehouse></Request>',
+        );
+    });
+
     it('escapa el SKU para no romper el XML', () => {
-        expect(buildStockUpdateXml([{ sellerSku: 'A&B', quantity: 1 }], OPCIONES)).toContain('A&amp;B');
+        expect(buildStockUpdateXml([{ sellerSku: 'A&B', quantity: 1 }])).toContain('A&amp;B');
     });
 });

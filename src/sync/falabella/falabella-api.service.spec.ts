@@ -120,7 +120,7 @@ describe('actualización de precio y stock', () => {
     it('el stock usa la acción UpdateStock y admite varios SKUs', async () => {
         const { service, spy } = servicioConFeed();
         await service.updateStock(credenciales, [{ sellerSku: 'A', quantity: 2 }, { sellerSku: 'B', quantity: 5 }]);
-        expect(spy).toHaveBeenCalledWith(credenciales, 'UpdateStock', expect.stringContaining('<Stock>5</Stock>'));
+        expect(spy).toHaveBeenCalledWith(credenciales, 'UpdateStock', expect.stringContaining('<Quantity>5</Quantity>'));
     });
 
     it('no envía un lote de stock vacío', async () => {
