@@ -1976,9 +1976,9 @@ export class SyncService implements OnModuleInit {
             return false;
         }
 
-        // En el historial no se consulta el envío de cada venta: son cientos y
-        // ya no hay nada que despachar.
-        const shipment = options.soloRegistro ? null : await this.fetchMeliShipment(connection, order);
+        // También en el historial: el envío trae el nombre real de quien compró
+        // (la venta solo trae su usuario), el método, el seguimiento y la dirección.
+        const shipment = await this.fetchMeliShipment(connection, order);
         const norm = normalizeMeliOrder(order, shipment);
 
         // Persist the sale — feeds the client sales report and orders panel
@@ -2123,7 +2123,12 @@ export class SyncService implements OnModuleInit {
         const existente = await this.orderRepository.findOne({
             where: { marketplace: 'mercadolibre', externalId: String(order.id) },
         });
-        if (!existente || existente.details) return;
+        if (!existente) return;
+        // Se completa si no tiene detalles, o si los tiene pero sin los datos de envío
+        // (las ventas del historial importadas antes de traer el envío).
+        const det: any = existente.details;
+        const sinEnvio = !!det && !!order?.shipping?.id && !det.shipping?.method && !det.shipping?.status && !det.shipping?.address?.line;
+        if (det && !sinEnvio) return;
 
         const norm = normalizeMeliOrder(order, await this.fetchMeliShipment(connection, order));
         await this.orderRepository.update(existente.id, {
@@ -2600,9 +2605,12 @@ export class SyncService implements OnModuleInit {
         for (let offset = 0; ; offset += 50) {
             const { results, total } = await this.meliApi.searchOrdersPage(connection.accessToken, connection.externalUserId, { from: desde, to: hasta, offset });
             if (!results.length) break;
-            for (const orden of results) {
-                if (await this.applyMeliOrderData(connection, orden, { soloRegistro: true })) registradas++;
-                else yaRegistradas++;
+            // De 5 en 5: cada venta consulta su envío y así no se tarda minutos.
+            for (let i = 0; i < results.length; i += 5) {
+                const lote = await Promise.all(
+                    results.slice(i, i + 5).map(orden => this.applyMeliOrderData(connection, orden, { soloRegistro: true })),
+                );
+                for (const nueva of lote) { if (nueva) registradas++; else yaRegistradas++; }
             }
             if (offset + results.length >= total) break;
             if (offset + results.length >= SyncService.HISTORY_MAX_ORDERS) { incompleto = true; break; }

@@ -410,7 +410,22 @@ describe('historial de ventas', () => {
         expect(producto.stock).toBe(20);
         expect(avisos).toHaveLength(0);
         expect(trabajos.filter(t => t.n === 'inventory')).toHaveLength(0);
-        expect(meli.getShipment).not.toHaveBeenCalled();
+        expect(meli.getShipment).toHaveBeenCalledTimes(2); // el envío da el nombre real y la dirección
+    });
+
+    it('completa con el envío las ventas del historial que se importaron sin él', async () => {
+        const { service, meli, ventas } = await construir({ conexiones: [cuenta()] });
+        meli.searchOrdersPage.mockResolvedValue({ results: [ordenMl(1, { buyer: { nickname: 'ME2025' } })], total: 1 });
+        meli.getShipment.mockResolvedValueOnce(null); // primera vez: el envío no respondió
+        await service.importOrderHistory(SCOPE, 90);
+        expect(ventas[0].customerName).toBe('ME2025');
+        expect(ventas[0].details.shipping.method).toBeNull();
+
+        meli.getShipment.mockResolvedValue({ status: 'delivered', tracking_number: 'T1', receiver_address: { receiver_name: 'Rosa Quispe', address_line: 'Av. Lima 123' }, shipping_option: { name: 'Estándar' } });
+        await service.importOrderHistory(SCOPE, 90);
+
+        expect(ventas[0].customerName).toBe('Rosa Quispe');
+        expect(ventas[0].details.shipping).toMatchObject({ method: 'Estándar', trackingCode: 'T1', address: { line: 'Av. Lima 123' } });
     });
 
     it('Mercado Libre: pide solo lo anterior a las últimas 48 horas, que ya cubre la consulta normal', async () => {
