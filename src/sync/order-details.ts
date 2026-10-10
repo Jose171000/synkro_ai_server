@@ -1,3 +1,5 @@
+import { limpiarSkuMeli } from './meli/meli-listings';
+
 /**
  * Convierte lo que entrega cada canal sobre una venta en un formato común,
  * para poder mostrarla igual venga de donde venga: quién compró, cuánto pagó,
@@ -220,7 +222,7 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
         texto(comprador?.nickname);
 
     const lines: OrderLine[] = (order?.order_items ?? []).map((i: any) => ({
-        sku: texto(i?.item?.seller_sku) ?? texto(i?.item?.seller_custom_field),
+        sku: limpiarSkuMeli(texto(i?.item?.seller_sku) ?? texto(i?.item?.seller_custom_field)),
         title: texto(i?.item?.title) ?? 'Producto',
         quantity: numero(i?.quantity) ?? 1,
         unitPrice: numero(i?.unit_price) ?? 0,

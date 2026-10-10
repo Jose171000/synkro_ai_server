@@ -42,10 +42,21 @@ const numero = (v: any): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * Mercado Libre (o las herramientas que publican en él) añade a veces un código
+ * propio al final del SKU: «140-001-271_AZUL__32141126». El SKU real es lo que
+ * hay antes del «__<números>».
+ */
+export function limpiarSkuMeli(sku: string | null | undefined): string | null {
+    const s = texto(sku);
+    if (!s) return null;
+    return s.replace(/__\d+$/, '') || s;
+}
+
 /** El SKU puede estar en el campo antiguo o en el atributo SELLER_SKU. */
 function skuDe(origen: any): string | null {
     const atributo = (origen?.attributes ?? []).find((a: any) => a?.id === 'SELLER_SKU');
-    return texto(origen?.seller_custom_field) ?? texto(atributo?.value_name);
+    return limpiarSkuMeli(texto(origen?.seller_custom_field) ?? texto(atributo?.value_name));
 }
 
 /** Estado de Synkro a partir del de Mercado Libre. */

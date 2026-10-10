@@ -1,4 +1,4 @@
-import { estadoDeItemMeli, filasDeItemMeli } from './meli-listings';
+import { estadoDeItemMeli, filasDeItemMeli, limpiarSkuMeli } from './meli-listings';
 
 /**
  * Las publicaciones de Mercado Libre se leen «una fila por SKU». Lo que se
@@ -106,5 +106,21 @@ describe('estado de la publicación', () => {
         [{ status: 'paused', sub_status: ['forbidden'] }, 'error'],
     ])('%j → %s', (item, esperado) => {
         expect(estadoDeItemMeli(item)).toBe(esperado);
+    });
+});
+
+describe('SKU con código extra de Mercado Libre', () => {
+    it('quita el «__números» del final y deja el SKU real', () => {
+        expect(limpiarSkuMeli('140-001-271_AZUL__32141126')).toBe('140-001-271_AZUL');
+        expect(limpiarSkuMeli('REL-01')).toBe('REL-01');
+        expect(limpiarSkuMeli('A__B')).toBe('A__B');
+        expect(limpiarSkuMeli('__123')).toBe('__123');
+        expect(limpiarSkuMeli(null)).toBeNull();
+    });
+
+    it('las filas importadas usan el SKU limpio, también en variantes', () => {
+        expect(filasDeItemMeli({ ...simple, seller_custom_field: 'X_AZUL__32141126' }).rows[0].sku).toBe('X_AZUL');
+        const v = filasDeItemMeli({ ...simple, seller_custom_field: null, variations: [{ id: 1, available_quantity: 1, seller_custom_field: 'P-S__999' }] });
+        expect(v.rows[0].sku).toBe('P-S');
     });
 });
