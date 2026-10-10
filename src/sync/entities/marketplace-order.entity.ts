@@ -48,6 +48,21 @@ export class MarketplaceOrder {
     @Column({ type: 'varchar', length: 30, default: 'paid' })
     status: string;
 
+    /** Número de pedido tal como lo ve el cliente en el canal. */
+    @Column({ type: 'varchar', nullable: true })
+    orderNumber: string | null;
+
+    @Column({ type: 'varchar', nullable: true })
+    customerName: string | null;
+
+    /** Fecha máxima para despachar la venta. */
+    @Column({ type: 'timestamptz', nullable: true })
+    shipByDate: Date | null;
+
+    /** Cliente, envío, pago y notas, en un formato común a todos los canales. */
+    @Column({ type: 'jsonb', nullable: true })
+    details: any | null;
+
     @Column({ type: 'timestamptz' })
     orderDate: Date;
 

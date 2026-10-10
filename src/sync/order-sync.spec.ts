@@ -50,7 +50,8 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
     const repoVentas = {
         findOne: jest.fn(async ({ where }: any) => ventas.find(v => v.externalId === where.externalId) ?? null),
         create: jest.fn((d: any) => ({ ...d })),
-        save: jest.fn(async (v: any) => { ventas.push(v); return v; }),
+        save: jest.fn(async (v: any) => { v.id = v.id ?? `venta-${ventas.length + 1}`; ventas.push(v); return v; }),
+        update: jest.fn(async (id: string, datos: any) => { Object.assign(ventas.find(x => x.id === id) ?? {}, datos); }),
     };
     const repoProductos = {
         findOne: jest.fn(async () => producto),
@@ -70,7 +71,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
         getOrders: jest.fn().mockResolvedValue([]),
         getOrderItems: jest.fn().mockResolvedValue([]),
     };
-    const meli = { searchOrders: jest.fn().mockResolvedValue([]), getOrder: jest.fn(), refreshTokens: jest.fn() };
+    const meli = { searchOrders: jest.fn().mockResolvedValue([]), getOrder: jest.fn(), refreshTokens: jest.fn(), getShipment: jest.fn().mockResolvedValue(null) };
 
     const modulo = await Test.createTestingModule({
         providers: [
@@ -136,6 +137,59 @@ describe('ventas de Falabella', () => {
     });
 });
 
+describe('detalle de cada venta', () => {
+    const pedidoCompleto = {
+        ...pedidoFalabella, CustomerFirstName: 'Lucía', CustomerLastName: 'Paredes', PromisedShippingTime: '2026-10-12 23:59:59',
+        AddressShipping: { City: 'Surco', Region: 'Lima', Country: 'Perú' },
+    };
+
+    it('guarda el cliente, el número de pedido y la fecha máxima de envío', async () => {
+        const { service, ventas, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([pedidoCompleto]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(ventas[0]).toMatchObject({ orderNumber: '9001', customerName: 'Lucía Paredes' });
+        expect(ventas[0].shipByDate.toISOString()).toBe('2026-10-13T04:59:59.000Z');
+        expect(ventas[0].details.shipping.address.city).toBe('Surco');
+    });
+
+    it('cada línea recuerda el stock de antes y de después de la venta', async () => {
+        const { service, ventas, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([pedidoCompleto]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(ventas[0].items[0]).toMatchObject({ sku: 'SKU-1', unitPrice: 50, stockBefore: 5, stockAfter: 4, productId: 'p1' });
+    });
+
+    it('una venta guardada sin detalles se completa sin volver a tocar el stock', async () => {
+        const { service, ventas, producto, falabella } = await construir();
+        ventas.push({ id: 'vieja', marketplace: 'falabella', externalId: '100', currency: 'PEN', details: null, items: [] });
+        falabella.getOrders.mockResolvedValue([pedidoCompleto]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+
+        const r = await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(r).toMatchObject({ nuevos: 0, repetidos: 1, completados: 1 });
+        expect(ventas[0].customerName).toBe('Lucía Paredes');
+        expect(producto.stock).toBe(5);
+    });
+
+    it('una venta que ya tiene detalles no se vuelve a consultar', async () => {
+        const { service, ventas, falabella } = await construir();
+        ventas.push({ id: 'ok', marketplace: 'falabella', externalId: '100', currency: 'PEN', details: { x: 1 }, items: [] });
+        falabella.getOrders.mockResolvedValue([pedidoCompleto]);
+
+        const r = await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(r.completados).toBe(0);
+        expect(falabella.getOrderItems).not.toHaveBeenCalled();
+    });
+});
+
 describe('ventas de Mercado Libre', () => {
     const cuentaMl = cuenta({ id: 'ml1', marketplace: 'mercadolibre', externalUserId: '555' });
     const orden = (over: any = {}) => ({
@@ -164,6 +218,49 @@ describe('ventas de Mercado Libre', () => {
 
         expect(segunda.nuevos).toBe(0);
         expect(producto.stock).toBe(3);
+    });
+
+    it('trae el envío de la venta y guarda la fecha límite, el comprador y el stock de después', async () => {
+        const { service, ventas, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({
+            buyer: { first_name: 'Mario', last_name: 'Vega' }, shipping: { id: 4455 },
+        })]);
+        meli.getShipment.mockResolvedValue({
+            status: 'ready_to_ship', shipping_option: { estimated_handling_limit: { date: '2026-10-11T23:59:00.000-05:00' } },
+            receiver_address: { city: { name: 'Miraflores' } },
+        });
+
+        await service.pollMeliOrders('ml1');
+
+        expect(meli.getShipment).toHaveBeenCalledWith('clave', '4455');
+        expect(ventas[0]).toMatchObject({ customerName: 'Mario Vega', orderNumber: '777' });
+        expect(ventas[0].shipByDate.toISOString()).toBe('2026-10-12T04:59:00.000Z');
+        expect(ventas[0].items[0]).toMatchObject({ sku: 'SKU-1', quantity: 2, unitPrice: 50, stockBefore: 5, stockAfter: 3 });
+    });
+
+    it('si falla la consulta del envío, la venta se registra y el stock baja igual', async () => {
+        const { service, ventas, producto, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({ shipping: { id: 4455 } })]);
+        meli.getShipment.mockRejectedValue(new Error('403'));
+
+        const r = await service.pollMeliOrders('ml1');
+
+        expect(r.nuevos).toBe(1);
+        expect(ventas).toHaveLength(1);
+        expect(producto.stock).toBe(3);
+    });
+
+    it('una venta ya aplicada pero sin detalles se completa en la siguiente consulta', async () => {
+        const { service, ventas, producto, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({ buyer: { first_name: 'Mario', last_name: 'Vega' } })]);
+        await service.pollMeliOrders('ml1');
+        ventas[0].details = null; // como una guardada antes de existir los detalles
+        ventas[0].customerName = null;
+
+        await service.pollMeliOrders('ml1');
+
+        expect(ventas[0].customerName).toBe('Mario Vega');
+        expect(producto.stock).toBe(3); // no se descontó de nuevo
     });
 
     it('una venta sin pagar no mueve el stock', async () => {

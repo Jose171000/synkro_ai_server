@@ -20,6 +20,7 @@ import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
+import { normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
@@ -37,6 +38,13 @@ const LOW_STOCK_THRESHOLD = 5;
 
 /** Cuántas cuentas del mismo canal admite una tienda. */
 export const MAX_ACCOUNTS_PER_MARKETPLACE = 3;
+
+/** Cómo quedó el stock de un producto tras una venta. */
+interface StockEffect {
+    productId: string;
+    stockBefore: number;
+    stockAfter: number;
+}
 
 /** Quién actúa y en qué tienda: todo lo que toca canales se hace dentro de una tienda. */
 export interface SyncScope {
@@ -1733,6 +1741,7 @@ export class SyncService implements OnModuleInit {
 
         let nuevos = 0;
         let repetidos = 0;
+        let completados = 0;
 
         for (const pedido of pedidos) {
             const externalId = String((pedido as any).OrderId ?? '');
@@ -1741,43 +1750,68 @@ export class SyncService implements OnModuleInit {
             const yaRegistrado = await this.orderRepository.findOne({
                 where: { marketplace: 'falabella', externalId },
             });
-            if (yaRegistrado) { repetidos++; continue; }
+            if (yaRegistrado) {
+                repetidos++;
+                // Ventas guardadas antes de que se registraran sus detalles
+                // (cliente, envío...): se completan sin tocar el stock.
+                if (!yaRegistrado.details) {
+                    const lineas = await this.falabellaApi.getOrderItems(credentials, externalId);
+                    const norm = normalizeFalabellaOrder(pedido, lineas, yaRegistrado.currency);
+                    await this.orderRepository.update(yaRegistrado.id, {
+                        orderNumber: norm.orderNumber,
+                        customerName: norm.customerName,
+                        shipByDate: norm.shipByDate,
+                        details: norm.details as any,
+                        items: norm.lines as any,
+                    });
+                    completados++;
+                }
+                continue;
+            }
 
             const items = await this.falabellaApi.getOrderItems(credentials, externalId);
+            // Falabella no siempre manda la moneda; si no viene, se usa la
+            // del país de envío y, en último caso, la guardada al conectar.
+            const moneda = resolverMoneda(
+                (pedido as any).Currency,
+                monedaDePais((pedido as any).AddressShipping?.Country),
+                monedaCuenta,
+            );
+            const norm = normalizeFalabellaOrder(pedido, items, moneda);
 
-            await this.orderRepository.save(this.orderRepository.create({
+            const guardada = await this.orderRepository.save(this.orderRepository.create({
                 marketplace: 'falabella',
                 externalId,
                 owner: { id: userId } as any,
                 store: connection.store ? ({ id: connection.store.id } as any) : null,
                 connection: { id: connection.id } as any,
                 totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
-                // Falabella no siempre manda la moneda; si no viene, se usa la
-                // del país de envío y, en último caso, la guardada al conectar.
-                currency: resolverMoneda(
-                    (pedido as any).Currency,
-                    monedaDePais((pedido as any).AddressShipping?.Country),
-                    monedaCuenta,
-                ),
+                currency: moneda,
                 itemsCount: Number((pedido as any).ItemsCount ?? items.length ?? 1),
-                items: items.map(i => ({
-                    sku: i.Sku ?? null,
-                    title: i.Name,
-                    quantity: 1, // Falabella devuelve una línea por unidad vendida
-                    unitPrice: Number(i.PaidPrice ?? i.ItemPrice ?? 0),
-                })),
+                items: norm.lines,
+                orderNumber: norm.orderNumber,
+                customerName: norm.customerName,
+                shipByDate: norm.shipByDate,
+                details: norm.details as any,
                 status: String((pedido as any).Statuses?.Status ?? 'pending'),
                 orderDate: (pedido as any).CreatedAt ? new Date((pedido as any).CreatedAt) : new Date(),
             }));
             nuevos++;
 
-            await this.aplicarVentaFalabella(userId, connection, externalId, items, pedido);
+            // El stock que había antes y el que quedó después de ESTA venta se
+            // guardan en cada línea: es lo que permite auditar la venta luego.
+            const efectos = await this.aplicarVentaFalabella(userId, connection, externalId, items, pedido);
+            if (efectos.some(Boolean)) {
+                await this.orderRepository.update(guardada.id, {
+                    items: norm.lines.map((l, i) => (efectos[i] ? { ...l, ...efectos[i] } : l)) as any,
+                });
+            }
         }
 
         if (nuevos) {
             console.log(`[Sync] Falabella: ${nuevos} pedidos nuevos, ${repetidos} ya registrados.`);
         }
-        return { nuevos, repetidos, revisados: pedidos.length };
+        return { nuevos, repetidos, revisados: pedidos.length, completados };
     }
 
     /** Descuenta stock y avisa por cada línea vendida en Falabella. */
@@ -1787,11 +1821,12 @@ export class SyncService implements OnModuleInit {
         orderId: string,
         items: any[],
         pedido: any,
-    ): Promise<void> {
+    ): Promise<(StockEffect | null)[]> {
         const storeId = connection.store?.id;
+        const efectos: (StockEffect | null)[] = [];
         for (const item of items) {
             const sku = item?.Sku;
-            if (!sku) continue;
+            if (!sku) { efectos.push(null); continue; }
 
             // El producto de la tienda de esta cuenta; si es anterior a las
             // tiendas (sin tienda asignada), el del dueño.
@@ -1802,11 +1837,14 @@ export class SyncService implements OnModuleInit {
             });
             if (!product) {
                 console.warn(`[Sync] Venta Falabella ${orderId}: SKU ${sku} no está en el catálogo.`);
+                efectos.push(null);
                 continue;
             }
 
-            product.stock = Math.max(0, product.stock - 1);
+            const stockAntes = product.stock;
+            product.stock = Math.max(0, stockAntes - 1);
             await this.productRepository.save(product);
+            efectos.push({ productId: product.id, stockBefore: stockAntes, stockAfter: product.stock });
 
             await this.notifications.notify(userId, {
                 type: 'sale',
@@ -1846,6 +1884,7 @@ export class SyncService implements OnModuleInit {
                 });
             }
         }
+        return efectos;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1906,11 +1945,19 @@ export class SyncService implements OnModuleInit {
         // Idempotency: never apply the same order twice to the same account (webhooks can repeat)
         const dedupeKey = `meli:order-applied:${connection.id}:${orderId}`;
         const firstTime = await this.redis.set(dedupeKey, '1', 'EX', 60 * 60 * 24 * 30, 'NX');
-        if (!firstTime) return false;
+        if (!firstTime) {
+            // Ya aplicada: si se guardó antes de registrar sus detalles, se completan.
+            await this.completeMeliOrderDetails(connection, order);
+            return false;
+        }
+
+        const shipment = await this.fetchMeliShipment(connection, order);
+        const norm = normalizeMeliOrder(order, shipment);
 
         // Persist the sale — feeds the client sales report and orders panel
+        let guardada: MarketplaceOrder | null = null;
         try {
-            await this.orderRepository.save(this.orderRepository.create({
+            guardada = await this.orderRepository.save(this.orderRepository.create({
                 marketplace: 'mercadolibre',
                 externalId: String(orderId),
                 owner: { id: userId } as any,
@@ -1919,12 +1966,11 @@ export class SyncService implements OnModuleInit {
                 totalAmount: Number(order.total_amount || 0),
                 currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
-                items: (order.order_items || []).map((i: any) => ({
-                    sku: i?.item?.seller_sku || null,
-                    title: i?.item?.title,
-                    quantity: Number(i?.quantity || 0),
-                    unitPrice: Number(i?.unit_price || 0),
-                })),
+                items: norm.lines,
+                orderNumber: norm.orderNumber,
+                customerName: norm.customerName,
+                shipByDate: norm.shipByDate,
+                details: norm.details as any,
                 status: order.status,
                 orderDate: order.date_closed ? new Date(order.date_closed) : new Date(),
             }));
@@ -1932,6 +1978,8 @@ export class SyncService implements OnModuleInit {
             // UQ violation = ya registrada (carrera entre webhooks) — seguir sin romper
             console.warn(`[Sync] Orden ${orderId} no persistida: ${error?.message}`);
         }
+
+        const efectos: Record<string, StockEffect> = {};
 
         for (const orderItem of order.order_items || []) {
             const externalId = orderItem?.item?.id;
@@ -1945,8 +1993,10 @@ export class SyncService implements OnModuleInit {
             if (!link) continue;
 
             const product = link.product;
-            product.stock = Math.max(0, product.stock - quantity);
+            const stockAntes = product.stock;
+            product.stock = Math.max(0, stockAntes - quantity);
             await this.productRepository.save(product);
+            efectos[String(externalId)] = { productId: product.id, stockBefore: stockAntes, stockAfter: product.stock };
             console.log(`[Sync] Venta ML ${orderId}: ${quantity}x ${product.sku} → stock ${product.stock}`);
 
             await this.notifications.notify(userId, {
@@ -1999,7 +2049,43 @@ export class SyncService implements OnModuleInit {
                 });
             }
         }
+
+        // Cada línea recuerda el stock de antes y de después de esta venta.
+        if (guardada && Object.keys(efectos).length) {
+            await this.orderRepository.update(guardada.id, {
+                items: norm.lines.map(l => (l.channelItemId && efectos[l.channelItemId] ? { ...l, ...efectos[l.channelItemId] } : l)) as any,
+            });
+        }
         return true;
+    }
+
+    /** Datos de envío de una venta de Mercado Libre. Si fallan, la venta se registra igual. */
+    private async fetchMeliShipment(connection: MarketplaceConnection, order: any): Promise<any | null> {
+        const id = order?.shipping?.id;
+        if (!id) return null;
+        try {
+            return await this.meliApi.getShipment(connection.accessToken, String(id));
+        } catch (error: any) {
+            console.warn(`[Sync] Envío ${id} de la venta ${order?.id}: ${error?.message}`);
+            return null;
+        }
+    }
+
+    /** Completa los detalles de una venta de Mercado Libre guardada antes de que existieran. */
+    private async completeMeliOrderDetails(connection: MarketplaceConnection, order: any): Promise<void> {
+        const existente = await this.orderRepository.findOne({
+            where: { marketplace: 'mercadolibre', externalId: String(order.id) },
+        });
+        if (!existente || existente.details) return;
+
+        const norm = normalizeMeliOrder(order, await this.fetchMeliShipment(connection, order));
+        await this.orderRepository.update(existente.id, {
+            orderNumber: norm.orderNumber,
+            customerName: norm.customerName,
+            shipByDate: norm.shipByDate,
+            details: norm.details as any,
+            items: norm.lines as any,
+        });
     }
 
     // ─────────────────────────────────────────────────────────────

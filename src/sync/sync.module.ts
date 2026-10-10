@@ -16,6 +16,7 @@ import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { SyncChangeRequest } from './entities/sync-change-request.entity';
 import { ChangeRequestsService } from './change-requests.service';
+import { OrdersQueryService } from './orders-query.service';
 import { StoresModule } from '../stores/stores.module';
 import { Store } from '../stores/entities/store.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -29,7 +30,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService],
 })
 export class SyncModule { }

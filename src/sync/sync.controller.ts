@@ -14,6 +14,7 @@ import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
 import { ChangeRequestsService } from './change-requests.service';
+import { OrdersQueryService } from './orders-query.service';
 
 /** Quién actúa y en qué tienda: la tienda la fija StoreAccessGuard tras comprobar el acceso. */
 const scopeOf = (req: any): SyncScope => ({ userId: req.user.id, storeId: req.store.storeId });
@@ -32,6 +33,7 @@ export class SyncController {
     constructor(
         private readonly syncService: SyncService,
         private readonly changeRequests: ChangeRequestsService,
+        private readonly ordersQuery: OrdersQueryService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -332,6 +334,49 @@ export class SyncController {
     syncFalabellaOrders(@Req() req, @Query('connectionId') connectionId?: string) {
         const scope = scopeOf(req);
         return this.syncService.processFalabellaOrders({ userId: scope.userId, storeId: scope.storeId, connectionId });
+    }
+
+    @Get('orders')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({
+        summary: 'Ventas de la tienda, con cliente, envío, precio pagado y stock',
+        description:
+            'Cada venta con sus líneas: SKU, nombre, precio pagado, stock después de la venta, stock actual y foto. ' +
+            'Quien solo tiene lectura no ve los datos de contacto del comprador.',
+    })
+    @ApiQuery({ name: 'from', required: false, example: '2026-10-01' })
+    @ApiQuery({ name: 'to', required: false, example: '2026-10-31' })
+    @ApiQuery({ name: 'marketplace', required: false })
+    @ApiQuery({ name: 'connectionId', required: false })
+    @ApiQuery({ name: 'search', required: false, description: 'Cliente, número de pedido, SKU o nombre.' })
+    @ApiQuery({ name: 'limit', required: false })
+    @ApiQuery({ name: 'offset', required: false })
+    listOrders(
+        @Req() req,
+        @Query('from') from?: string,
+        @Query('to') to?: string,
+        @Query('marketplace') marketplace?: string,
+        @Query('connectionId') connectionId?: string,
+        @Query('search') search?: string,
+        @Query('limit') limit?: string,
+        @Query('offset') offset?: string,
+    ) {
+        return this.ordersQuery.list(scopeOf(req).storeId, req.store.role, {
+            from, to, marketplace, connectionId, search,
+            limit: limit ? Number(limit) : undefined,
+            offset: offset ? Number(offset) : undefined,
+        });
+    }
+
+    @Get('orders/:id')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({ summary: 'Detalle de una venta: cliente, envío, pago y líneas' })
+    getOrder(@Param('id') id: string, @Req() req) {
+        return this.ordersQuery.detail(scopeOf(req).storeId, req.store.role, id);
     }
 
     @Post('orders/sync')

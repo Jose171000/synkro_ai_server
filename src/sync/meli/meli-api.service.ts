@@ -185,6 +185,14 @@ export class MeliApiService {
         return Array.isArray(data?.results) ? data.results : [];
     }
 
+    /** Datos de envío de una venta: estado, seguimiento, dirección y fecha límite de despacho. */
+    async getShipment(accessToken: string, shipmentId: string): Promise<any> {
+        const { data } = await this.http.get(`/shipments/${shipmentId}`, {
+            headers: { Authorization: `Bearer ${accessToken}`, 'x-format-new': 'true' },
+        });
+        return data;
+    }
+
     async getOrder(accessToken: string, orderId: string): Promise<any> {
         const { data } = await this.http.get(`/orders/${orderId}`, {
             headers: { Authorization: `Bearer ${accessToken}` },
