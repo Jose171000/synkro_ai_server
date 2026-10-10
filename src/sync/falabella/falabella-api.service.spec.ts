@@ -123,6 +123,19 @@ describe('actualización de precio y stock', () => {
         expect(spy).toHaveBeenCalledWith(credenciales, 'UpdateStock', expect.stringContaining('<Quantity>5</Quantity>'));
     });
 
+    it('lee el identificador del lote de UpdateStock (Body.Stocks.feed) y el de las demás acciones (RequestId)', async () => {
+        const service = new FalabellaApiService();
+        const raw = jest.spyOn(service as any, 'postFeedRaw');
+        raw.mockResolvedValueOnce({ SuccessResponse: { Head: { RequestId: '', RequestAction: 'UpdateStock' }, Body: { Stocks: { feed: ' 0c0ff17b-281f ' } } } });
+        await expect(service.updateStock(credenciales, [{ sellerSku: 'A', quantity: 1 }])).resolves.toBe('0c0ff17b-281f');
+        raw.mockResolvedValueOnce({ SuccessResponse: { Head: { RequestId: 'req-9' }, Body: {} } });
+        await expect(service.updatePrice(credenciales, 'A', 10)).resolves.toBe('req-9');
+        raw.mockResolvedValueOnce('<SuccessResponse><Body><Stocks><feed> abc-1 </feed></Stocks></Body></SuccessResponse>');
+        await expect(service.updateStock(credenciales, [{ sellerSku: 'A', quantity: 1 }])).resolves.toBe('abc-1');
+        raw.mockResolvedValueOnce({ SuccessResponse: { Head: {}, Body: {} } });
+        await expect(service.updateStock(credenciales, [{ sellerSku: 'A', quantity: 1 }])).rejects.toThrow(/identificador del lote/);
+    });
+
     it('no envía un lote de stock vacío', async () => {
         const { service } = servicioConFeed();
         await expect(service.updateStock(credenciales, [])).rejects.toThrow();

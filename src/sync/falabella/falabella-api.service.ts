@@ -174,6 +174,17 @@ export function preciosDeUnidad(
 }
 
 /** Imágenes de una ficha, la principal primero y sin repetidas. */
+/** Busca el identificador del lote (clave «feed» o «FeedId») en cualquier nivel del cuerpo. */
+function buscarFeed(nodo: any, profundidad = 0): string | null {
+    if (!nodo || typeof nodo !== 'object' || profundidad > 4) return null;
+    for (const [clave, valor] of Object.entries(nodo)) {
+        if ((clave === 'feed' || clave === 'FeedId') && typeof valor === 'string' && valor.trim()) return valor.trim();
+        const hallado = buscarFeed(valor, profundidad + 1);
+        if (hallado) return hallado;
+    }
+    return null;
+}
+
 export function imagenesDeFicha(producto: FalabellaProduct): string[] {
     const lista = producto?.Images?.Image;
     const todas = [producto?.MainImage, ...(Array.isArray(lista) ? lista : lista ? [lista] : [])]
@@ -339,10 +350,11 @@ export class FalabellaApiService {
      */
     private extractFeedId(data: any): string {
         if (typeof data === 'string') {
-            const match = data.match(/<RequestId>([^<]+)<\/RequestId>/);
+            const match = data.match(/<RequestId>([^<]+)<\/RequestId>/) ?? data.match(/<feed>\s*([^<\s]+)\s*<\/feed>/);
             if (match) return match[1];
         }
-        const id = data?.SuccessResponse?.Head?.RequestId;
+        // UpdateStock no usa RequestId: devuelve el lote en Body.Stocks.feed.
+        const id = data?.SuccessResponse?.Head?.RequestId || buscarFeed(data?.SuccessResponse?.Body);
         if (!id) {
             throw new ServiceUnavailableException(
                 'Falabella aceptó el envío pero no devolvió el identificador del lote, así que no se puede seguir su estado.',
