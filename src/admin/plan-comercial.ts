@@ -73,19 +73,89 @@ export function avanzarVencimiento(vencimientoActual: string | null | undefined,
     return siguiente;
 }
 
-/** Comisión acumulada a la fecha y proyección a fin de mes con el ritmo de ventas actual. */
-export function comisionDelMes(ventasMes: number, tasa: number | null | undefined, hoy: string): {
-    acumulada: number;
-    proyectada: number | null;
-} {
+/** IGV de Perú. Se puede cambiar con IGV_PERCENT sin tocar el código. */
+export const IGV_PORCENTAJE = Number(process.env.IGV_PERCENT) > 0 ? Number(process.env.IGV_PERCENT) : 18;
+
+/** Un importe desglosado: lo pactado, sin IGV, el IGV y el total con IGV. */
+export interface Importe {
+    /** Lo que se pactó (con o sin IGV, según `incluyeIgv`). */
+    pactado: number;
+    incluyeIgv: boolean;
+    subtotal: number;
+    igv: number;
+    total: number;
+}
+
+/**
+ * Desglosa un monto: si lo pactado ya incluye IGV, el subtotal es el monto
+ * entre 1.18; si el IGV va aparte, se le suma. Siempre devuelve las tres cifras.
+ */
+export function desglosarIgv(monto: number | null | undefined, incluyeIgv: boolean): Importe {
+    const pactado = redondear(Math.max(0, Number(monto ?? 0)));
+    const factor = 1 + IGV_PORCENTAJE / 100;
+    const subtotal = incluyeIgv ? redondear(pactado / factor) : pactado;
+    const total = incluyeIgv ? pactado : redondear(pactado * factor);
+    return { pactado, incluyeIgv, subtotal, igv: redondear(total - subtotal), total };
+}
+
+/** Suma varios importes ya desglosados (cuota + comisión). */
+export function sumarImportes(...importes: (Importe | null | undefined)[]): { subtotal: number; igv: number; total: number } {
+    const lista = importes.filter((i): i is Importe => !!i);
+    return {
+        subtotal: redondear(lista.reduce((s, i) => s + i.subtotal, 0)),
+        igv: redondear(lista.reduce((s, i) => s + i.igv, 0)),
+        total: redondear(lista.reduce((s, i) => s + i.total, 0)),
+    };
+}
+
+export interface CicloDeCobro {
+    /** Primer día contado (YYYY-MM-DD). */
+    desde: string;
+    /** Fecha de cobro: el ciclo termina ahí. */
+    hasta: string;
+    /** false cuando no hay fecha pactada y se usa el mes calendario. */
+    conFechaPactada: boolean;
+}
+
+/**
+ * El ciclo de cobro: de una fecha de cobro a la siguiente. Termina en el próximo
+ * cobro y empieza un periodo antes (o cuando arrancó el plan, si fue después).
+ * Sin fecha de cobro se usa el mes calendario.
+ */
+export function cicloDeCobro(
+    proximoPago: string | null | undefined,
+    frecuencia: Frecuencia | string | null | undefined,
+    inicioDelPlan: string | null | undefined,
+    hoy: string,
+): CicloDeCobro {
+    if (proximoPago) {
+        const pasos = MESES[frecuencia as Frecuencia] ?? 1;
+        let desde = sumarMeses(proximoPago, -pasos);
+        if (inicioDelPlan && inicioDelPlan > desde) desde = inicioDelPlan;
+        return { desde, hasta: proximoPago, conFechaPactada: true };
+    }
+    const desde = `${hoy.slice(0, 7)}-01`;
+    return { desde, hasta: sumarMeses(desde, 1), conFechaPactada: false };
+}
+
+/**
+ * Comisión que se lleva acumulada en el ciclo y lo que sumaría al llegar a la
+ * fecha de cobro con el ritmo actual. Las ventas son solo precio de productos.
+ */
+export function comisionDelCiclo(
+    ventasDelCiclo: number,
+    tasa: number | null | undefined,
+    ciclo: Pick<CicloDeCobro, 'desde' | 'hasta'>,
+    hoy: string,
+): { acumulada: number; proyectada: number | null } {
     const rate = Number(tasa ?? 0);
     if (!(rate > 0)) return { acumulada: 0, proyectada: null };
-    const acumulada = redondear((Number(ventasMes) * rate) / 100);
-    const [a, m, d] = hoy.split('-').map(Number);
-    const diasDelMes = new Date(Date.UTC(a, m, 0)).getUTCDate();
-    // En los primeros días el ritmo no dice nada: se proyecta solo desde el tercero.
-    if (d < 3 || ventasMes <= 0) return { acumulada, proyectada: null };
-    return { acumulada, proyectada: redondear((acumulada / d) * diasDelMes) };
+    const acumulada = redondear((Number(ventasDelCiclo) * rate) / 100);
+    const transcurridos = diasEntre(ciclo.desde, hoy) + 1;
+    const total = diasEntre(ciclo.desde, ciclo.hasta);
+    // Con el ciclo ya cerrado, o en sus primeros días, el ritmo no dice nada.
+    if (hoy >= ciclo.hasta || transcurridos < 3 || total <= 0 || ventasDelCiclo <= 0) return { acumulada, proyectada: null };
+    return { acumulada, proyectada: redondear((acumulada / transcurridos) * total) };
 }
 
 export interface PlanEntrada {
@@ -98,6 +168,9 @@ export interface PlanEntrada {
     /** Ventas de cada uno de los últimos 3 meses completos, del más reciente al más antiguo. */
     ventasMesesAnteriores: number[];
     moneda: string;
+    /** Si la cuota y la comisión pactadas ya incluyen IGV: la propuesta compara siempre sin IGV. */
+    cuotaIncluyeIgv?: boolean;
+    comisionIncluyeIgv?: boolean;
 }
 
 export interface Escenario {
@@ -140,10 +213,10 @@ export function proponerPlan(e: PlanEntrada): Propuesta {
     }
 
     const escenarios: Escenario[] = [];
-    const cuota = mensualizar(e.cuotaFija, e.frecuencia);
+    const cuota = mensualizar(desglosarIgv(e.cuotaFija, !!e.cuotaIncluyeIgv).subtotal, e.frecuencia);
     if (cuota > 0) escenarios.push({ modelo: 'fijo', etiqueta: 'Cuota fija', costoMensual: cuota });
     if (e.tasa && e.tasa > 0 && ventasPromedio > 0) {
-        escenarios.push({ modelo: 'comision', etiqueta: `Comisión del ${e.tasa}%`, costoMensual: redondear((ventasPromedio * e.tasa) / 100) });
+        escenarios.push({ modelo: 'comision', etiqueta: `Comisión del ${e.tasa}%`, costoMensual: desglosarIgv(redondear((ventasPromedio * e.tasa) / 100), !!e.comisionIncluyeIgv).subtotal });
     }
 
     const base = (titulo: string, recomendacion: Propuesta['recomendacion'], cuerpo: string): Propuesta => ({
@@ -163,7 +236,7 @@ export function proponerPlan(e: PlanEntrada): Propuesta {
     const fijo = escenarios.find(s => s.modelo === 'fijo');
     const comision = escenarios.find(s => s.modelo === 'comision');
     const tendenciaTxt = tendencia === 'sube' ? ' Sus ventas van en alza.' : tendencia === 'baja' ? ' Sus ventas han bajado.' : '';
-    const ventasTxt = `En promedio vende ${dinero(ventasPromedio, e.moneda)} al mes.${tendenciaTxt}`;
+    const ventasTxt = `En promedio vende ${dinero(ventasPromedio, e.moneda)} al mes en productos.${tendenciaTxt}`;
 
     if (e.modelo === 'ninguno' || (!fijo && !comision)) {
         const sugerido = redondear(Math.round(((ventasPromedio * 0.05) / 10)) * 10);

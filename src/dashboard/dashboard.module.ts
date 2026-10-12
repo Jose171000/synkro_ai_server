@@ -12,6 +12,7 @@ import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { Payment } from '../admin/entities/payment.entity';
 import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
 import { SyncChangeRequest } from '../sync/entities/sync-change-request.entity';
+import { Store } from '../stores/entities/store.entity';
 import { DashboardInsightsService } from './dashboard-insights.service';
 import { StoresModule } from '../stores/stores.module';
 
@@ -19,7 +20,7 @@ import { StoresModule } from '../stores/stores.module';
     imports: [
         TypeOrmModule.forFeature([
             MarketplaceConnection, ListingLink, MarketplaceOrder,
-            Product, Notification, User, ClientProfile, Payment, MonthlyBilling, SyncChangeRequest,
+            Product, Notification, User, ClientProfile, Payment, MonthlyBilling, SyncChangeRequest, Store,
         ]),
         StoresModule,
     ],

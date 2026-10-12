@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
@@ -9,13 +9,21 @@ import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { Payment } from '../admin/entities/payment.entity';
 import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
+import { Store } from '../stores/entities/store.entity';
+import { DashboardService } from './dashboard.service';
 import {
-    comisionDelMes,
+    CicloDeCobro,
+    cicloDeCobro,
+    comisionDelCiclo,
+    desglosarIgv,
     estadoDePago,
     hoyEnLima,
+    IGV_PORCENTAJE,
+    Importe,
     mensualizar,
     ModeloDeCobro,
     proponerPlan,
+    sumarImportes,
 } from '../admin/plan-comercial';
 
 /** Un producto con pocas unidades frente a su ritmo de venta: se avisa con estos días de margen. */
@@ -31,46 +39,80 @@ export function inicioDeMesLima(hoy: string, desplazamiento = 0): Date {
     return new Date(Date.UTC(a, m - 1 + desplazamiento, 1, 5, 0, 0));
 }
 
+/** 00:00 de ese día en Lima (UTC-5), como instante. */
+export function limaMedianoche(dia: string): Date {
+    return new Date(`${dia}T05:00:00.000Z`);
+}
+
 /** Resumen del plan comercial tal como lo ve el cliente (y la agencia). */
 export interface ResumenDePlan {
     modelo: ModeloDeCobro;
     moneda: string;
-    cuotaFija: number | null;
     frecuencia: string;
+    /** Cuota pactada por periodo (con o sin IGV, según cuotaIncluyeIgv). */
+    cuotaFija: number | null;
+    cuotaIncluyeIgv: boolean;
     tasa: number | null;
+    comisionIncluyeIgv: boolean;
+    /** Fecha del próximo cobro. */
     proximoPago: string | null;
     estadoPago: 'al_dia' | 'por_vencer' | 'vence_hoy' | 'vencido' | null;
     diasParaPago: number | null;
-    /** Ventas del mes sobre las que se calcula la comisión. */
+    /** De cuándo a cuándo se cuentan las ventas de este cobro. */
+    ciclo: CicloDeCobro;
+    /** Precio de los productos vendidos este mes calendario. */
     ventasMes: number;
+    /** Precio de los productos vendidos dentro del ciclo de cobro. */
+    ventasCiclo: number;
+    /** Comisión acumulada en el ciclo, tal como se pactó (con o sin IGV). */
     comisionAcumulada: number;
+    /** Lo que la comisión sumaría al llegar a la fecha de cobro, con el ritmo actual. */
     comisionProyectada: number | null;
-    /** Cuota mensualizada + comisión acumulada: lo que lleva este mes. */
-    totalDelMes: number;
+    /** Lo que se cobrará en la fecha de cobro, desglosado con su IGV. */
+    cobro: {
+        cuota: Importe | null;
+        comision: Importe | null;
+        subtotal: number;
+        igv: number;
+        total: number;
+    };
+    igvPorcentaje: number;
 }
 
-export function armarPlan(
-    perfil: Pick<ClientProfile, 'billingModel' | 'monthlyFee' | 'feeFrequency' | 'commissionRate' | 'nextDueDate' | 'planCurrency'>,
-    ventasMes: number,
-    hoy: string,
-): ResumenDePlan {
+type PerfilDePlan = Pick<
+    ClientProfile,
+    'billingModel' | 'monthlyFee' | 'feeFrequency' | 'commissionRate' | 'nextDueDate' | 'planCurrency' | 'feeIncludesIgv' | 'commissionIncludesIgv' | 'planStartDate'
+>;
+
+export function armarPlan(perfil: PerfilDePlan, ventasMes: number, ventasCiclo: number, hoy: string): ResumenDePlan {
     const cobraCuota = perfil.billingModel === 'fijo' || perfil.billingModel === 'mixto';
     const cobraComision = perfil.billingModel === 'comision' || perfil.billingModel === 'mixto';
-    const comision = cobraComision ? comisionDelMes(ventasMes, perfil.commissionRate, hoy) : { acumulada: 0, proyectada: null };
-    const pago = cobraCuota ? estadoDePago(perfil.nextDueDate, hoy) : null;
+    const ciclo = cicloDeCobro(perfil.nextDueDate, perfil.feeFrequency, perfil.planStartDate, hoy);
+    const comision = cobraComision ? comisionDelCiclo(ventasCiclo, perfil.commissionRate, ciclo, hoy) : { acumulada: 0, proyectada: null };
+    // La fecha de cobro vale para cualquier plan con algo que cobrar: cuota, comisión o ambos.
+    const pago = perfil.billingModel !== 'ninguno' ? estadoDePago(perfil.nextDueDate, hoy) : null;
+
+    const cuota = cobraCuota ? desglosarIgv(perfil.monthlyFee, !!perfil.feeIncludesIgv) : null;
+    const comisionImporte = cobraComision ? desglosarIgv(comision.acumulada, !!perfil.commissionIncludesIgv) : null;
+
     return {
         modelo: perfil.billingModel as ModeloDeCobro,
         moneda: perfil.planCurrency || 'PEN',
-        cuotaFija: cobraCuota ? perfil.monthlyFee : null,
         frecuencia: perfil.feeFrequency,
+        cuotaFija: cobraCuota ? perfil.monthlyFee : null,
+        cuotaIncluyeIgv: !!perfil.feeIncludesIgv,
         tasa: cobraComision ? perfil.commissionRate : null,
-        proximoPago: cobraCuota ? perfil.nextDueDate : null,
+        comisionIncluyeIgv: !!perfil.commissionIncludesIgv,
+        proximoPago: perfil.billingModel !== 'ninguno' ? perfil.nextDueDate : null,
         estadoPago: pago?.estado ?? null,
         diasParaPago: pago?.dias ?? null,
+        ciclo,
         ventasMes,
+        ventasCiclo,
         comisionAcumulada: comision.acumulada,
         comisionProyectada: comision.proyectada,
-        totalDelMes: redondear((cobraCuota ? mensualizar(perfil.monthlyFee, perfil.feeFrequency) : 0) + comision.acumulada),
+        cobro: { cuota, comision: comisionImporte, ...sumarImportes(cuota, comisionImporte) },
+        igvPorcentaje: IGV_PORCENTAJE,
     };
 }
 
@@ -91,6 +133,8 @@ export class DashboardInsightsService {
         @InjectRepository(ClientProfile) private readonly profiles: Repository<ClientProfile>,
         @InjectRepository(Payment) private readonly payments: Repository<Payment>,
         @InjectRepository(MonthlyBilling) private readonly billings: Repository<MonthlyBilling>,
+        @InjectRepository(Store) private readonly stores: Repository<Store>,
+        private readonly summary: DashboardService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -231,14 +275,16 @@ export class DashboardInsightsService {
         if (!perfil || perfil.billingModel === 'ninguno') return null;
 
         const desdeEsteMes = inicioDeMesLima(hoy);
-        const [ventasMes, ventasMesPasado, ultimoPago, liquidacion] = await Promise.all([
+        const ciclo = cicloDeCobro(perfil.nextDueDate, perfil.feeFrequency, perfil.planStartDate, hoy);
+        const [ventasMes, ventasMesPasado, ventasCiclo, ultimoPago, liquidacion] = await Promise.all([
             this.ventasDelDueno(userId, desdeEsteMes),
             this.ventasDelDueno(userId, inicioDeMesLima(hoy, -1), desdeEsteMes),
+            this.ventasDelDueno(userId, limaMedianoche(ciclo.desde), limaMedianoche(ciclo.hasta)),
             this.payments.findOne({ where: { client: { id: userId } }, order: { paidAt: 'DESC' } }),
             this.billings.findOne({ where: { client: { id: userId }, period: this.periodoAnterior(hoy) } }),
         ]);
 
-        const plan = armarPlan(perfil, ventasMes, hoy);
+        const plan = armarPlan(perfil, ventasMes, ventasCiclo, hoy);
         return {
             ...plan,
             ventasMesAnterior: ventasMesPasado,
@@ -267,8 +313,8 @@ export class DashboardInsightsService {
      */
     async getAgency() {
         const hoy = hoyEnLima();
-        const desdeEsteMes = inicioDeMesLima(hoy);
-        const desdeHace3 = inicioDeMesLima(hoy, -3);
+        const mesActual = hoy.slice(0, 7);
+        const mesesAnteriores = [-1, -2, -3].map(d => this.mesDe(hoy, d));
 
         const clientes = await this.users.find({
             where: [{ role: 'user' }, { role: 'moderator' }],
@@ -277,20 +323,32 @@ export class DashboardInsightsService {
         if (!clientes.length) return this.agenciaVacia(hoy);
 
         const ids = clientes.map(c => c.id);
-        const [perfiles, ventas, ultimosPagos, cobradoMes, liquidaciones] = await Promise.all([
-            this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } }),
+        const perfiles = await this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } });
+        const perfilDe = new Map(perfiles.map(p => [p.user?.id, p]));
 
-            // Ventas por cliente y mes (hora de Lima), de los 3 meses anteriores y el actual
+        // Ciclo de cobro de cada cliente; las ventas se leen desde el más antiguo de todos.
+        const ciclos = new Map(
+            clientes.map(c => {
+                const p = perfilDe.get(c.id);
+                return [c.id, cicloDeCobro(p?.nextDueDate, p?.feeFrequency, p?.planStartDate, hoy)] as const;
+            }),
+        );
+        const desdeMes = `${mesesAnteriores[mesesAnteriores.length - 1]}-01`;
+        const desdeVentas = [desdeMes, ...[...ciclos.values()].map(c => c.desde)].sort()[0];
+
+        const [ventas, ultimosPagos, cobradoMes, liquidaciones, global] = await Promise.all([
+            // Ventas por cliente y DÍA (hora de Lima): de ahí salen el mes, los anteriores y el ciclo de cobro de cada uno.
+            // Se atribuyen al dueño de la tienda, no a quien conectó las cuentas.
             this.orders.query(
                 `SELECT COALESCE(s."ownerId", o."ownerId") AS dueno,
-                        to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM') AS mes,
+                        to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM-DD') AS dia,
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
                    LEFT JOIN stores s ON s.id = o."storeId"
                   WHERE COALESCE(s."ownerId", o."ownerId") = ANY($1) AND o."orderDate" >= $2
-                  GROUP BY COALESCE(s."ownerId", o."ownerId"), mes`,
-                [ids, desdeHace3],
+                  GROUP BY COALESCE(s."ownerId", o."ownerId"), dia`,
+                [ids, limaMedianoche(desdeVentas)],
             ),
 
             // El último pago de cada cliente (DISTINCT ON necesita las columnas en crudo para traer el clientId).
@@ -306,41 +364,55 @@ export class DashboardInsightsService {
             this.payments
                 .createQueryBuilder('p')
                 .select('COALESCE(SUM(p.amount), 0)', 'total')
-                .where('"p"."paidAt" >= :desde', { desde: `${hoy.slice(0, 7)}-01` })
+                .where('"p"."paidAt" >= :desde', { desde: `${mesActual}-01` })
                 .getRawOne(),
 
             this.billings.find({ where: { period: this.periodoAnterior(hoy) }, relations: { client: true } }),
+
+            // El superadmin ve TODO lo que se vendió, también lo de tiendas que no son de ningún cliente de la lista.
+            this.orders.query(
+                `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
+                   FROM marketplace_orders o WHERE o."orderDate" >= $1`,
+                [inicioDeMesLima(hoy)],
+            ),
         ]);
 
-        const perfilDe = new Map(perfiles.map(p => [p.user?.id, p]));
         const pagoDe = new Map(ultimosPagos.map(p => [p.clientId, p]));
         const liquidacionDe = new Map(liquidaciones.map(l => [l.client.id, l]));
-        const ventasDe = new Map<string, Map<string, { pedidos: number; importe: number }>>();
+        const diasDe = new Map<string, { dia: string; pedidos: number; importe: number }[]>();
         for (const f of ventas) {
-            const meses = ventasDe.get(f.dueno) ?? new Map();
-            meses.set(f.mes, { pedidos: Number(f.pedidos), importe: Number(f.importe) });
-            ventasDe.set(f.dueno, meses);
+            const lista = diasDe.get(f.dueno) ?? [];
+            lista.push({ dia: f.dia, pedidos: Number(f.pedidos), importe: Number(f.importe) });
+            diasDe.set(f.dueno, lista);
         }
-        const mesesAnteriores = [-1, -2, -3].map(d => this.mesDe(hoy, d));
-        const mesActual = hoy.slice(0, 7);
+        const suma = (dias: { dia: string; pedidos: number; importe: number }[], pertenece: (dia: string) => boolean) =>
+            dias.filter(d => pertenece(d.dia)).reduce((s, d) => ({ pedidos: s.pedidos + d.pedidos, importe: s.importe + d.importe }), { pedidos: 0, importe: 0 });
 
         const filas = clientes.map(cliente => {
             const perfil = perfilDe.get(cliente.id);
-            const meses = ventasDe.get(cliente.id) ?? new Map();
-            const ventasMes = meses.get(mesActual)?.importe ?? 0;
-            const anteriores = mesesAnteriores.map(m => meses.get(m)?.importe ?? 0);
+            const dias = diasDe.get(cliente.id) ?? [];
+            const ciclo = ciclos.get(cliente.id)!;
+            const delMes = suma(dias, d => d.startsWith(mesActual));
+            const anteriores = mesesAnteriores.map(m => redondear(suma(dias, d => d.startsWith(m)).importe));
+            // Ventas del ciclo de cobro: de su inicio a la fecha de cobro (sin incluirla), sin pasar de hoy.
+            const ventasCiclo = redondear(suma(dias, d => d >= ciclo.desde && d < ciclo.hasta).importe);
 
-            const plan = perfil
-                ? armarPlan(perfil, ventasMes, hoy)
-                : armarPlan({ billingModel: 'ninguno', monthlyFee: null, feeFrequency: 'mensual', commissionRate: null, nextDueDate: null, planCurrency: 'PEN' }, ventasMes, hoy);
+            const plan = armarPlan(
+                perfil ?? { billingModel: 'ninguno', monthlyFee: null, feeFrequency: 'mensual', commissionRate: null, nextDueDate: null, planCurrency: 'PEN', feeIncludesIgv: false, commissionIncludesIgv: false, planStartDate: null },
+                redondear(delMes.importe),
+                ventasCiclo,
+                hoy,
+            );
             const propuesta = proponerPlan({
                 modelo: plan.modelo,
                 cuotaFija: perfil?.monthlyFee ?? null,
                 frecuencia: perfil?.feeFrequency ?? 'mensual',
                 tasa: perfil?.commissionRate ?? null,
-                ventasMes,
+                ventasMes: delMes.importe,
                 ventasMesesAnteriores: anteriores,
                 moneda: plan.moneda,
+                cuotaIncluyeIgv: perfil?.feeIncludesIgv ?? false,
+                comisionIncluyeIgv: perfil?.commissionIncludesIgv ?? false,
             });
             const pago = pagoDe.get(cliente.id);
             const liq = liquidacionDe.get(cliente.id);
@@ -352,8 +424,8 @@ export class DashboardInsightsService {
                 empresa: perfil?.businessName || cliente.nameCompany || null,
                 estado: perfil?.status ?? (cliente.isActive ? 'activo' : 'pausado'),
                 ventas: {
-                    mes: ventasMes,
-                    pedidosMes: meses.get(mesActual)?.pedidos ?? 0,
+                    mes: redondear(delMes.importe),
+                    pedidosMes: delMes.pedidos,
                     mesesAnteriores: mesesAnteriores.map((periodo, i) => ({ periodo, importe: anteriores[i] })),
                 },
                 plan,
@@ -367,35 +439,35 @@ export class DashboardInsightsService {
         // Primero lo que hay que cobrar o vigilar: vencidos, luego por vencer, luego el resto por ventas.
         const peso = (f: typeof filas[number]) =>
             f.plan.estadoPago === 'vencido' ? 3 : f.plan.estadoPago === 'vence_hoy' ? 2.5 : f.plan.estadoPago === 'por_vencer' ? 2 : 0;
-        filas.sort((a, b) => peso(b) - peso(a) || b.ventas.mes - a.ventas.mes);
+        filas.sort((a, b) => peso(b) - peso(a) || b.plan.cobro.total - a.plan.cobro.total || b.ventas.mes - a.ventas.mes);
 
-        const activos = filas.filter(f => f.estado === 'activo');
-        const cobrables = (f: typeof filas[number]) => f.plan.modelo === 'fijo' || f.plan.modelo === 'mixto';
-        const vencidos = filas.filter(f => f.plan.estadoPago === 'vencido');
-        const proximos = filas.filter(f => f.plan.estadoPago === 'por_vencer' || f.plan.estadoPago === 'vence_hoy');
-        const montoCuota = (f: typeof filas[number]) => f.plan.cuotaFija ?? 0;
-
-        // El superadmin ve TODO lo que se vendió, también lo de tiendas que no son de ningún cliente de la lista.
-        const global = await this.orders.query(
-            `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
-               FROM marketplace_orders o WHERE o."orderDate" >= $1`,
-            [desdeEsteMes],
-        );
+        const activos = filas.filter(f => f.estado === 'activo' && f.plan.modelo !== 'ninguno');
+        const vencidos = activos.filter(f => f.plan.estadoPago === 'vencido');
+        const proximos = activos.filter(f => f.plan.estadoPago === 'por_vencer' || f.plan.estadoPago === 'vence_hoy');
+        const total = (lista: typeof filas) => sumarImportes(...lista.flatMap(f => [f.plan.cobro.cuota, f.plan.cobro.comision]));
+        const soloCuota = (lista: typeof filas) => sumarImportes(...lista.map(f => f.plan.cobro.cuota));
+        const soloComision = (lista: typeof filas) => sumarImportes(...lista.map(f => f.plan.cobro.comision));
+        const resumen = (lista: typeof filas) => ({ cantidad: lista.length, ...total(lista) });
 
         return {
             hoy,
+            igvPorcentaje: IGV_PORCENTAJE,
             totales: {
                 clientes: filas.length,
                 ventasDelMes: redondear(Number(global?.[0]?.importe ?? 0)),
                 pedidosDelMes: Number(global?.[0]?.pedidos ?? 0),
                 ventasDeClientes: redondear(filas.reduce((s, f) => s + f.ventas.mes, 0)),
-                // Lo recurrente: cuotas fijas de clientes activos, llevadas a mes.
-                ingresoFijoMensual: redondear(activos.filter(cobrables).reduce((s, f) => s + mensualizar(f.plan.cuotaFija, f.plan.frecuencia), 0)),
-                comisionAcumulada: redondear(activos.reduce((s, f) => s + f.plan.comisionAcumulada, 0)),
-                comisionProyectada: redondear(activos.reduce((s, f) => s + (f.plan.comisionProyectada ?? f.plan.comisionAcumulada), 0)),
+                // Lo recurrente: cuotas fijas de clientes activos, llevadas a mes y sin IGV.
+                ingresoFijoMensual: redondear(activos.reduce((s, f) => s + mensualizar(f.plan.cobro.cuota?.subtotal ?? 0, f.plan.frecuencia), 0)),
+                // Lo que debe ingresar hasta la fecha de cobro de cada cliente: cuota + comisión acumulada, ya con su IGV.
+                porIngresar: total(activos),
+                porIngresarCuotas: soloCuota(activos),
+                porIngresarComisiones: soloComision(activos),
+                comisionAcumulada: redondear(activos.reduce((s, f) => s + (f.plan.cobro.comision?.subtotal ?? 0), 0)),
+                comisionProyectada: redondear(activos.reduce((s, f) => s + (f.plan.comisionProyectada != null ? desglosarIgv(f.plan.comisionProyectada, f.plan.comisionIncluyeIgv).subtotal : (f.plan.cobro.comision?.subtotal ?? 0)), 0)),
                 cobradoEsteMes: Number(cobradoMes?.total ?? 0),
-                vencidos: { cantidad: vencidos.length, monto: redondear(vencidos.reduce((s, f) => s + montoCuota(f), 0)) },
-                proximos: { cantidad: proximos.length, monto: redondear(proximos.reduce((s, f) => s + montoCuota(f), 0)) },
+                vencidos: resumen(vencidos),
+                proximos: resumen(proximos),
                 sinPlan: filas.filter(f => f.plan.modelo === 'ninguno').length,
                 porModelo: {
                     fijo: filas.filter(f => f.plan.modelo === 'fijo').length,
@@ -408,11 +480,15 @@ export class DashboardInsightsService {
     }
 
     private agenciaVacia(hoy: string) {
+        const cero = { subtotal: 0, igv: 0, total: 0 };
         return {
             hoy,
+            igvPorcentaje: IGV_PORCENTAJE,
             totales: {
-                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ventasDeClientes: 0, ingresoFijoMensual: 0, comisionAcumulada: 0, comisionProyectada: 0,
-                cobradoEsteMes: 0, vencidos: { cantidad: 0, monto: 0 }, proximos: { cantidad: 0, monto: 0 }, sinPlan: 0,
+                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ventasDeClientes: 0, ingresoFijoMensual: 0,
+                porIngresar: cero, porIngresarCuotas: cero, porIngresarComisiones: cero,
+                comisionAcumulada: 0, comisionProyectada: 0, cobradoEsteMes: 0,
+                vencidos: { cantidad: 0, ...cero }, proximos: { cantidad: 0, ...cero }, sinPlan: 0,
                 porModelo: { fijo: 0, comision: 0, mixto: 0 },
             },
             clientes: [],
@@ -423,5 +499,35 @@ export class DashboardInsightsService {
         const [a, m] = hoy.split('-').map(Number);
         const d = new Date(Date.UTC(a, m - 1 + desplazamiento, 1));
         return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Agencia: todo lo de un cliente, como lo ve él
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Lo mismo que ve el cliente en su dashboard, para que el superadmin lo
+     * revise a detalle. Un cliente puede tener varias tiendas: se elige una
+     * (la primera si no se indica) y se devuelve la lista para cambiar.
+     */
+    async getClientDetail(clientId: string, storeId?: string) {
+        const cliente = await this.users.findOne({ where: { id: clientId } });
+        if (!cliente) throw new NotFoundException('Cliente no encontrado');
+
+        const tiendas = await this.stores.find({ where: { owner: { id: clientId } }, order: { createdAt: 'ASC' } });
+        const elegida = tiendas.find(t => t.id === storeId) ?? tiendas[0];
+        if (!elegida) {
+            return { tiendas: [], tiendaId: null, resumen: null, insights: null, plan: await this.planDelCliente(clientId, hoyEnLima()) };
+        }
+
+        const scope = { userId: clientId, storeId: elegida.id };
+        const [resumen, insights] = await Promise.all([this.summary.getSummary(scope), this.getInsights(scope)]);
+        return {
+            tiendas: tiendas.map(t => ({ id: t.id, nombre: t.name })),
+            tiendaId: elegida.id,
+            resumen,
+            insights,
+            plan: insights.plan,
+        };
     }
 }

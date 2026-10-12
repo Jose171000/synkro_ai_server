@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -49,6 +49,17 @@ export class DashboardController {
     })
     getAgency() {
         return this.insights.getAgency();
+    }
+
+    @Get('agency/clients/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'El dashboard de un cliente, como lo ve él',
+        description: 'Resumen del negocio, productos ganadores, despachos, ventas recientes y su plan, para revisarlo a detalle. Si el cliente tiene varias tiendas se elige una con storeId.',
+    })
+    getClientDetail(@Param('id', ParseUUIDPipe) id: string, @Query('storeId') storeId?: string) {
+        return this.insights.getClientDetail(id, storeId);
     }
 
     @Get('accounts')

@@ -80,6 +80,18 @@ export class ClientProfile {
     @Column({ type: 'varchar', length: 5, default: 'PEN' })
     planCurrency: string;
 
+    /** true: la cuota pactada ya incluye IGV. false: el IGV se suma aparte. */
+    @Column({ default: false })
+    feeIncludesIgv: boolean;
+
+    /** true: la comisión pactada ya incluye IGV. false: el IGV se suma aparte. */
+    @Column({ default: false })
+    commissionIncludesIgv: boolean;
+
+    /** Desde cuándo rige el plan: si es posterior al inicio del ciclo, las ventas se cuentan desde aquí. */
+    @Column({ type: 'date', nullable: true })
+    planStartDate: string | null;
+
     /** Apuntes de la propuesta comercial para este cliente. */
     @Column({ nullable: true, type: 'text' })
     proposalNotes: string | null;

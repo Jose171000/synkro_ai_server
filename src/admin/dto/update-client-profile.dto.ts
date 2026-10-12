@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUrl, Max, Min, ValidateIf } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUrl, Max, Min, ValidateIf } from 'class-validator';
 import { FRECUENCIAS, MODELOS_DE_COBRO } from '../plan-comercial';
 
 export class UpdateClientProfileDto {
@@ -96,6 +96,22 @@ export class UpdateClientProfileDto {
     @IsOptional()
     @IsString()
     planCurrency?: string;
+
+    @ApiPropertyOptional({ description: 'La cuota pactada ya incluye IGV (false: el IGV va aparte)' })
+    @IsOptional()
+    @IsBoolean()
+    feeIncludesIgv?: boolean;
+
+    @ApiPropertyOptional({ description: 'La comisión pactada ya incluye IGV (false: el IGV va aparte)' })
+    @IsOptional()
+    @IsBoolean()
+    commissionIncludesIgv?: boolean;
+
+    @ApiPropertyOptional({ example: '2026-10-01', nullable: true, description: 'Desde cuándo rige el plan (YYYY-MM-DD)' })
+    @IsOptional()
+    @ValidateIf((_, v) => v !== null)
+    @IsDateString()
+    planStartDate?: string | null;
 
     @ApiPropertyOptional({ nullable: true })
     @IsOptional()
