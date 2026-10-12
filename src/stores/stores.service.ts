@@ -9,6 +9,7 @@ import { ListingLink } from '../sync/entities/listing-link.entity';
 import { Store } from './entities/store.entity';
 import { StoreInvitation } from './entities/store-invitation.entity';
 import { STORE_ROLE_RANK, StoreMember, StoreRole } from './entities/store-member.entity';
+import { eliminarTienda, ResumenDeBorrado } from './store-removal';
 
 /** Las invitaciones caducan: un enlace olvidado en un correo no debe valer para siempre. */
 const INVITATION_DAYS = 7;
@@ -73,13 +74,20 @@ export class StoresService {
      * nacidas de una invitación entran a las tiendas de otros pero no tienen
      * un espacio propio. El administrador de la agencia puede siempre.
      */
+    /**
+     * Crear tiendas es cosa de los superadmins. Quien se registró por su cuenta y
+     * fue aprobado recibe UNA al aprobarse; si por algo no la tiene, puede crear
+     * esa primera, pero ninguna más. Las cuentas por invitación nunca crean.
+     */
     async canCreateStores(userId: string): Promise<boolean> {
         const user = await this.users.findOne({
             where: { id: userId },
-            select: { id: true, role: true, createdFromInvitation: true },
+            select: { id: true, role: true, createdFromInvitation: true, approvalStatus: true },
         });
         if (!user) return false;
-        return user.role === UserRole.ADMIN || !user.createdFromInvitation;
+        if (user.role === UserRole.ADMIN) return true;
+        if (user.createdFromInvitation || user.approvalStatus !== 'approved') return false;
+        return !(await this.stores.exist({ where: { owner: { id: userId } } }));
     }
 
     /**
@@ -94,13 +102,44 @@ export class StoresService {
         return pendiente;
     }
 
-    async create(userId: string, name: string) {
+    /**
+     * Crea una tienda. Un superadmin puede crearla a nombre de un cliente (`ownerId`);
+     * el resto solo la primera suya, si todavía no tiene ninguna.
+     */
+    async create(userId: string, name: string, ownerId?: string) {
+        const quien = await this.users.findOne({ where: { id: userId }, select: { id: true, role: true, createdFromInvitation: true } });
+        if (ownerId && ownerId !== userId) {
+            if (quien?.role !== UserRole.ADMIN) throw new ForbiddenException('Solo un superadmin puede crear una tienda para otra cuenta.');
+            if (!(await this.users.exist({ where: { id: ownerId } }))) throw new NotFoundException('La cuenta dueña no existe.');
+            return this.createUnchecked(ownerId, name);
+        }
         if (!(await this.canCreateStores(userId))) {
             throw new ForbiddenException(
-                'Tu cuenta se creó por invitación, así que no puede crear tiendas propias. Pídele al dueño de tu tienda lo que necesites.',
+                quien?.createdFromInvitation
+                    ? 'Tu cuenta se creó por invitación, así que no puede crear tiendas propias. Pídele al dueño de tu tienda lo que necesites.'
+                    : 'Solo los superadmins pueden crear tiendas. Escríbenos y la creamos por ti.',
             );
         }
         return this.createUnchecked(userId, name);
+    }
+
+    /** Crea la tienda de un cliente (al aprobarlo o al crearle la cuenta): sin comprobar permisos, quien llama ya los tiene. */
+    async createForOwner(ownerId: string, name: string) {
+        return this.createUnchecked(ownerId, name);
+    }
+
+    /**
+     * Elimina una tienda con todo lo suyo (ventas, productos, canales, miembros).
+     * Solo un superadmin; la ruta que llama lo exige.
+     */
+    async removeStoreAsAdmin(storeId: string): Promise<{ message: string; resumen: ResumenDeBorrado }> {
+        const tienda = await this.stores.findOne({ where: { id: storeId } });
+        if (!tienda) throw new NotFoundException('Tienda no encontrada');
+        const resumen = await this.stores.manager.transaction(manager => eliminarTienda(manager, storeId));
+        return {
+            message: `Tienda «${tienda.name}» eliminada: ${resumen.productos} productos, ${resumen.pedidos} ventas y ${resumen.canales} canales.`,
+            resumen,
+        };
     }
 
     private async createUnchecked(userId: string, name: string) {
@@ -120,9 +159,12 @@ export class StoresService {
     async ensureDefaultStore(userId: string): Promise<void> {
         const user = await this.users.findOne({
             where: { id: userId },
-            select: { id: true, name: true, lastName: true, nameCompany: true, createdFromInvitation: true },
+            select: { id: true, name: true, lastName: true, nameCompany: true, createdFromInvitation: true, role: true },
         });
         if (!user || user.createdFromInvitation) return;
+        // Los clientes reciben su tienda al aprobarse su cuenta (o cuando un superadmin se la crea): si un
+        // superadmin la elimina, no debe reaparecer sola. Solo los superadmins tienen una tienda de arranque.
+        if (user.role !== UserRole.ADMIN) return;
         if (await this.members.exist({ where: { user: { id: userId } } })) return;
 
         const nombre = (user.nameCompany || `${user.name ?? ''} ${user.lastName ?? ''}`).trim() || 'Mi tienda';

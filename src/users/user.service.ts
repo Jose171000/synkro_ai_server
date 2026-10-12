@@ -13,7 +13,10 @@ export class UserService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  async createUser(createUserDto: CreateUserDto): Promise<User> {
+  async createUser(
+    createUserDto: CreateUserDto,
+    extras: Partial<Pick<User, 'approvalStatus' | 'approvedAt'>> = {},
+  ): Promise<User> {
     const existingUser = await this.findByEmail(createUserDto.email);
     if (existingUser) {
       throw new ConflictException('El email ya está registrado');
@@ -25,9 +28,25 @@ export class UserService {
       ...createUserDto,
       password: hashedPassword,
       role: createUserDto.role || UserRole.USER,
+      ...extras,
     });
 
     return this.userRepository.save(user);
+  }
+
+  /** Correos de los superadmins activos, más los declarados en ADMIN_EMAILS. */
+  async findAdminEmails(): Promise<string[]> {
+    const admins = await this.userRepository.find({ where: { role: UserRole.ADMIN, isActive: true }, select: { id: true, email: true } });
+    const declarados = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    return [...new Set([...admins.map(a => a.email.toLowerCase()), ...declarados])];
+  }
+
+  async setApproval(userId: string, approvalStatus: User['approvalStatus'], approvalNote: string | null = null): Promise<void> {
+    await this.userRepository.update(userId, {
+      approvalStatus,
+      approvalNote,
+      approvedAt: approvalStatus === 'approved' ? new Date() : null,
+    });
   }
 
   async findByEmail(email: string): Promise<User | null> {

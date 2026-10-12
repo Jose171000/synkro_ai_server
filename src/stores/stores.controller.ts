@@ -14,7 +14,7 @@ export class StoresController {
     @Post()
     @ApiOperation({ summary: 'Crea una tienda; quien la crea queda como dueño' })
     create(@Body() dto: CreateStoreDto, @Req() req) {
-        return this.stores.create(req.user.id, dto.name);
+        return this.stores.create(req.user.id, dto.name, dto.ownerId);
     }
 
     @Get()

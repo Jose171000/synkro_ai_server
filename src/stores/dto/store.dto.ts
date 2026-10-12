@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class CreateStoreDto {
     @ApiProperty({ example: 'Rivesi Home' })
@@ -7,6 +7,12 @@ export class CreateStoreDto {
     @MinLength(2)
     @MaxLength(120)
     name: string;
+
+    /** Solo un superadmin: la cuenta que será dueña de la tienda (un cliente). */
+    @ApiPropertyOptional({ description: 'Solo superadmin: cuenta dueña de la tienda' })
+    @IsOptional()
+    @IsUUID()
+    ownerId?: string;
 }
 
 export class InviteDto {

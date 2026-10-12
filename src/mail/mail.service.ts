@@ -75,6 +75,39 @@ export class MailService {
         });
     }
 
+    /** Aviso interno a los superadmins: alguien pidió una cuenta y espera aprobación. */
+    async sendSignupRequestToAdmins(
+        admins: string[],
+        data: { name: string; email: string; storeName: string; website: string | null; ruc: string; businessName: string; phone: string | null },
+    ): Promise<void> {
+        for (const to of admins) {
+            await this.deliver({
+                to,
+                subject: `Nueva solicitud de cuenta: ${data.storeName}`,
+                template: 'signup-request',
+                context: { ...data, reviewUrl: `${this.frontendUrl}/?seccion=superadmin` },
+            }).catch(err => this.logger.error(`No se pudo avisar a ${to} de la solicitud de ${data.email}: ${err?.message}`));
+        }
+    }
+
+    /** Acuse al solicitante: su cuenta queda en revisión. */
+    async sendSignupReceived(to: string, name: string): Promise<void> {
+        await this.deliver({ to, subject: 'Recibimos tu solicitud — Synkro AI', template: 'signup-received', context: { name } });
+    }
+
+    async sendAccountApproved(to: string, name: string, storeName: string | null): Promise<void> {
+        await this.deliver({
+            to,
+            subject: 'Tu cuenta fue aprobada — Synkro AI',
+            template: 'account-approved',
+            context: { name, storeName, loginUrl: `${this.frontendUrl}/login` },
+        });
+    }
+
+    async sendAccountRejected(to: string, name: string, reason: string | null): Promise<void> {
+        await this.deliver({ to, subject: 'Sobre tu solicitud — Synkro AI', template: 'account-rejected', context: { name, reason } });
+    }
+
     /**
      * Sends a welcome email after successful registration.
      */

@@ -11,6 +11,7 @@ import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateAccessDto, ResetClientPasswordDto } from './dto/update-access.dto';
+import { SignupsService } from './signups.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -21,6 +22,7 @@ export class AdminController {
     constructor(
         private readonly adminService: AdminService,
         private readonly reportsService: ReportsService,
+        private readonly signups: SignupsService,
     ) { }
 
     @Get('sections')
@@ -77,6 +79,39 @@ export class AdminController {
     })
     deleteClient(@Param('id') id: string, @Req() req) {
         return this.adminService.deleteClient(id, req.user.id);
+    }
+
+    @Delete('stores/:id')
+    @ApiOperation({
+        summary: 'Elimina una tienda con todo lo suyo',
+        description: 'Borra sus ventas, productos (con sus publicaciones), canales conectados, miembros e invitaciones. Los pagos registrados se conservan sin tienda. No se puede deshacer.',
+    })
+    deleteStore(@Param('id') id: string) {
+        return this.adminService.deleteStore(id);
+    }
+
+    @Get('signups')
+    @ApiOperation({
+        summary: 'Solicitudes de cuenta',
+        description: 'Quien se registra por su cuenta espera aprobación. Con status=rejected se ven las rechazadas.',
+    })
+    listSignups(@Query('status') status?: string) {
+        return this.signups.list(status === 'rejected' ? 'rejected' : 'pending');
+    }
+
+    @Post('signups/:id/approve')
+    @ApiOperation({
+        summary: 'Aprueba una solicitud y crea su tienda',
+        description: 'La cuenta puede entrar desde ese momento. Se le crea su tienda con el nombre que indicó y se le avisa por correo.',
+    })
+    approveSignup(@Param('id') id: string) {
+        return this.signups.approve(id);
+    }
+
+    @Post('signups/:id/reject')
+    @ApiOperation({ summary: 'Rechaza una solicitud (con un motivo opcional que se le envía por correo)' })
+    rejectSignup(@Param('id') id: string, @Body() body: { reason?: string }) {
+        return this.signups.reject(id, body?.reason);
     }
 
     @Patch('clients/:id/profile')

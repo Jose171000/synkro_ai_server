@@ -4,6 +4,7 @@ import { PassportModule } from "@nestjs/passport";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { AuthService } from "./auth.service";
+import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { AuthController } from "./auth.controller";
 import { JwtStrategy } from "./jwt.strategy";
 import { RefreshToken } from "./entities/refresh-token.entity";
@@ -24,7 +25,7 @@ import { StoresModule } from "../stores/stores.module";
             }),
             inject: [ConfigService],
         }),
-        TypeOrmModule.forFeature([RefreshToken, PasswordReset]),
+        TypeOrmModule.forFeature([RefreshToken, PasswordReset, ClientProfile]),
     ],
     controllers: [AuthController],
     providers: [AuthService, JwtStrategy],

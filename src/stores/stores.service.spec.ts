@@ -24,9 +24,14 @@ function construir(estado: {
     const tiendas = estado.tiendas ?? [];
     const invitaciones = estado.invitaciones ?? [];
 
-    const repoUsuarios = { findOne: jest.fn(async ({ where }: any) => usuarios[where.id] ?? null), update: jest.fn() };
+    const repoUsuarios = {
+        findOne: jest.fn(async ({ where }: any) => usuarios[where.id] ?? null),
+        exist: jest.fn(async ({ where }: any) => !!usuarios[where.id]),
+        update: jest.fn(),
+    };
     const repoTiendas = {
-        exist: jest.fn(async ({ where }: any) => tiendas.some(t => t.id === where.id)),
+        exist: jest.fn(async ({ where }: any) =>
+            tiendas.some(t => (where.id === undefined || t.id === where.id) && (where.owner?.id === undefined || t.owner?.id === where.owner.id))),
         findOne: jest.fn(async ({ where }: any) =>
             tiendas.find(t =>
                 (where.id === undefined || t.id === where.id) &&
@@ -250,26 +255,62 @@ describe('enlace público', () => {
 
 describe('quién puede crear tiendas', () => {
     const usuarios = {
-        propio: { id: 'propio', role: 'user', createdFromInvitation: false, name: 'Ana', lastName: 'Ruiz', nameCompany: 'Rivesi Home' },
-        invitado: { id: 'invitado', role: 'user', createdFromInvitation: true, name: 'Luz', lastName: 'M' },
-        root: { id: 'root', role: 'admin', createdFromInvitation: true },
+        nuevo: { id: 'nuevo', role: 'user', createdFromInvitation: false, approvalStatus: 'approved', name: 'Ana', lastName: 'Ruiz', nameCompany: 'Rivesi Home' },
+        conTienda: { id: 'conTienda', role: 'user', createdFromInvitation: false, approvalStatus: 'approved', name: 'Beto', lastName: 'P' },
+        pendiente: { id: 'pendiente', role: 'user', createdFromInvitation: false, approvalStatus: 'pending', name: 'Pía', lastName: 'Q' },
+        invitado: { id: 'invitado', role: 'user', createdFromInvitation: true, approvalStatus: 'approved', name: 'Luz', lastName: 'M' },
+        root: { id: 'root', role: 'admin', createdFromInvitation: true, approvalStatus: 'approved', name: 'Jaime', lastName: 'A' },
     };
+    const tiendas = [{ id: 'T-beto', name: 'Tienda de Beto', owner: { id: 'conTienda' } }];
 
-    it('quien se registró por su cuenta puede crear tiendas', async () => {
-        const { service, repoTiendas } = construir({ usuarios });
-        await expect(service.create('propio', 'Mi segunda tienda')).resolves.toMatchObject({ name: 'Mi segunda tienda', role: 'owner' });
+    it('un cliente aprobado que todavía no tiene tienda puede crear la primera', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
+        await expect(service.canCreateStores('nuevo')).resolves.toBe(true);
+        await expect(service.create('nuevo', 'Mi tienda')).resolves.toMatchObject({ name: 'Mi tienda', role: 'owner' });
         expect(repoTiendas.save).toHaveBeenCalled();
     });
 
+    it('un cliente que ya tiene su tienda NO puede crear más: solo los superadmins', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
+        await expect(service.canCreateStores('conTienda')).resolves.toBe(false);
+        await expect(service.create('conTienda', 'Otra')).rejects.toThrow(/Solo los superadmins pueden crear tiendas/);
+        expect(repoTiendas.save).not.toHaveBeenCalled();
+    });
+
+    it('una cuenta que aún espera aprobación no puede crear tiendas', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
+        await expect(service.create('pendiente', 'Intento')).rejects.toBeInstanceOf(ForbiddenException);
+        expect(repoTiendas.save).not.toHaveBeenCalled();
+    });
+
     it('una cuenta nacida de una invitación NO puede crear tiendas', async () => {
-        const { service, repoTiendas } = construir({ usuarios });
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
         await expect(service.create('invitado', 'Intento')).rejects.toThrow(/por invitación/i);
         expect(repoTiendas.save).not.toHaveBeenCalled();
     });
 
-    it('el administrador de la agencia siempre puede', async () => {
-        const { service } = construir({ usuarios });
+    it('el superadmin siempre puede, y puede crear la tienda de un cliente a nombre de este', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
         await expect(service.canCreateStores('root')).resolves.toBe(true);
+        await service.create('root', 'Laihome', 'nuevo');
+        expect(repoTiendas.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Laihome', owner: { id: 'nuevo' } }));
+    });
+
+    it('un cliente no puede crear una tienda a nombre de otra cuenta', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
+        await expect(service.create('nuevo', 'Falsa', 'conTienda')).rejects.toBeInstanceOf(ForbiddenException);
+        expect(repoTiendas.save).not.toHaveBeenCalled();
+    });
+
+    it('crear a nombre de una cuenta que no existe da un error claro', async () => {
+        const { service } = construir({ usuarios, tiendas });
+        await expect(service.create('root', 'X', 'fantasma')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('al aprobar o crear la cuenta de un cliente, su tienda se crea sin comprobar permisos', async () => {
+        const { service, repoTiendas } = construir({ usuarios, tiendas });
+        await expect(service.createForOwner('pendiente', 'Corpomedic')).resolves.toMatchObject({ name: 'Corpomedic', role: 'owner' });
+        expect(repoTiendas.save).toHaveBeenCalled();
     });
 
     it('al registrarse con un correo invitado, la cuenta se marca como invitada', async () => {
@@ -283,26 +324,24 @@ describe('quién puede crear tiendas', () => {
 
     it('sin invitación vigente, o con una caducada, la cuenta no se marca', async () => {
         const sin = construir({ usuarios });
-        await expect(sin.service.flagIfInvited('propio', 'ana@x.com')).resolves.toBe(false);
+        await expect(sin.service.flagIfInvited('nuevo', 'ana@x.com')).resolves.toBe(false);
         expect(sin.repoUsuarios.update).not.toHaveBeenCalled();
 
         const vencida = construir({
             usuarios,
             invitaciones: [{ email: 'ana@x.com', acceptedAt: null, expiresAt: new Date(Date.now() - 1000), tokenHash: 'x' }],
         });
-        await expect(vencida.service.flagIfInvited('propio', 'ana@x.com')).resolves.toBe(false);
+        await expect(vencida.service.flagIfInvited('nuevo', 'ana@x.com')).resolves.toBe(false);
     });
 
-    it('quien se registró solo recibe su tienda; el invitado no recibe ninguna', async () => {
-        const propio = construir({ usuarios });
-        const lista = await propio.service.listMine('propio');
-        expect(propio.repoTiendas.save).toHaveBeenCalledWith(expect.objectContaining({ name: 'Rivesi Home' }));
-        expect(lista.canCreateStores).toBe(true);
+    it('un cliente no recibe una tienda sola al entrar (la crea el superadmin); el superadmin sí tiene una de arranque', async () => {
+        const cliente = construir({ usuarios });
+        const lista = await cliente.service.listMine('nuevo');
+        expect(cliente.repoTiendas.save).not.toHaveBeenCalled();
+        expect(lista.stores).toEqual([]);
 
-        const invitado = construir({ usuarios });
-        const suya = await invitado.service.listMine('invitado');
-        expect(invitado.repoTiendas.save).not.toHaveBeenCalled();
-        expect(suya.stores).toEqual([]);
-        expect(suya.canCreateStores).toBe(false);
+        const admin = construir({ usuarios: { ...usuarios, root: { ...usuarios.root, createdFromInvitation: false, nameCompany: 'Agencia' } } });
+        await admin.service.listMine('root');
+        expect(admin.repoTiendas.save).toHaveBeenCalledWith(expect.objectContaining({ name: 'Agencia' }));
     });
 });

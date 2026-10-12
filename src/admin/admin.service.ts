@@ -15,6 +15,9 @@ import { ClientProfile } from './entities/client-profile.entity';
 import { Payment } from './entities/payment.entity';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { Store } from '../stores/entities/store.entity';
+import { StoresService } from '../stores/stores.service';
+import { eliminarTienda } from '../stores/store-removal';
 
 @Injectable()
 export class AdminService implements OnModuleInit {
@@ -26,6 +29,7 @@ export class AdminService implements OnModuleInit {
         @InjectRepository(ClientProfile) private readonly profileRepository: Repository<ClientProfile>,
         @InjectRepository(Payment) private readonly paymentRepository: Repository<Payment>,
         private readonly dataSource: DataSource,
+        private readonly storesService: StoresService,
     ) { }
 
     /**
@@ -118,6 +122,12 @@ export class AdminService implements OnModuleInit {
             return safeStaff;
         }
 
+        // Su tienda: los clientes ya no la reciben solos al entrar, la crea el superadmin.
+        await this.storesService.createForOwner(
+            saved.id,
+            (dto.nameCompany || `${dto.name} ${dto.lastName ?? ''}`).trim() || 'Mi tienda',
+        );
+
         // Perfil comercial inicial para que aparezca completo en la tabla
         await this.profileRepository.save(
             this.profileRepository.create({
@@ -208,6 +218,11 @@ export class AdminService implements OnModuleInit {
         }
 
         await this.dataSource.transaction(async (manager) => {
+            // Las tiendas de las que es dueño se van con él, junto con sus ventas, productos y canales
+            // (los miembros de otras tiendas solo pierden su acceso).
+            const propias = await manager.find(Store, { where: { owner: { id: userId } } });
+            for (const tienda of propias) await eliminarTienda(manager, tienda.id);
+
             // Primero lo que referencia al usuario sin borrado en cascada
             await manager.delete(Payment, { client: { id: userId } });
             await manager.delete(MarketplaceOrder, { owner: { id: userId } });
@@ -220,6 +235,11 @@ export class AdminService implements OnModuleInit {
         });
 
         return { message: `Cuenta de ${user.email} eliminada junto con todos sus datos.` };
+    }
+
+    /** Elimina una tienda con todo lo suyo: ventas, productos, canales, miembros. Solo superadmins. */
+    async deleteStore(storeId: string) {
+        return this.storesService.removeStoreAsAdmin(storeId);
     }
 
     async getClientDetail(userId: string) {

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
@@ -16,6 +16,7 @@ import { MailService } from '../mail/mail.service';
 import { StoresService } from '../stores/stores.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ClientProfile } from '../admin/entities/client-profile.entity';
 
 @Injectable()
 export class AuthService {
@@ -29,43 +30,87 @@ export class AuthService {
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(PasswordReset)
     private passwordResetRepository: Repository<PasswordReset>,
+    @InjectRepository(ClientProfile)
+    private profileRepository: Repository<ClientProfile>,
   ) { }
 
-  async register(registerDto: RegisterDto): Promise<{ user: User; accessToken: string; refreshToken: string }> {
-    const existingUser = await this.userService.findByEmail(registerDto.email);
+  async register(registerDto: RegisterDto): Promise<
+    | { user: User; accessToken: string; refreshToken: string; pending?: undefined }
+    | { user: User; pending: true; message: string }
+  > {
+    const email = registerDto.email.trim().toLowerCase();
+    const existingUser = await this.userService.findByEmail(email);
     if (existingUser) {
       throw new ConflictException('El email ya está registrado');
     }
-    
-    
+
     // El rol nunca viene del cliente. Solo los correos declarados en
     // ADMIN_EMAILS nacen como admin; el resto son usuarios normales.
     const adminEmails = (process.env.ADMIN_EMAILS || '')
       .split(',')
       .map(e => e.trim().toLowerCase())
       .filter(Boolean);
-    const role = adminEmails.includes(registerDto.email.trim().toLowerCase())
-      ? UserRole.ADMIN
-      : UserRole.USER;
+    const esAdmin = adminEmails.includes(email);
+    const role = esAdmin ? UserRole.ADMIN : UserRole.USER;
 
+    // Quien se registra por su cuenta espera la aprobación de un superadmin.
     const user = await this.userService.createUser({
       name: registerDto.name,
       lastName: registerDto.lastName,
-      email: registerDto.email,
+      email,
       password: registerDto.password,
       nameCompany: registerDto.nameCompany,
       cellPhone: registerDto.cellPhone,
       country: registerDto.country,
       url: registerDto.url,
       role,
-    });
+    }, esAdmin ? { approvalStatus: 'approved', approvedAt: new Date() } : { approvalStatus: 'pending' });
+
+    // Datos de la empresa: quedan en su perfil comercial para revisarlos al aprobar.
+    await this.profileRepository.save(this.profileRepository.create({
+      user: { id: user.id } as any,
+      ruc: registerDto.ruc,
+      businessName: registerDto.businessName,
+      contactName: `${registerDto.name} ${registerDto.lastName}`.trim(),
+      contactPhone: registerDto.cellPhone,
+      clientType: 'saas',
+      status: 'activo',
+    })).catch(err => console.error('[AuthService] No se pudo guardar el perfil de la empresa:', err.message));
 
     // Si su correo tenía una invitación a una tienda, la cuenta nace «por
-    // invitación»: entra a esa tienda pero no puede crear tiendas propias.
+    // invitación»: entra a esa tienda pero no puede crear tiendas propias, y
+    // como la invitó el dueño de una tienda no espera aprobación.
     // No debe impedir el registro si esta comprobación falla.
-    await this.storesService.flagIfInvited(user.id, user.email).catch(err =>
-      console.error('[AuthService] No se pudo comprobar la invitación:', err.message),
-    );
+    const invitado = await this.storesService.flagIfInvited(user.id, user.email).catch(err => {
+      console.error('[AuthService] No se pudo comprobar la invitación:', err.message);
+      return false;
+    });
+    if (invitado && user.approvalStatus === 'pending') {
+      await this.userService.setApproval(user.id, 'approved');
+      user.approvalStatus = 'approved';
+    }
+
+    if (user.approvalStatus === 'pending') {
+      // Aviso interno a los superadmins y acuse al solicitante (sin bloquear el registro si el correo falla).
+      const admins = await this.userService.findAdminEmails().catch(() => [] as string[]);
+      this.mailService.sendSignupRequestToAdmins(admins, {
+        name: `${user.name} ${user.lastName}`.trim(),
+        email: user.email,
+        storeName: registerDto.nameCompany,
+        website: registerDto.url ?? null,
+        ruc: registerDto.ruc,
+        businessName: registerDto.businessName,
+        phone: registerDto.cellPhone ?? null,
+      }).catch(err => console.error('[AuthService] No se pudo avisar a los superadmins:', err.message));
+      this.mailService.sendSignupReceived(user.email, user.name).catch(err =>
+        console.error('[AuthService] No se pudo confirmar la solicitud al usuario:', err.message),
+      );
+      return {
+        user: this.sanitizeUser(user),
+        pending: true,
+        message: 'Recibimos tu solicitud. Revisaremos tus datos y te avisaremos por correo cuando tu cuenta esté aprobada.',
+      };
+    }
 
     const tokens = await this.generateTokens(user);
 
@@ -78,6 +123,20 @@ export class AuthService {
       user: this.sanitizeUser(user),
       ...tokens,
     };
+  }
+
+  /** Una cuenta sin aprobar no entra: se explica por qué en vez de dejarla ver una app vacía. */
+  private asegurarAprobada(user: User): void {
+    if (user.approvalStatus === 'pending') {
+      throw new ForbiddenException('Tu cuenta está en revisión. Te avisaremos por correo cuando esté aprobada.');
+    }
+    if (user.approvalStatus === 'rejected') {
+      throw new ForbiddenException(
+        user.approvalNote
+          ? `Tu solicitud no fue aprobada: ${user.approvalNote}`
+          : 'Tu solicitud no fue aprobada. Escríbenos si crees que es un error.',
+      );
+    }
   }
 
   /**
@@ -106,6 +165,8 @@ export class AuthService {
     if (!isPasswordValid) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
+    // Solo después de comprobar la contraseña: así no se revela a un extraño si una cuenta existe.
+    this.asegurarAprobada(user);
     const tokens = await this.generateTokens(user);
 
     return {
@@ -126,6 +187,8 @@ export class AuthService {
     if (!tokenEntity) {
       throw new UnauthorizedException('Token de refresco inválido o expirado');
     }
+
+    this.asegurarAprobada(tokenEntity.user);
 
     // Revocar el token actual
     tokenEntity.isRevoked = true;

@@ -60,6 +60,20 @@ export class User {
     @Column({ default: false })
     createdFromInvitation: boolean;
 
+    /**
+     * Las cuentas que se registran por su cuenta esperan la aprobación de un superadmin.
+     * Las creadas por un superadmin, las que nacen de una invitación y las de ADMIN_EMAILS nacen aprobadas.
+     */
+    @Column({ type: 'varchar', length: 20, default: 'approved' })
+    approvalStatus: 'pending' | 'approved' | 'rejected';
+
+    /** Motivo, cuando la cuenta se rechazó. */
+    @Column({ type: 'text', nullable: true })
+    approvalNote: string | null;
+
+    @Column({ type: 'timestamptz', nullable: true })
+    approvedAt: Date | null;
+
     @OneToMany(() => RefreshToken, refreshToken => refreshToken.user)
     refreshTokens: RefreshToken[];
 

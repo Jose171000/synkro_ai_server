@@ -13,6 +13,9 @@ import { ListingLink } from '../sync/entities/listing-link.entity';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ReportsModule } from '../reports/reports.module';
+import { StoresModule } from '../stores/stores.module';
+import { Store } from '../stores/entities/store.entity';
+import { SignupsService } from './signups.service';
 
 @Module({
     imports: [
@@ -25,11 +28,13 @@ import { ReportsModule } from '../reports/reports.module';
             MarketplaceConnection,
             MarketplaceOrder,
             MonthlyBilling,
+            Store,
         ]),
         ReportsModule,
+        StoresModule,
     ],
     controllers: [AdminController, BillingController],
-    providers: [AdminService, BillingService],
+    providers: [AdminService, BillingService, SignupsService],
     exports: [AdminService, TypeOrmModule],
 })
 export class AdminModule { }
