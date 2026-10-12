@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUrl, Max, Min, ValidateIf } from 'class-validator';
+import { FRECUENCIAS, MODELOS_DE_COBRO } from '../plan-comercial';
 
 export class UpdateClientProfileDto {
     @ApiPropertyOptional({ example: '20601234567' })
@@ -59,4 +60,45 @@ export class UpdateClientProfileDto {
     @IsOptional()
     @IsString()
     notes?: string;
+
+    @ApiPropertyOptional({ enum: MODELOS_DE_COBRO, description: 'Cómo se le cobra: cuota fija, comisión, ambos o ninguno definido' })
+    @IsOptional()
+    @IsIn(MODELOS_DE_COBRO)
+    billingModel?: 'ninguno' | 'fijo' | 'comision' | 'mixto';
+
+    @ApiPropertyOptional({ example: 300, nullable: true, description: 'Cuota pactada por periodo' })
+    @IsOptional()
+    @ValidateIf((_, v) => v !== null)
+    @IsNumber()
+    @Min(0)
+    monthlyFee?: number | null;
+
+    @ApiPropertyOptional({ enum: FRECUENCIAS })
+    @IsOptional()
+    @IsIn(FRECUENCIAS)
+    feeFrequency?: 'mensual' | 'trimestral' | 'anual';
+
+    @ApiPropertyOptional({ example: 5, nullable: true, description: 'Porcentaje sobre sus ventas' })
+    @IsOptional()
+    @ValidateIf((_, v) => v !== null)
+    @IsNumber()
+    @Min(0)
+    @Max(100)
+    commissionRate?: number | null;
+
+    @ApiPropertyOptional({ example: '2026-11-15', nullable: true, description: 'Próximo pago (YYYY-MM-DD)' })
+    @IsOptional()
+    @ValidateIf((_, v) => v !== null)
+    @IsDateString()
+    nextDueDate?: string | null;
+
+    @ApiPropertyOptional({ example: 'PEN' })
+    @IsOptional()
+    @IsString()
+    planCurrency?: string;
+
+    @ApiPropertyOptional({ nullable: true })
+    @IsOptional()
+    @IsString()
+    proposalNotes?: string | null;
 }

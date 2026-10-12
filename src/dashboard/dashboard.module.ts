@@ -9,17 +9,21 @@ import { Product } from '../products/entities/product.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
+import { Payment } from '../admin/entities/payment.entity';
+import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
+import { SyncChangeRequest } from '../sync/entities/sync-change-request.entity';
+import { DashboardInsightsService } from './dashboard-insights.service';
 import { StoresModule } from '../stores/stores.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([
             MarketplaceConnection, ListingLink, MarketplaceOrder,
-            Product, Notification, User, ClientProfile,
+            Product, Notification, User, ClientProfile, Payment, MonthlyBilling, SyncChangeRequest,
         ]),
         StoresModule,
     ],
     controllers: [DashboardController],
-    providers: [DashboardService],
+    providers: [DashboardService, DashboardInsightsService],
 })
 export class DashboardModule { }

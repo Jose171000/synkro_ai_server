@@ -57,6 +57,33 @@ export class ClientProfile {
     @Column({ nullable: true })
     reportEmbedTitle: string;
 
+    // ── Plan comercial (qué se le cobra y cuándo) ──
+    /** Cómo se le cobra: cuota fija, comisión sobre sus ventas, ambos o nada definido. */
+    @Column({ type: 'varchar', length: 20, default: 'ninguno' })
+    billingModel: 'ninguno' | 'fijo' | 'comision' | 'mixto';
+
+    /** Cuota pactada, por periodo de la frecuencia. */
+    @Column('decimal', { precision: 12, scale: 2, nullable: true, transformer: { to: (v: any) => v, from: (v: any) => (v === null || v === undefined ? null : Number(v)) } })
+    monthlyFee: number | null;
+
+    @Column({ type: 'varchar', length: 20, default: 'mensual' })
+    feeFrequency: 'mensual' | 'trimestral' | 'anual';
+
+    /** Porcentaje sobre sus ventas (8.5 = 8.5%). */
+    @Column('decimal', { precision: 6, scale: 3, nullable: true, transformer: { to: (v: any) => v, from: (v: any) => (v === null || v === undefined ? null : Number(v)) } })
+    commissionRate: number | null;
+
+    /** Cuándo le toca pagar la próxima cuota (YYYY-MM-DD). Avanza sola al registrar un pago recurrente. */
+    @Column({ type: 'date', nullable: true })
+    nextDueDate: string | null;
+
+    @Column({ type: 'varchar', length: 5, default: 'PEN' })
+    planCurrency: string;
+
+    /** Apuntes de la propuesta comercial para este cliente. */
+    @Column({ nullable: true, type: 'text' })
+    proposalNotes: string | null;
+
     @Column({ nullable: true, type: 'text' })
     notes: string;
 
