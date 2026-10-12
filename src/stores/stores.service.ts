@@ -262,7 +262,10 @@ export class StoresService {
             console.warn(`[Stores] No se pudo enviar la invitación a ${clean}: ${detalle}`);
             emailSent = false;
         }
-        return { email: clean, role, expiresAt, emailSent };
+        // El código solo existe ahora (en la base se guarda su huella): se entrega aquí al dueño
+        // para que pueda copiar el enlace aunque el correo no haya salido.
+        const acceptUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/invitacion?token=${token}`;
+        return { email: clean, role, expiresAt, emailSent, acceptUrl };
     }
 
     async listInvitations(userId: string, storeId: string) {

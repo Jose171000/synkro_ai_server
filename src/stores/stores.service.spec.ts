@@ -139,6 +139,14 @@ describe('invitaciones', () => {
         expect(JSON.stringify(guardada)).not.toContain(enviado[1].token);
     });
 
+    it('devuelve al dueño el enlace de la invitación, también si el correo falla', async () => {
+        const { service, correo } = construir(base);
+        correo.sendStoreInvitation.mockRejectedValueOnce(new Error('brevo caído'));
+        const r = await service.invite('ana', STORE_A, 'luz@x.com', 'editor');
+        expect(r.emailSent).toBe(false);
+        expect(r.acceptUrl).toMatch(/\/invitacion\?token=[\w-]{20,}$/);
+    });
+
     it('rechaza un correo inválido', async () => {
         const { service } = construir(base);
         await expect(service.invite('ana', STORE_A, 'no-es-correo', 'viewer')).rejects.toBeInstanceOf(BadRequestException);
