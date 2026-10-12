@@ -1,43 +1,45 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bienvenido a Synkro AI</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
-        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .header { background: #1a1a2e; padding: 32px; text-align: center; }
-        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
-        .header span { color: #6c63ff; }
-        .body { padding: 40px 32px; }
-        .body p { color: #444; line-height: 1.7; font-size: 15px; }
-        .features { display: flex; flex-direction: column; gap: 12px; margin: 24px 0; }
-        .feature { background: #f8f7ff; border-left: 4px solid #6c63ff; padding: 12px 16px; border-radius: 4px; font-size: 14px; color: #333; }
-        .btn { display: inline-block; margin: 24px 0; padding: 14px 32px; background: #6c63ff; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: bold; }
-        .footer { text-align: center; padding: 20px; font-size: 12px; color: #999; border-top: 1px solid #eee; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light only">
+  <title>Bienvenido a Synkro AI</title>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Synkro <span>AI</span></h1>
-        </div>
-        <div class="body">
-            <p>¡Hola, <strong>{{name}}</strong>! 👋</p>
-            <p>Tu cuenta ha sido creada exitosamente. Ya puedes comenzar a generar listings optimizados para tus productos usando inteligencia artificial.</p>
-            <div class="features">
-                <div class="feature">🤖 <strong>IA generativa</strong> — Títulos, descripciones y bullet points optimizados para cada marketplace</div>
-                <div class="feature">📦 <strong>Carga masiva</strong> — Procesa cientos de productos en lote desde un archivo Excel</div>
-                <div class="feature">🏷️ <strong>Categorización RAG</strong> — Categorización semántica automática con vectores</div>
-            </div>
-            <p style="text-align: center;">
-                <a href="{{loginUrl}}" class="btn">Iniciar sesión</a>
-            </p>
-        </div>
-        <div class="footer">
-            &copy; 2026 Synkro AI — Este es un email automático, por favor no respondas.
-        </div>
-    </div>
+<body style="margin:0;padding:0;background:#F8F8F5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#F8F8F5;">Tu cuenta está lista. Empieza a optimizar tus productos con IA.</div>
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#F8F8F5" style="background:#F8F8F5;">
+    <tr><td align="center" style="padding:32px 16px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;">
+        <tr><td style="background:#111111;border-radius:20px 20px 0 0;padding:36px 32px 32px;" align="center">
+          <img src="{{logoUrl}}" width="64" height="64" alt="Synkro AI" style="display:block;border:0;border-radius:16px;margin:0 auto 20px;">
+          <div style="font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#FCCB34;margin-bottom:10px;">Bienvenido</div>
+          <div style="font-size:26px;line-height:1.25;font-weight:800;color:#FFFFFF;">Tu cuenta está lista</div>
+        </td></tr>
+        <tr><td style="background:#FFFFFF;border:1px solid #ECEBE4;border-top:0;border-radius:0 0 20px 20px;padding:36px 32px 32px;">
+<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#2B2B28;">¡Hola, <strong>{{name}}</strong>!</p><p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#2B2B28;">Tu cuenta se creó con éxito. Ya puedes optimizar tus productos con inteligencia artificial y gestionar tus ventas desde un solo lugar.</p>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 10px;">
+                <tr><td style="background:#F8F8F5;border-left:3px solid #FCCB34;border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.55;color:#2B2B28;"><strong style="color:#111111;">IA generativa</strong><br>Títulos, descripciones y atributos optimizados para cada marketplace.</td></tr>
+              </table>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 10px;">
+                <tr><td style="background:#F8F8F5;border-left:3px solid #FCCB34;border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.55;color:#2B2B28;"><strong style="color:#111111;">Carga masiva</strong><br>Procesa cientos de productos en lote desde un archivo Excel.</td></tr>
+              </table>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 10px;">
+                <tr><td style="background:#F8F8F5;border-left:3px solid #FCCB34;border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.55;color:#2B2B28;"><strong style="color:#111111;">Stock sincronizado</strong><br>Conecta Mercado Libre y Falabella y mantén tu inventario al día.</td></tr>
+              </table>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:28px auto 8px;">
+                <tr><td align="center" bgcolor="#FCCB34" style="border-radius:10px;">
+                  <a href="{{loginUrl}}" target="_blank" style="display:inline-block;padding:14px 34px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:#111111;text-decoration:none;border-radius:10px;">Iniciar sesión</a>
+                </td></tr>
+              </table>
+        </td></tr>
+        <tr><td align="center" style="padding:24px 16px 0;font-size:12px;line-height:1.7;color:#6B6B66;">
+          <strong style="color:#111111;">Synkro AI</strong> · Gestión de tus marketplaces con inteligencia artificial<br>
+          Este es un correo automático, por favor no respondas a este mensaje.<br>
+          &copy; {{year}} Synkro AI
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
 </body>
 </html>

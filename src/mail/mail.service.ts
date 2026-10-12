@@ -22,11 +22,16 @@ export class MailService {
         template: string;
         context: Record<string, any>;
     }): Promise<void> {
+        // Datos comunes a todas las plantillas: el logo (se sirve desde la propia app) y el año.
+        const conMarca = {
+            ...options,
+            context: { logoUrl: `${this.frontendUrl}/logo_synkro.png`, year: new Date().getFullYear(), ...options.context },
+        };
         if (this.brevoService.isEnabled) {
-            await this.brevoService.send(options);
+            await this.brevoService.send(conMarca);
             return;
         }
-        await this.mailerService.sendMail(options);
+        await this.mailerService.sendMail(conMarca);
     }
 
     private get frontendUrl(): string {
