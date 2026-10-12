@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -9,6 +9,10 @@ import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
+import { ConnectWooCommerceDto } from './dto/connect-woocommerce.dto';
+import { ConnectShopifyDto } from './dto/connect-shopify.dto';
+import { EcommerceSyncService } from './channels/ecommerce-sync.service';
+import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
@@ -34,6 +38,7 @@ export class SyncController {
         private readonly syncService: SyncService,
         private readonly changeRequests: ChangeRequestsService,
         private readonly ordersQuery: OrdersQueryService,
+        private readonly ecommerce: EcommerceSyncService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -109,6 +114,57 @@ export class SyncController {
             country: dto.country,
             label: dto.label,
         });
+    }
+
+    @Post('woocommerce/connect')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Conecta una tienda WooCommerce a la tienda',
+        description: 'Comprueba las claves con una consulta real antes de guardarlas. El Consumer Secret se guarda cifrado y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
+    })
+    connectWooCommerce(@Body() dto: ConnectWooCommerceDto, @Req() req) {
+        return this.ecommerce.connect(scopeOf(req), 'woocommerce', {
+            site: dto.siteUrl,
+            token: dto.consumerKey,
+            secret: dto.consumerSecret,
+            label: dto.label,
+        });
+    }
+
+    @Post('shopify/connect')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Conecta una tienda Shopify a la tienda',
+        description: 'Comprueba el token y sus permisos con una consulta real antes de guardarlo. El token se guarda cifrado y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
+    })
+    connectShopify(@Body() dto: ConnectShopifyDto, @Req() req) {
+        return this.ecommerce.connect(scopeOf(req), 'shopify', { site: dto.shop, token: dto.accessToken, label: dto.label });
+    }
+
+    @Post('channels/:marketplace/listings/import')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Trae los productos que ya existen en una tienda WooCommerce o Shopify',
+        description: 'Los enlaza con el catálogo por SKU; los nuevos se crean como borrador. Con dryRun=true no escribe nada.',
+    })
+    @ApiQuery({ name: 'dryRun', required: false, type: Boolean })
+    @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta del canal; obligatoria si la tienda tiene varias.' })
+    importChannelListings(
+        @Param('marketplace') marketplace: string,
+        @Req() req,
+        @Query('dryRun') dryRun?: string,
+        @Query('connectionId') connectionId?: string,
+    ) {
+        if (!ECOMMERCE_CHANNELS.includes(marketplace as EcommerceChannel)) {
+            throw new NotFoundException('Ese canal no existe.');
+        }
+        return this.ecommerce.importListings(scopeOf(req), marketplace as EcommerceChannel, connectionId, { dryRun: dryRun === 'true' });
     }
 
     @Get('listings')

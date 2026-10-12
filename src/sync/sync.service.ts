@@ -57,14 +57,70 @@ const MARKETPLACE_NAMES: Record<string, string> = {
     mercadolibre: 'Mercado Libre',
     falabella: 'Falabella',
     yavendio: 'Yavendió',
+    woocommerce: 'WooCommerce',
+    shopify: 'Shopify',
 };
 const nombreCanal = (id: string) => MARKETPLACE_NAMES[id] ?? id;
 
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 min to complete the OAuth flow
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
 
+/**
+ * Lo que un canal de tienda propia (WooCommerce, Shopify) sabe hacer con una
+ * cuenta. Lo registra EcommerceSyncService al arrancar; así SyncService no
+ * depende de él (y no hay dependencia circular).
+ */
+export interface ChannelHandler {
+    poll(connection: MarketplaceConnection): Promise<{ nuevos: number; revisados: number }>;
+    refresh(connection: MarketplaceConnection): Promise<{ revisadas: number; actualizadas: number; ausentes: number }>;
+    history(connection: MarketplaceConnection, desde: Date, hasta: Date): Promise<{ registradas: number; yaRegistradas: number; incompleto: boolean }>;
+    pushInventory(productId: string, connectionId?: string): Promise<void>;
+}
+
 @Injectable()
 export class SyncService implements OnModuleInit {
+    private readonly channelHandlers = new Map<string, ChannelHandler>();
+
+    registerChannel(marketplace: string, handler: ChannelHandler): void {
+        this.channelHandlers.set(marketplace, handler);
+    }
+
+    hasChannel(marketplace: string): boolean {
+        return this.channelHandlers.has(marketplace);
+    }
+
+    /** Canales de los que se leen ventas y publicaciones: los dos con integración propia más los registrados. */
+    canalesDeVentas(): string[] {
+        return ['falabella', 'mercadolibre', ...this.channelHandlers.keys()];
+    }
+
+    /** Ejecutado por la cola: envía a un canal de tienda propia el stock y precio actuales. */
+    async pushInventoryToChannel(marketplace: string, productId: string, connectionId?: string): Promise<void> {
+        const handler = this.channelHandlers.get(marketplace);
+        if (!handler) throw new Error(`Marketplace no soportado aún: ${marketplace}`);
+        await handler.pushInventory(productId, connectionId);
+    }
+
+    /**
+     * Tras descontar el stock de un producto por una venta, lo manda a todas
+     * las demás cuentas donde está publicado (la de la venta ya lo descontó sola).
+     */
+    async propagateStock(userId: string, productId: string, exceptConnectionId: string): Promise<void> {
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { id: productId }, syncStatus: 'published' },
+            relations: { connection: true },
+        });
+        for (const enlace of enlaces) {
+            if (!enlace.connection || enlace.connection.id === exceptConnectionId) continue;
+            await this.syncQueue.add('inventory', {
+                productId,
+                userId,
+                marketplace: enlace.marketplace,
+                connectionId: enlace.connection.id,
+            });
+        }
+    }
+
     constructor(
         @InjectRepository(MarketplaceConnection)
         private readonly connectionRepository: Repository<MarketplaceConnection>,
@@ -97,7 +153,7 @@ export class SyncService implements OnModuleInit {
      * prepara. Reconectar una cuenta que ya está en la tienda la actualiza;
      * una cuenta distinta del mismo canal cuenta para el límite.
      */
-    private async findOrCreateConnection(
+    async findOrCreateConnection(
         scope: SyncScope,
         marketplace: string,
         externalUserId: string,
@@ -140,7 +196,7 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Las tres filas de una cuenta nueva o recién actualizada se guardan igual. */
-    private async saveConnection(scope: SyncScope, connection: MarketplaceConnection, label?: string | null) {
+    async saveConnection(scope: SyncScope, connection: MarketplaceConnection, label?: string | null) {
         const isNew = !connection.id;
         if (label !== undefined && label !== null && label.trim()) connection.label = label.trim().slice(0, 60);
         const saved = await this.connectionRepository.save(connection);
@@ -302,7 +358,7 @@ export class SyncService implements OnModuleInit {
      * Returns the connection with a valid access token,
      * refreshing it transparently if it is about to expire.
      */
-    private async getValidConnectionById(connectionId: string): Promise<MarketplaceConnection> {
+    async getValidConnectionById(connectionId: string): Promise<MarketplaceConnection> {
         const connection = await this.connectionRepository.findOne({
             where: { id: connectionId, status: 'active' },
             relations: { owner: true, store: true },
@@ -493,7 +549,7 @@ export class SyncService implements OnModuleInit {
      * tienda del mismo dueño, se avisa en vez de pisarlo: dos tiendas no
      * comparten el stock de un producto.
      */
-    private async findProductBySku(
+    async findProductBySku(
         scope: SyncScope,
         sku: string,
     ): Promise<{ product: Product | null; otraTienda: boolean }> {
@@ -2174,6 +2230,8 @@ export class SyncService implements OnModuleInit {
         if (connection.marketplace === 'mercadolibre') {
             return this.pollMeliOrders(connection.id);
         }
+        const canal = this.channelHandlers.get(connection.marketplace);
+        if (canal) return canal.poll(await this.getValidConnectionById(connection.id));
         return { nuevos: 0, revisados: 0 };
     }
 
@@ -2197,10 +2255,7 @@ export class SyncService implements OnModuleInit {
     /** Pasada periódica: ventas recientes de TODAS las cuentas activas de ventas. */
     async pollAllOrders() {
         const cuentas = await this.connectionRepository.find({
-            where: [
-                { marketplace: 'falabella', status: 'active' },
-                { marketplace: 'mercadolibre', status: 'active' },
-            ],
+            where: this.canalesDeVentas().map(marketplace => ({ marketplace, status: 'active' as const })),
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
@@ -2214,7 +2269,7 @@ export class SyncService implements OnModuleInit {
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
-        return this.pollConnections(cuentas.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre'));
+        return this.pollConnections(cuentas.filter(c => this.canalesDeVentas().includes(c.marketplace)));
     }
 
     /**
@@ -2491,9 +2546,12 @@ export class SyncService implements OnModuleInit {
         for (const c of connections) {
             const nombre = c.label || c.externalNickname || c.externalUserId;
             try {
-                const r = c.marketplace === 'falabella'
-                    ? await this.refreshFalabellaLinks(c.id)
-                    : await this.refreshMeliLinks(c.id);
+                const canal = this.channelHandlers.get(c.marketplace);
+                const r = canal
+                    ? await canal.refresh(await this.getValidConnectionById(c.id))
+                    : c.marketplace === 'falabella'
+                        ? await this.refreshFalabellaLinks(c.id)
+                        : await this.refreshMeliLinks(c.id);
                 cuentas.push({ id: c.id, marketplace: c.marketplace, nombre, ...r });
             } catch (error: any) {
                 console.warn(`[Sync] Publicaciones de ${c.marketplace} (${nombre}): ${error?.message}`);
@@ -2506,10 +2564,7 @@ export class SyncService implements OnModuleInit {
     /** Pasada periódica: el estado de las publicaciones de TODAS las cuentas de ventas. */
     async refreshAllListings() {
         const cuentas = await this.connectionRepository.find({
-            where: [
-                { marketplace: 'falabella', status: 'active' },
-                { marketplace: 'mercadolibre', status: 'active' },
-            ],
+            where: this.canalesDeVentas().map(marketplace => ({ marketplace, status: 'active' as const })),
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
@@ -2523,7 +2578,7 @@ export class SyncService implements OnModuleInit {
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
-        return this.refreshConnections(cuentas.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre'));
+        return this.refreshConnections(cuentas.filter(c => this.canalesDeVentas().includes(c.marketplace)));
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -2550,7 +2605,7 @@ export class SyncService implements OnModuleInit {
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
-        let cuentas = deLaTienda.filter(c => c.marketplace === 'falabella' || c.marketplace === 'mercadolibre');
+        let cuentas = deLaTienda.filter(c => this.canalesDeVentas().includes(c.marketplace));
         if (connectionId) {
             cuentas = cuentas.filter(c => c.id === connectionId);
             if (!cuentas.length) throw new NotFoundException('Esa cuenta no pertenece a esta tienda o no vende por ventas.');
@@ -2561,9 +2616,12 @@ export class SyncService implements OnModuleInit {
             const nombre = c.label || c.externalNickname || c.externalUserId;
             try {
                 const conRelaciones = await this.getValidConnectionById(c.id); // renueva el token si venció
-                const r = c.marketplace === 'falabella'
-                    ? await this.historialFalabella(conRelaciones, desde, hasta)
-                    : await this.historialMeli(conRelaciones, desde, hasta);
+                const canal = this.channelHandlers.get(c.marketplace);
+                const r = canal
+                    ? await canal.history(conRelaciones, desde, hasta)
+                    : c.marketplace === 'falabella'
+                        ? await this.historialFalabella(conRelaciones, desde, hasta)
+                        : await this.historialMeli(conRelaciones, desde, hasta);
                 resultado.push({ id: c.id, marketplace: c.marketplace, nombre, ...r });
             } catch (error: any) {
                 console.warn(`[Sync] Historial de ${c.marketplace} (${nombre}): ${error?.message}`);

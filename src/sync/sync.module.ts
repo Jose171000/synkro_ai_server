@@ -9,6 +9,9 @@ import { SyncProcessor } from './sync.processor';
 import { MeliApiService } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
+import { WooApiService } from './woo/woo-api.service';
+import { ShopifyApiService } from './shopify/shopify-api.service';
+import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { CredentialsEncryptionService } from './credentials-encryption.service';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
@@ -30,7 +33,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService],
 })
 export class SyncModule { }

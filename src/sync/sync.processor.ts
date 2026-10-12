@@ -53,6 +53,9 @@ export class SyncProcessor extends WorkerHost {
                         result = { status: 'synced' };
                     } else if (marketplace === 'falabella') {
                         result = await this.syncService.pushInventoryToFalabella(productId, connectionId);
+                    } else if (this.syncService.hasChannel(marketplace)) {
+                        await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId);
+                        result = { status: 'synced' };
                     } else {
                         throw new Error(`Marketplace no soportado aún: ${marketplace}`);
                     }
