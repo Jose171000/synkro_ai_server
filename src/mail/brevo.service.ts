@@ -56,6 +56,7 @@ export class BrevoService {
     }): Promise<void> {
         const html = this.compile(options.template)(options.context);
 
+        try {
         await axios.post(
             BREVO_ENDPOINT,
             {
@@ -73,6 +74,14 @@ export class BrevoService {
                 timeout: 15000,
             },
         );
+        } catch (error: any) {
+            // Brevo explica el rechazo en el cuerpo (remitente no validado, clave inválida, IP no autorizada…).
+            const d = error?.response?.data;
+            const motivo = d ? (d.message ?? JSON.stringify(d)) : error?.message;
+            this.logger.error(`Brevo rechazó el correo "${options.subject}" para ${options.to}: HTTP ${error?.response?.status ?? "?"} — ${motivo}`);
+            error.message = `Brevo: ${motivo}`;
+            throw error;
+        }
 
         // Brevo responde 2xx al ACEPTAR el mensaje; la entrega (o el rechazo
         // por remitente no validado) ocurre después y solo se ve en sus logs.
