@@ -5,13 +5,13 @@ import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { SyncChangeRequest } from '../sync/entities/sync-change-request.entity';
 import { Product } from '../products/entities/product.entity';
-import { User } from '../users/entities/user.entity';
-import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { Payment } from '../admin/entities/payment.entity';
-import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
+import { Store } from '../stores/entities/store.entity';
+import { CreatePaymentDto } from '../admin/dto/create-payment.dto';
 import { DashboardService } from './dashboard.service';
-import { ClientStoresService } from './client-stores';
+import { UpdateStorePlanDto } from './dto/update-store-plan.dto';
 import {
+    avanzarVencimiento,
     CicloDeCobro,
     cicloDeCobro,
     comisionDelCiclo,
@@ -79,31 +79,32 @@ export interface ResumenDePlan {
     igvPorcentaje: number;
 }
 
-type PerfilDePlan = Pick<
-    ClientProfile,
+/** Los datos del plan que lleva cada tienda. */
+type PlanDeTienda = Pick<
+    Store,
     'billingModel' | 'monthlyFee' | 'feeFrequency' | 'commissionRate' | 'nextDueDate' | 'planCurrency' | 'feeIncludesIgv' | 'commissionIncludesIgv' | 'planStartDate'
 >;
 
-export function armarPlan(perfil: PerfilDePlan, ventasMes: number, ventasCiclo: number, hoy: string): ResumenDePlan {
-    const cobraCuota = perfil.billingModel === 'fijo' || perfil.billingModel === 'mixto';
-    const cobraComision = perfil.billingModel === 'comision' || perfil.billingModel === 'mixto';
-    const ciclo = cicloDeCobro(perfil.nextDueDate, perfil.feeFrequency, perfil.planStartDate, hoy);
-    const comision = cobraComision ? comisionDelCiclo(ventasCiclo, perfil.commissionRate, ciclo, hoy) : { acumulada: 0, proyectada: null };
+export function armarPlan(plan: PlanDeTienda, ventasMes: number, ventasCiclo: number, hoy: string): ResumenDePlan {
+    const cobraCuota = plan.billingModel === 'fijo' || plan.billingModel === 'mixto';
+    const cobraComision = plan.billingModel === 'comision' || plan.billingModel === 'mixto';
+    const ciclo = cicloDeCobro(plan.nextDueDate, plan.feeFrequency, plan.planStartDate, hoy);
+    const comision = cobraComision ? comisionDelCiclo(ventasCiclo, plan.commissionRate, ciclo, hoy) : { acumulada: 0, proyectada: null };
     // La fecha de cobro vale para cualquier plan con algo que cobrar: cuota, comisión o ambos.
-    const pago = perfil.billingModel !== 'ninguno' ? estadoDePago(perfil.nextDueDate, hoy) : null;
+    const pago = plan.billingModel !== 'ninguno' ? estadoDePago(plan.nextDueDate, hoy) : null;
 
-    const cuota = cobraCuota ? desglosarIgv(perfil.monthlyFee, !!perfil.feeIncludesIgv) : null;
-    const comisionImporte = cobraComision ? desglosarIgv(comision.acumulada, !!perfil.commissionIncludesIgv) : null;
+    const cuota = cobraCuota ? desglosarIgv(plan.monthlyFee, !!plan.feeIncludesIgv) : null;
+    const comisionImporte = cobraComision ? desglosarIgv(comision.acumulada, !!plan.commissionIncludesIgv) : null;
 
     return {
-        modelo: perfil.billingModel as ModeloDeCobro,
-        moneda: perfil.planCurrency || 'PEN',
-        frecuencia: perfil.feeFrequency,
-        cuotaFija: cobraCuota ? perfil.monthlyFee : null,
-        cuotaIncluyeIgv: !!perfil.feeIncludesIgv,
-        tasa: cobraComision ? perfil.commissionRate : null,
-        comisionIncluyeIgv: !!perfil.commissionIncludesIgv,
-        proximoPago: perfil.billingModel !== 'ninguno' ? perfil.nextDueDate : null,
+        modelo: plan.billingModel as ModeloDeCobro,
+        moneda: plan.planCurrency || 'PEN',
+        frecuencia: plan.feeFrequency,
+        cuotaFija: cobraCuota ? plan.monthlyFee : null,
+        cuotaIncluyeIgv: !!plan.feeIncludesIgv,
+        tasa: cobraComision ? plan.commissionRate : null,
+        comisionIncluyeIgv: !!plan.commissionIncludesIgv,
+        proximoPago: plan.billingModel !== 'ninguno' ? plan.nextDueDate : null,
         estadoPago: pago?.estado ?? null,
         diasParaPago: pago?.dias ?? null,
         ciclo,
@@ -119,8 +120,8 @@ export function armarPlan(perfil: PerfilDePlan, ventasMes: number, ventasCiclo: 
 /**
  * Lo que ayuda en el día a día: a quien tiene una tienda, sus productos
  * ganadores, lo que debe despachar y lo que le cuesta su plan; a la agencia,
- * cuánto vende cada cliente, cuánto y cuándo hay que cobrarle y qué proponerle.
- * Todo sale de datos que el sistema ya tiene.
+ * cuánto vende cada tienda (cada tienda es un cliente), cuánto y cuándo hay que
+ * cobrarle y qué proponerle. Todo sale de datos que el sistema ya tiene.
  */
 @Injectable()
 export class DashboardInsightsService {
@@ -129,26 +130,27 @@ export class DashboardInsightsService {
         @InjectRepository(ListingLink) private readonly listings: Repository<ListingLink>,
         @InjectRepository(SyncChangeRequest) private readonly changes: Repository<SyncChangeRequest>,
         @InjectRepository(Product) private readonly products: Repository<Product>,
-        @InjectRepository(User) private readonly users: Repository<User>,
-        @InjectRepository(ClientProfile) private readonly profiles: Repository<ClientProfile>,
         @InjectRepository(Payment) private readonly payments: Repository<Payment>,
-        @InjectRepository(MonthlyBilling) private readonly billings: Repository<MonthlyBilling>,
+        @InjectRepository(Store) private readonly stores: Repository<Store>,
         private readonly summary: DashboardService,
-        private readonly clientStores: ClientStoresService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
-    // Cliente: su tienda
+    // Tienda: lo que ve su dueño
     // ─────────────────────────────────────────────────────────────
 
-    async getInsights(scope: { userId: string; storeId: string }) {
+    /**
+     * `verPlan`: el plan y los cobros solo los ve quien es dueño de la tienda
+     * (o un superadmin); un editor o lector de la tienda no.
+     */
+    async getInsights(scope: { userId: string; storeId: string; verPlan?: boolean }) {
         const hoy = hoyEnLima();
         const [ganadoras, porDespachar, ventasDiarias, pendientesDeRevision, plan] = await Promise.all([
             this.ganadoras(scope),
             this.porDespachar(scope.storeId),
             this.ventasDiarias(scope.storeId),
             this.changes.count({ where: { store: { id: scope.storeId }, status: 'pending' } }),
-            this.planDelCliente(scope.userId, hoy),
+            scope.verPlan === false ? Promise.resolve(null) : this.planDeLaTienda(scope.storeId, hoy),
         ]);
         return { ganadoras, porDespachar, ventasDiarias, pendientesDeRevision, plan };
     }
@@ -253,118 +255,91 @@ export class DashboardInsightsService {
         return salida;
     }
 
-    /**
-     * Ventas de todas las tiendas de un cliente desde una fecha: es la base de su comisión.
-     * Sus tiendas son las que se le asignaron, las que son suyas o las que llevan el nombre
-     * de su negocio (ver client-stores.ts), sin importar quién conectó las cuentas.
-     */
-    private async ventasDeCliente(clienteId: string, desde: Date, hasta?: Date): Promise<number> {
-        const { tiendasDe } = await this.clientStores.mapa();
-        const ids = tiendasDe.get(clienteId) ?? [];
+    /** Precio de los productos vendidos por una tienda en un rango: es la base de su comisión. */
+    private async ventasDeLaTienda(storeId: string, desde: Date, hasta?: Date): Promise<number> {
         const qb = this.orders
             .createQueryBuilder('o')
             .select('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-            .where('(o."storeId" IN (:...ids) OR (o."storeId" IS NULL AND o."ownerId" = :clienteId))', { ids: ids.length ? ids : ['00000000-0000-0000-0000-000000000000'], clienteId })
+            .where('o."storeId" = :storeId', { storeId })
             .andWhere('o."orderDate" >= :desde', { desde });
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
         const fila = await qb.getRawOne();
         return Number(fila?.importe ?? 0);
     }
 
-    /** El plan de quien mira: solo existe si la agencia le definió uno. */
-    private async planDelCliente(userId: string, hoy: string) {
-        const perfil = await this.profiles.findOne({ where: { user: { id: userId } } });
-        if (!perfil || perfil.billingModel === 'ninguno') return null;
+    /** El plan de la tienda: solo existe si la agencia le definió uno. */
+    private async planDeLaTienda(storeId: string, hoy: string) {
+        const tienda = await this.stores.findOne({ where: { id: storeId } });
+        if (!tienda || tienda.billingModel === 'ninguno') return null;
 
         const desdeEsteMes = inicioDeMesLima(hoy);
-        const ciclo = cicloDeCobro(perfil.nextDueDate, perfil.feeFrequency, perfil.planStartDate, hoy);
-        const [ventasMes, ventasMesPasado, ventasCiclo, ultimoPago, liquidacion] = await Promise.all([
-            this.ventasDeCliente(userId, desdeEsteMes),
-            this.ventasDeCliente(userId, inicioDeMesLima(hoy, -1), desdeEsteMes),
-            this.ventasDeCliente(userId, limaMedianoche(ciclo.desde), limaMedianoche(ciclo.hasta)),
-            this.payments.findOne({ where: { client: { id: userId } }, order: { paidAt: 'DESC' } }),
-            this.billings.findOne({ where: { client: { id: userId }, period: this.periodoAnterior(hoy) } }),
+        const ciclo = cicloDeCobro(tienda.nextDueDate, tienda.feeFrequency, tienda.planStartDate, hoy);
+        const [ventasMes, ventasMesPasado, ventasCiclo, ultimoPago] = await Promise.all([
+            this.ventasDeLaTienda(storeId, desdeEsteMes),
+            this.ventasDeLaTienda(storeId, inicioDeMesLima(hoy, -1), desdeEsteMes),
+            this.ventasDeLaTienda(storeId, limaMedianoche(ciclo.desde), limaMedianoche(ciclo.hasta)),
+            this.payments.findOne({ where: { store: { id: storeId } }, order: { paidAt: 'DESC' } }),
         ]);
 
-        const plan = armarPlan(perfil, ventasMes, ventasCiclo, hoy);
         return {
-            ...plan,
+            ...armarPlan(tienda, ventasMes, ventasCiclo, hoy),
             ventasMesAnterior: ventasMesPasado,
             ultimoPago: ultimoPago ? { fecha: ultimoPago.paidAt, monto: Number(ultimoPago.amount), concepto: ultimoPago.concept } : null,
-            // La liquidación del mes pasado, si hay comisión: cuánto fue y en qué estado está.
-            liquidacionMesAnterior: liquidacion
-                ? { periodo: liquidacion.period, comision: Number(liquidacion.commissionAmount), estado: liquidacion.status }
-                : null,
         };
     }
 
-    private periodoAnterior(hoy: string): string {
+    private mesDe(hoy: string, desplazamiento: number): string {
         const [a, m] = hoy.split('-').map(Number);
-        const d = new Date(Date.UTC(a, m - 2, 1));
+        const d = new Date(Date.UTC(a, m - 1 + desplazamiento, 1));
         return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Agencia: todos los clientes
+    // Agencia: todas las tiendas (cada tienda es un cliente)
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * Control de la cartera: cuánto vende cada cliente, qué se le cobra, cuándo
+     * Control de la cartera: cuánto vende cada tienda, qué se le cobra, cuándo
      * vence y qué proponerle. Las cifras salen de consultas agrupadas, no de una
-     * por cliente, para que no se degrade al crecer la cartera.
+     * por tienda, para que no se degrade al crecer la cartera.
      */
     async getAgency() {
         const hoy = hoyEnLima();
         const mesActual = hoy.slice(0, 7);
         const mesesAnteriores = [-1, -2, -3].map(d => this.mesDe(hoy, d));
 
-        const clientes = await this.users.find({
-            where: [{ role: 'user' }, { role: 'moderator' }],
-            order: { createdAt: 'DESC' },
-        });
-        if (!clientes.length) return this.agenciaVacia(hoy);
+        const tiendas = await this.stores.find({ relations: { owner: true }, order: { createdAt: 'DESC' } });
+        if (!tiendas.length) return this.agenciaVacia(hoy);
 
-        const ids = clientes.map(c => c.id);
-        const perfiles = await this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } });
-        const perfilDe = new Map(perfiles.map(p => [p.user?.id, p]));
-
-        // Ciclo de cobro de cada cliente; las ventas se leen desde el más antiguo de todos.
-        const ciclos = new Map(
-            clientes.map(c => {
-                const p = perfilDe.get(c.id);
-                return [c.id, cicloDeCobro(p?.nextDueDate, p?.feeFrequency, p?.planStartDate, hoy)] as const;
-            }),
-        );
+        // Ciclo de cobro de cada tienda; las ventas se leen desde el más antiguo de todos.
+        const ciclos = new Map(tiendas.map(t => [t.id, cicloDeCobro(t.nextDueDate, t.feeFrequency, t.planStartDate, hoy)] as const));
         const desdeMes = `${mesesAnteriores[mesesAnteriores.length - 1]}-01`;
         const desdeVentas = [desdeMes, ...[...ciclos.values()].map(c => c.desde)].sort()[0];
 
-        const mapa = await this.clientStores.mapa();
-        const conexionesPorTienda: { tienda: string; cantidad: string }[] = await this.orders.query(
-            `SELECT "storeId" AS tienda, COUNT(*) AS cantidad FROM marketplace_connections WHERE "storeId" IS NOT NULL GROUP BY "storeId"`,
-        );
-        const [ventas, ultimosPagos, cobradoMes, liquidaciones, global] = await Promise.all([
-            // Ventas por tienda y DÍA (hora de Lima): de ahí salen el mes, los anteriores y el ciclo de cobro de cada cliente.
-            // Cada tienda se atribuye a su cliente (ver client-stores.ts), no a quien conectó las cuentas.
+        const [ventas, conexiones, ultimosPagos, cobradoMes, global] = await Promise.all([
+            // Ventas por tienda y DÍA (hora de Lima): de ahí salen el mes, los anteriores y el ciclo de cobro de cada una.
             this.orders.query(
-                `SELECT o."storeId" AS tienda, o."ownerId" AS dueno,
+                `SELECT o."storeId" AS tienda,
                         to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM-DD') AS dia,
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
-                  WHERE o."orderDate" >= $1
-                  GROUP BY o."storeId", o."ownerId", dia`,
+                  WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1
+                  GROUP BY o."storeId", dia`,
                 [limaMedianoche(desdeVentas)],
             ),
 
-            // El último pago de cada cliente (DISTINCT ON necesita las columnas en crudo para traer el clientId).
+            this.orders.query(`SELECT "storeId" AS tienda, marketplace, status FROM marketplace_connections WHERE "storeId" IS NOT NULL`),
+
+            // El último pago de cada tienda (DISTINCT ON necesita las columnas en crudo para traer el storeId).
             this.payments
                 .createQueryBuilder('p')
-                .select(['p."clientId" AS "clientId"', 'p."paidAt" AS "paidAt"', 'p.amount AS amount'])
-                .distinctOn(['p."clientId"'])
-                .where('p."clientId" IN (:...ids)', { ids })
-                .orderBy('p."clientId"')
+                .select(['p."storeId" AS "storeId"', 'p."paidAt" AS "paidAt"', 'p.amount AS amount'])
+                .distinctOn(['p."storeId"'])
+                .where('p."storeId" IS NOT NULL')
+                .orderBy('p."storeId"')
                 .addOrderBy('p."paidAt"', 'DESC')
-                .getRawMany<{ clientId: string; paidAt: string; amount: string }>(),
+                .getRawMany<{ storeId: string; paidAt: string; amount: string }>(),
 
             this.payments
                 .createQueryBuilder('p')
@@ -372,9 +347,7 @@ export class DashboardInsightsService {
                 .where('"p"."paidAt" >= :desde', { desde: `${mesActual}-01` })
                 .getRawOne(),
 
-            this.billings.find({ where: { period: this.periodoAnterior(hoy) }, relations: { client: true } }),
-
-            // El superadmin ve TODO lo que se vendió, también lo de tiendas que no son de ningún cliente de la lista.
+            // El superadmin ve TODO lo que se vendió este mes, de cualquier tienda.
             this.orders.query(
                 `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o WHERE o."orderDate" >= $1`,
@@ -382,62 +355,52 @@ export class DashboardInsightsService {
             ),
         ]);
 
-        const pagoDe = new Map(ultimosPagos.map(p => [p.clientId, p]));
-        const liquidacionDe = new Map(liquidaciones.map(l => [l.client.id, l]));
+        const pagoDe = new Map(ultimosPagos.map(p => [p.storeId, p]));
         const diasDe = new Map<string, { dia: string; pedidos: number; importe: number }[]>();
-        const ventasPorTiendaSinCliente = new Map<string, { pedidos: number; importe: number }>();
-        const idsDeClientes = new Set(ids);
         for (const f of ventas) {
-            // El cliente de la venta: el de su tienda; si no tiene tienda (ventas antiguas), el que la registró.
-            const cliente = f.tienda ? mapa.clienteDe.get(f.tienda) : (idsDeClientes.has(f.dueno) ? f.dueno : undefined);
-            const dato = { dia: f.dia, pedidos: Number(f.pedidos), importe: Number(f.importe) };
-            if (cliente) {
-                const lista = diasDe.get(cliente) ?? [];
-                lista.push(dato);
-                diasDe.set(cliente, lista);
-            } else if (f.tienda && f.dia.startsWith(mesActual)) {
-                const previo = ventasPorTiendaSinCliente.get(f.tienda) ?? { pedidos: 0, importe: 0 };
-                ventasPorTiendaSinCliente.set(f.tienda, { pedidos: previo.pedidos + dato.pedidos, importe: previo.importe + dato.importe });
-            }
+            const lista = diasDe.get(f.tienda) ?? [];
+            lista.push({ dia: f.dia, pedidos: Number(f.pedidos), importe: Number(f.importe) });
+            diasDe.set(f.tienda, lista);
+        }
+        const canalesDe = new Map<string, { marketplace: string; status: string }[]>();
+        for (const c of conexiones) {
+            const lista = canalesDe.get(c.tienda) ?? [];
+            lista.push({ marketplace: c.marketplace, status: c.status });
+            canalesDe.set(c.tienda, lista);
         }
         const suma = (dias: { dia: string; pedidos: number; importe: number }[], pertenece: (dia: string) => boolean) =>
             dias.filter(d => pertenece(d.dia)).reduce((s, d) => ({ pedidos: s.pedidos + d.pedidos, importe: s.importe + d.importe }), { pedidos: 0, importe: 0 });
 
-        const filas = clientes.map(cliente => {
-            const perfil = perfilDe.get(cliente.id);
-            const dias = diasDe.get(cliente.id) ?? [];
-            const ciclo = ciclos.get(cliente.id)!;
+        const filas = tiendas.map(tienda => {
+            const dias = diasDe.get(tienda.id) ?? [];
+            const ciclo = ciclos.get(tienda.id)!;
             const delMes = suma(dias, d => d.startsWith(mesActual));
             const anteriores = mesesAnteriores.map(m => redondear(suma(dias, d => d.startsWith(m)).importe));
-            // Ventas del ciclo de cobro: de su inicio a la fecha de cobro (sin incluirla), sin pasar de hoy.
+            // Ventas del ciclo de cobro: de su inicio a la fecha de cobro (sin incluirla).
             const ventasCiclo = redondear(suma(dias, d => d >= ciclo.desde && d < ciclo.hasta).importe);
 
-            const plan = armarPlan(
-                perfil ?? { billingModel: 'ninguno', monthlyFee: null, feeFrequency: 'mensual', commissionRate: null, nextDueDate: null, planCurrency: 'PEN', feeIncludesIgv: false, commissionIncludesIgv: false, planStartDate: null },
-                redondear(delMes.importe),
-                ventasCiclo,
-                hoy,
-            );
+            const plan = armarPlan(tienda, redondear(delMes.importe), ventasCiclo, hoy);
             const propuesta = proponerPlan({
                 modelo: plan.modelo,
-                cuotaFija: perfil?.monthlyFee ?? null,
-                frecuencia: perfil?.feeFrequency ?? 'mensual',
-                tasa: perfil?.commissionRate ?? null,
+                cuotaFija: tienda.monthlyFee,
+                frecuencia: tienda.feeFrequency,
+                tasa: tienda.commissionRate,
                 ventasMes: delMes.importe,
                 ventasMesesAnteriores: anteriores,
                 moneda: plan.moneda,
-                cuotaIncluyeIgv: perfil?.feeIncludesIgv ?? false,
-                comisionIncluyeIgv: perfil?.commissionIncludesIgv ?? false,
+                cuotaIncluyeIgv: tienda.feeIncludesIgv,
+                comisionIncluyeIgv: tienda.commissionIncludesIgv,
             });
-            const pago = pagoDe.get(cliente.id);
-            const liq = liquidacionDe.get(cliente.id);
+            const pago = pagoDe.get(tienda.id);
+            const canales = canalesDe.get(tienda.id) ?? [];
 
             return {
-                id: cliente.id,
-                nombre: `${cliente.name ?? ''} ${cliente.lastName ?? ''}`.trim() || cliente.email,
-                email: cliente.email,
-                empresa: perfil?.businessName || cliente.nameCompany || null,
-                estado: perfil?.status ?? (cliente.isActive ? 'activo' : 'pausado'),
+                id: tienda.id,
+                nombre: tienda.name,
+                /** Correo de quien creó la tienda: no siempre es el cliente. */
+                dueno: tienda.owner?.email ?? '',
+                canales,
+                canalesCaidos: canales.filter(c => c.status !== 'active').length,
                 ventas: {
                     mes: redondear(delMes.importe),
                     pedidosMes: delMes.pedidos,
@@ -445,62 +408,43 @@ export class DashboardInsightsService {
                 },
                 plan,
                 ultimoPago: pago ? { fecha: pago.paidAt, monto: Number(pago.amount) } : null,
-                liquidacionMesAnterior: liq ? { periodo: liq.period, comision: Number(liq.commissionAmount), estado: liq.status } : null,
                 propuesta,
-                notasDePropuesta: perfil?.proposalNotes ?? null,
-                tiendas: mapa.tiendas.filter(t => t.clienteId === cliente.id).map(t => ({ id: t.id, nombre: t.nombre, origen: t.origen })),
+                notasDePropuesta: tienda.proposalNotes ?? null,
             };
         });
 
-        // Primero lo que hay que cobrar o vigilar: vencidos, luego por vencer, luego el resto por ventas.
+        // Primero lo que hay que cobrar o vigilar: vencidos, luego por vencer, luego el resto por lo que cobrar y vender.
         const peso = (f: typeof filas[number]) =>
             f.plan.estadoPago === 'vencido' ? 3 : f.plan.estadoPago === 'vence_hoy' ? 2.5 : f.plan.estadoPago === 'por_vencer' ? 2 : 0;
         filas.sort((a, b) => peso(b) - peso(a) || b.plan.cobro.total - a.plan.cobro.total || b.ventas.mes - a.ventas.mes);
 
-        const activos = filas.filter(f => f.estado === 'activo' && f.plan.modelo !== 'ninguno');
-        const vencidos = activos.filter(f => f.plan.estadoPago === 'vencido');
-        const proximos = activos.filter(f => f.plan.estadoPago === 'por_vencer' || f.plan.estadoPago === 'vence_hoy');
+        const conPlan = filas.filter(f => f.plan.modelo !== 'ninguno');
+        const vencidos = conPlan.filter(f => f.plan.estadoPago === 'vencido');
+        const proximos = conPlan.filter(f => f.plan.estadoPago === 'por_vencer' || f.plan.estadoPago === 'vence_hoy');
         const total = (lista: typeof filas) => sumarImportes(...lista.flatMap(f => [f.plan.cobro.cuota, f.plan.cobro.comision]));
         const soloCuota = (lista: typeof filas) => sumarImportes(...lista.map(f => f.plan.cobro.cuota));
         const soloComision = (lista: typeof filas) => sumarImportes(...lista.map(f => f.plan.cobro.comision));
         const resumen = (lista: typeof filas) => ({ cantidad: lista.length, ...total(lista) });
 
-        const conexiones = new Map(conexionesPorTienda.map(c => [c.tienda, Number(c.cantidad)]));
-        // Tiendas con ventas o canales que no son de ningún cliente: se ven aquí para poder asignarlas.
-        const sinAsignar = mapa.tiendas
-            .filter(t => !t.clienteId)
-            .map(t => ({
-                id: t.id,
-                nombre: t.nombre,
-                dueno: t.duenoEmail,
-                ventasMes: redondear(ventasPorTiendaSinCliente.get(t.id)?.importe ?? 0),
-                pedidosMes: ventasPorTiendaSinCliente.get(t.id)?.pedidos ?? 0,
-                canales: conexiones.get(t.id) ?? 0,
-            }))
-            .filter(t => t.ventasMes > 0 || t.canales > 0)
-            .sort((a, b) => b.ventasMes - a.ventasMes);
-
         return {
             hoy,
             igvPorcentaje: IGV_PORCENTAJE,
-            sinAsignar,
             totales: {
                 clientes: filas.length,
                 ventasDelMes: redondear(Number(global?.[0]?.importe ?? 0)),
                 pedidosDelMes: Number(global?.[0]?.pedidos ?? 0),
-                ventasDeClientes: redondear(filas.reduce((s, f) => s + f.ventas.mes, 0)),
-                // Lo recurrente: cuotas fijas de clientes activos, llevadas a mes y sin IGV.
-                ingresoFijoMensual: redondear(activos.reduce((s, f) => s + mensualizar(f.plan.cobro.cuota?.subtotal ?? 0, f.plan.frecuencia), 0)),
+                // Lo recurrente: cuotas fijas llevadas a mes y sin IGV.
+                ingresoFijoMensual: redondear(conPlan.reduce((s, f) => s + mensualizar(f.plan.cobro.cuota?.subtotal ?? 0, f.plan.frecuencia), 0)),
                 // Lo que debe ingresar hasta la fecha de cobro de cada cliente: cuota + comisión acumulada, ya con su IGV.
-                porIngresar: total(activos),
-                porIngresarCuotas: soloCuota(activos),
-                porIngresarComisiones: soloComision(activos),
-                comisionAcumulada: redondear(activos.reduce((s, f) => s + (f.plan.cobro.comision?.subtotal ?? 0), 0)),
-                comisionProyectada: redondear(activos.reduce((s, f) => s + (f.plan.comisionProyectada != null ? desglosarIgv(f.plan.comisionProyectada, f.plan.comisionIncluyeIgv).subtotal : (f.plan.cobro.comision?.subtotal ?? 0)), 0)),
+                porIngresar: total(conPlan),
+                porIngresarCuotas: soloCuota(conPlan),
+                porIngresarComisiones: soloComision(conPlan),
+                comisionAcumulada: redondear(conPlan.reduce((s, f) => s + (f.plan.cobro.comision?.subtotal ?? 0), 0)),
+                comisionProyectada: redondear(conPlan.reduce((s, f) => s + (f.plan.comisionProyectada != null ? desglosarIgv(f.plan.comisionProyectada, f.plan.comisionIncluyeIgv).subtotal : (f.plan.cobro.comision?.subtotal ?? 0)), 0)),
                 cobradoEsteMes: Number(cobradoMes?.total ?? 0),
                 vencidos: resumen(vencidos),
                 proximos: resumen(proximos),
-                sinPlan: filas.filter(f => f.plan.modelo === 'ninguno').length,
+                sinPlan: filas.length - conPlan.length,
                 porModelo: {
                     fijo: filas.filter(f => f.plan.modelo === 'fijo').length,
                     comision: filas.filter(f => f.plan.modelo === 'comision').length,
@@ -516,86 +460,73 @@ export class DashboardInsightsService {
         return {
             hoy,
             igvPorcentaje: IGV_PORCENTAJE,
-            sinAsignar: [] as { id: string; nombre: string; dueno: string; ventasMes: number; pedidosMes: number; canales: number }[],
             totales: {
-                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ventasDeClientes: 0, ingresoFijoMensual: 0,
+                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ingresoFijoMensual: 0,
                 porIngresar: cero, porIngresarCuotas: cero, porIngresarComisiones: cero,
                 comisionAcumulada: 0, comisionProyectada: 0, cobradoEsteMes: 0,
                 vencidos: { cantidad: 0, ...cero }, proximos: { cantidad: 0, ...cero }, sinPlan: 0,
                 porModelo: { fijo: 0, comision: 0, mixto: 0 },
             },
-            clientes: [],
+            clientes: [] as any[],
         };
     }
 
-    private mesDe(hoy: string, desplazamiento: number): string {
-        const [a, m] = hoy.split('-').map(Number);
-        const d = new Date(Date.UTC(a, m - 1 + desplazamiento, 1));
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-    }
-
     // ─────────────────────────────────────────────────────────────
-    // Agencia: todo lo de un cliente, como lo ve él
+    // Agencia: una tienda a detalle, su plan y sus pagos
     // ─────────────────────────────────────────────────────────────
 
-    /**
-     * Lo mismo que ve el cliente en su dashboard, para que el superadmin lo
-     * revise a detalle. Un cliente puede tener varias tiendas: se elige una
-     * (la primera si no se indica) y se devuelve la lista para cambiar.
-     */
-    async getClientDetail(clientId: string, storeId?: string) {
-        const cliente = await this.users.findOne({ where: { id: clientId } });
-        if (!cliente) throw new NotFoundException('Cliente no encontrado');
+    /** Lo mismo que ve el dueño de la tienda en su dashboard, para revisarlo a detalle. */
+    async getClientDetail(storeId: string) {
+        const tienda = await this.stores.findOne({ where: { id: storeId }, relations: { owner: true } });
+        if (!tienda) throw new NotFoundException('Tienda no encontrada');
 
-        const { tiendas: todas } = await this.clientStores.mapa();
-        const tiendas = todas.filter(t => t.clienteId === clientId);
-        const elegida = tiendas.find(t => t.id === storeId) ?? tiendas[0];
-        if (!elegida) {
-            return { tiendas: [], tiendaId: null, resumen: null, insights: null, plan: await this.planDelCliente(clientId, hoyEnLima()) };
-        }
-
-        const scope = { userId: clientId, storeId: elegida.id };
-        const [resumen, insights] = await Promise.all([this.summary.getSummary(scope), this.getInsights(scope)]);
+        const scope = { userId: tienda.owner.id, storeId, verPlan: true };
+        const [resumen, insights, pagos] = await Promise.all([
+            this.summary.getSummary(scope),
+            this.getInsights(scope),
+            this.payments.find({ where: { store: { id: storeId } }, order: { paidAt: 'DESC' }, take: 8 }),
+        ]);
         return {
-            tiendas: tiendas.map(t => ({ id: t.id, nombre: t.nombre })),
-            tiendaId: elegida.id,
+            tienda: { id: tienda.id, nombre: tienda.name, dueno: tienda.owner.email },
             resumen,
             insights,
             plan: insights.plan,
+            pagos: pagos.map(p => ({ id: p.id, fecha: p.paidAt, monto: Number(p.amount), concepto: p.concept, tipo: p.type })),
         };
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Agencia: asignar tiendas a clientes
-    // ─────────────────────────────────────────────────────────────
+    /** Guarda el plan comercial de una tienda. */
+    async updateStorePlan(storeId: string, dto: UpdateStorePlanDto) {
+        const tienda = await this.stores.findOne({ where: { id: storeId } });
+        if (!tienda) throw new NotFoundException('Tienda no encontrada');
+        // Solo los campos del plan; nunca el dueño ni el resto de la tienda.
+        const campos: (keyof UpdateStorePlanDto)[] = [
+            'billingModel', 'monthlyFee', 'feeFrequency', 'commissionRate', 'nextDueDate', 'planCurrency',
+            'feeIncludesIgv', 'commissionIncludesIgv', 'planStartDate', 'proposalNotes',
+        ];
+        for (const campo of campos) {
+            if (dto[campo] !== undefined) (tienda as any)[campo] = dto[campo];
+        }
+        await this.stores.save(tienda);
+        return { id: tienda.id };
+    }
 
-    /** Todas las tiendas, con su dueño, a qué cliente pertenecen y de qué manera, y cuánto vendieron este mes. */
-    async getStoreAssignments() {
-        const [{ tiendas }, ventas, conexiones] = await Promise.all([
-            this.clientStores.mapa(),
-            this.orders.query(
-                `SELECT o."storeId" AS tienda, COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
-                   FROM marketplace_orders o WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1 GROUP BY o."storeId"`,
-                [inicioDeMesLima(hoyEnLima())],
-            ),
-            this.orders.query(`SELECT "storeId" AS tienda, COUNT(*) AS cantidad FROM marketplace_connections WHERE "storeId" IS NOT NULL GROUP BY "storeId"`),
-        ]);
-        const ventasDe = new Map<string, { pedidos: number; importe: number }>(ventas.map((v: any) => [v.tienda, { pedidos: Number(v.pedidos), importe: Number(v.importe) }]));
-        const canalesDe = new Map<string, number>(conexiones.map((c: any) => [c.tienda, Number(c.cantidad)]));
-        return tiendas.map(t => ({
-            id: t.id,
-            nombre: t.nombre,
-            dueno: t.duenoEmail,
-            clienteId: t.clienteId,
-            origen: t.origen,
-            ventasMes: redondear(ventasDe.get(t.id)?.importe ?? 0),
-            pedidosMes: ventasDe.get(t.id)?.pedidos ?? 0,
-            canales: canalesDe.get(t.id) ?? 0,
+    /** Registra un pago de la tienda; si es recurrente, adelanta solo su próxima fecha de cobro. */
+    async registerStorePayment(storeId: string, dto: CreatePaymentDto) {
+        const tienda = await this.stores.findOne({ where: { id: storeId }, relations: { owner: true } });
+        if (!tienda) throw new NotFoundException('Tienda no encontrada');
+
+        const pago = await this.payments.save(this.payments.create({
+            ...dto,
+            currency: dto.currency || tienda.planCurrency || 'PEN',
+            store: { id: storeId } as any,
+            client: { id: tienda.owner.id } as any,
         }));
-    }
 
-    async assignStore(storeId: string, clientId: string | null) {
-        return this.clientStores.asignar(storeId, clientId);
+        if (dto.type === 'recurrente' && tienda.billingModel !== 'ninguno') {
+            tienda.nextDueDate = avanzarVencimiento(tienda.nextDueDate, dto.paidAt.slice(0, 10), dto.frequency ?? tienda.feeFrequency);
+            await this.stores.save(tienda);
+        }
+        return { id: pago.id, proximoPago: tienda.nextDueDate };
     }
-
 }

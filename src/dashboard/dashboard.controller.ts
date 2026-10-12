@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -6,6 +6,8 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { DashboardService } from './dashboard.service';
 import { DashboardInsightsService } from './dashboard-insights.service';
+import { UpdateStorePlanDto } from './dto/update-store-plan.dto';
+import { CreatePaymentDto } from '../admin/dto/create-payment.dto';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 
 @ApiTags('dashboard')
@@ -37,7 +39,11 @@ export class DashboardController {
         description: 'Productos ganadores con sus días de stock, ventas por despachar, ventas de los últimos 14 días, cambios pendientes de revisión y, si la agencia le definió un plan, su próximo pago y lo que lleva de comisión este mes.',
     })
     getInsights(@Req() req) {
-        return this.insights.getInsights({ userId: req.user.id, storeId: req.store.storeId });
+        return this.insights.getInsights({
+            userId: req.user.id,
+            storeId: req.store.storeId,
+            verPlan: req.store.role === 'owner' || req.user.role === UserRole.ADMIN,
+        });
     }
 
     @Get('agency')
@@ -51,37 +57,37 @@ export class DashboardController {
         return this.insights.getAgency();
     }
 
-    @Get('agency/clients/:id')
+    @Get('agency/stores/:id')
     @UseGuards(RolesGuard)
     @Roles(UserRole.ADMIN)
     @ApiOperation({
-        summary: 'El dashboard de un cliente, como lo ve él',
-        description: 'Resumen del negocio, productos ganadores, despachos, ventas recientes y su plan, para revisarlo a detalle. Si el cliente tiene varias tiendas se elige una con storeId.',
+        summary: 'El dashboard de una tienda (cliente), como lo ve su dueño',
+        description: 'Resumen del negocio, productos ganadores, despachos, ventas recientes, su plan y sus últimos pagos, para revisarlo a detalle.',
     })
-    getClientDetail(@Param('id', ParseUUIDPipe) id: string, @Query('storeId') storeId?: string) {
-        return this.insights.getClientDetail(id, storeId);
+    getClientDetail(@Param('id', ParseUUIDPipe) id: string) {
+        return this.insights.getClientDetail(id);
     }
 
-    @Get('agency/stores')
+    @Patch('agency/stores/:id/plan')
     @UseGuards(RolesGuard)
     @Roles(UserRole.ADMIN)
     @ApiOperation({
-        summary: 'Todas las tiendas y a qué cliente pertenece cada una',
-        description: 'Con su dueño, cuánto vendió este mes y cuántos canales tiene. Una tienda se asigna a un cliente a mano, o se reconoce por su dueño o por el nombre de su negocio.',
+        summary: 'Guarda el plan comercial de una tienda',
+        description: 'Cuota fija, comisión, IGV incluido o aparte, frecuencia y fecha del próximo cobro. Cada tienda es un cliente de la agencia.',
     })
-    getStoreAssignments() {
-        return this.insights.getStoreAssignments();
+    updateStorePlan(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateStorePlanDto) {
+        return this.insights.updateStorePlan(id, dto);
     }
 
-    @Patch('agency/stores/:id/client')
+    @Post('agency/stores/:id/payments')
     @UseGuards(RolesGuard)
     @Roles(UserRole.ADMIN)
     @ApiOperation({
-        summary: 'Asigna una tienda a un cliente (clientId null la deja sin asignar)',
-        description: 'Cuenta, ventas y comisión de esa tienda pasan a ser del cliente, sin importar a nombre de quién esté la tienda o las cuentas conectadas.',
+        summary: 'Registra un pago recibido de una tienda',
+        description: 'Si es recurrente, la fecha del próximo cobro avanza sola un periodo.',
     })
-    assignStore(@Param('id', ParseUUIDPipe) id: string, @Body() body: { clientId: string | null }) {
-        return this.insights.assignStore(id, body?.clientId ?? null);
+    registerStorePayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreatePaymentDto) {
+        return this.insights.registerStorePayment(id, dto);
     }
 
     @Get('accounts')

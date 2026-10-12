@@ -13,7 +13,6 @@ import { Payment } from '../admin/entities/payment.entity';
 import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
 import { SyncChangeRequest } from '../sync/entities/sync-change-request.entity';
 import { Store } from '../stores/entities/store.entity';
-import { ClientStoresService } from './client-stores';
 import { DashboardInsightsService } from './dashboard-insights.service';
 import { StoresModule } from '../stores/stores.module';
 
@@ -26,6 +25,6 @@ import { StoresModule } from '../stores/stores.module';
         StoresModule,
     ],
     controllers: [DashboardController],
-    providers: [DashboardService, DashboardInsightsService, ClientStoresService],
+    providers: [DashboardService, DashboardInsightsService],
 })
 export class DashboardModule { }

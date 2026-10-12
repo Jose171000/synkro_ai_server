@@ -19,13 +19,44 @@ export class Store {
     @Index()
     owner: User;
 
-    /**
-     * Cliente de la agencia al que pertenece el negocio, si la agencia lo asignó.
-     * Distinto del dueño: la agencia suele crear las tiendas de sus clientes desde sus propias cuentas.
-     */
-    @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
-    @Index()
-    client: User | null;
+    // ── Plan comercial: cada tienda es un cliente de la agencia ──
+    /** Cómo se le cobra: cuota fija, comisión sobre sus ventas, ambos o nada definido. */
+    @Column({ type: 'varchar', length: 20, default: 'ninguno' })
+    billingModel: 'ninguno' | 'fijo' | 'comision' | 'mixto';
+
+    /** Cuota pactada, por periodo de la frecuencia. */
+    @Column('decimal', { precision: 12, scale: 2, nullable: true, transformer: { to: (v: any) => v, from: (v: any) => (v === null || v === undefined ? null : Number(v)) } })
+    monthlyFee: number | null;
+
+    @Column({ type: 'varchar', length: 20, default: 'mensual' })
+    feeFrequency: 'mensual' | 'trimestral' | 'anual';
+
+    /** Porcentaje sobre sus ventas (8.5 = 8.5%). */
+    @Column('decimal', { precision: 6, scale: 3, nullable: true, transformer: { to: (v: any) => v, from: (v: any) => (v === null || v === undefined ? null : Number(v)) } })
+    commissionRate: number | null;
+
+    /** Cuándo toca el próximo cobro (YYYY-MM-DD). Avanza sola al registrar un pago recurrente. */
+    @Column({ type: 'date', nullable: true })
+    nextDueDate: string | null;
+
+    @Column({ type: 'varchar', length: 5, default: 'PEN' })
+    planCurrency: string;
+
+    /** true: la cuota pactada ya incluye IGV. false: el IGV se suma aparte. */
+    @Column({ default: false })
+    feeIncludesIgv: boolean;
+
+    /** true: la comisión pactada ya incluye IGV. false: el IGV se suma aparte. */
+    @Column({ default: false })
+    commissionIncludesIgv: boolean;
+
+    /** Desde cuándo rige el plan: si es posterior al inicio del ciclo, las ventas se cuentan desde aquí. */
+    @Column({ type: 'date', nullable: true })
+    planStartDate: string | null;
+
+    /** Apuntes de la propuesta comercial para este cliente. */
+    @Column({ type: 'text', nullable: true })
+    proposalNotes: string | null;
 
     /**
      * Código del enlace público de solo lectura. Largo y aleatorio, nunca el

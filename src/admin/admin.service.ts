@@ -1,4 +1,3 @@
-import { avanzarVencimiento } from './plan-comercial';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -262,17 +261,7 @@ export class AdminService implements OnModuleInit {
             currency: dto.currency || 'PEN',
             client: { id: userId } as any,
         });
-        const guardado = await this.paymentRepository.save(payment);
-
-        // Un pago recurrente adelanta solo el próximo vencimiento del cliente.
-        if (dto.type === 'recurrente') {
-            const perfil = await this.profileRepository.findOne({ where: { user: { id: userId } } });
-            if (perfil && perfil.billingModel !== 'ninguno') {
-                perfil.nextDueDate = avanzarVencimiento(perfil.nextDueDate, dto.paidAt.slice(0, 10), dto.frequency ?? perfil.feeFrequency);
-                await this.profileRepository.save(perfil);
-            }
-        }
-        return guardado;
+        return this.paymentRepository.save(payment);
     }
 
     async removePayment(paymentId: string) {
@@ -302,9 +291,9 @@ export class AdminService implements OnModuleInit {
 
         // MRR: por cada cliente, su último pago recurrente mensualizado
         const recurring = await this.paymentRepository.createQueryBuilder('p')
-            .distinctOn(['"p"."clientId"'])
+            .distinctOn(['COALESCE("p"."storeId", "p"."clientId")'])
             .where(`"p"."type" = 'recurrente'`)
-            .orderBy('"p"."clientId"')
+            .orderBy('COALESCE("p"."storeId", "p"."clientId")')
             .addOrderBy('"p"."paidAt"', 'DESC')
             .getMany();
 

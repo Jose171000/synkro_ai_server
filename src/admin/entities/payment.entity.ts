@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { Store } from '../../stores/entities/store.entity';
 
 /**
  * A payment received from a client — one-time or an installment of a
@@ -14,6 +15,11 @@ export class Payment {
     @ManyToOne(() => User, { nullable: false })
     @Index()
     client: User;
+
+    /** Tienda (cliente) a la que corresponde el pago, si se registró por tienda. */
+    @ManyToOne(() => Store, { nullable: true, onDelete: 'SET NULL' })
+    @Index()
+    store: Store | null;
 
     @Column('decimal', { precision: 12, scale: 2 })
     amount: number;

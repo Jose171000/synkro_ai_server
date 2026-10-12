@@ -8,7 +8,7 @@ import { Product } from '../products/entities/product.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
-import { ClientStoresService } from './client-stores';
+import { Store } from '../stores/entities/store.entity';
 
 /** Por debajo de estas unidades, un producto publicado se considera en riesgo. */
 const LOW_STOCK_THRESHOLD = 5;
@@ -29,7 +29,7 @@ export class DashboardService {
         @InjectRepository(Notification) private readonly notifications: Repository<Notification>,
         @InjectRepository(User) private readonly users: Repository<User>,
         @InjectRepository(ClientProfile) private readonly profiles: Repository<ClientProfile>,
-        private readonly clientStores: ClientStoresService,
+        @InjectRepository(Store) private readonly stores: Repository<Store>,
     ) { }
 
     /**
@@ -166,119 +166,65 @@ export class DashboardService {
     }
 
     /**
-     * Panel de agencia: una fila por cliente con lo que hace falta para
-     * saber, de un vistazo, cuál necesita atención.
+     * Salud de las cuentas: una fila por tienda (cada tienda es un cliente de la
+     * agencia) con lo que hace falta para saber, de un vistazo, cuál necesita atención.
      *
-     * Las cifras se calculan con consultas agrupadas y no una por cliente,
+     * Las cifras se calculan con consultas agrupadas y no una por tienda,
      * para que el panel no se degrade a medida que crece la cartera.
      */
     async getAccounts() {
         const desdeEsteMes = inicioDeMes();
 
-        const clientes = await this.users.find({
-            where: [{ role: 'user' }, { role: 'moderator' }],
-            order: { createdAt: 'DESC' },
-        });
-        if (!clientes.length) return { cuentas: [], totales: { clientes: 0, pedidos: 0, importe: 0 } };
+        const tiendas = await this.stores.find({ relations: { owner: true }, order: { createdAt: 'DESC' } });
+        if (!tiendas.length) return { cuentas: [], totales: { clientes: 0, pedidos: 0, importe: 0 } };
 
-        const ids = clientes.map(c => c.id);
-
-        // Cuentas, ventas y publicaciones se atribuyen al cliente de cada tienda (asignado, dueño o nombre del negocio),
-        // no a quien las conectó: la agencia suele conectar los canales en nombre del cliente.
-        const mapa = await this.clientStores.mapa();
-        const idsDeClientes = new Set(ids);
-        const clienteDe = (tienda: string | null, dueno: string): string | undefined =>
-            tienda ? mapa.clienteDe.get(tienda) : (idsDeClientes.has(dueno) ? dueno : undefined);
-
-        const [perfiles, conexionesRaw, ventasRaw, publicacionesRaw, problemas] = await Promise.all([
-            this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } }),
-
+        const [conexiones, ventas, publicaciones] = await Promise.all([
             this.connections
                 .createQueryBuilder('c')
-                .select(['c."storeId" AS tienda', 'c."ownerId" AS dueno', 'c.marketplace AS marketplace', 'c.status AS status'])
+                .select(['c."storeId" AS tienda', 'c.marketplace AS marketplace', 'c.status AS status'])
+                .where('c."storeId" IS NOT NULL')
                 .getRawMany(),
 
             this.orders
                 .createQueryBuilder('o')
                 .select('o."storeId"', 'tienda')
-                .addSelect('o."ownerId"', 'dueno')
                 .addSelect('COUNT(*)', 'pedidos')
                 .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-                .where('o."orderDate" >= :desde', { desde: desdeEsteMes })
+                .where('o."storeId" IS NOT NULL')
+                .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
                 .groupBy('o."storeId"')
-                .addGroupBy('o."ownerId"')
                 .getRawMany(),
 
             this.listings
                 .createQueryBuilder('l')
-                .innerJoin('l.product', 'p')
-                .leftJoin('l.connection', 'c')
+                .innerJoin('l.connection', 'c')
                 .select('c."storeId"', 'tienda')
-                .addSelect('p."ownerId"', 'dueno')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'published')`, 'publicados')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'error')`, 'conError')
+                .where('c."storeId" IS NOT NULL')
                 .groupBy('c."storeId"')
-                .addGroupBy('p."ownerId"')
-                .getRawMany(),
-
-            this.notifications
-                .createQueryBuilder('n')
-                .select('n."ownerId"', 'ownerId')
-                .addSelect('COUNT(*)', 'problemas')
-                .where('n."ownerId" IN (:...ids)', { ids })
-                .andWhere(`n.severity = 'error' AND n.read = false`)
-                .groupBy('n."ownerId"')
                 .getRawMany(),
         ]);
 
-        // Se reúne por cliente lo que llegó por tienda.
-        const ventas: { ownerId: string; pedidos: number; importe: number }[] = [];
-        for (const f of ventasRaw) {
-            const cliente = clienteDe(f.tienda, f.dueno);
-            if (!cliente) continue;
-            const previo = ventas.find(v => v.ownerId === cliente);
-            if (previo) { previo.pedidos += Number(f.pedidos); previo.importe += Number(f.importe); }
-            else ventas.push({ ownerId: cliente, pedidos: Number(f.pedidos), importe: Number(f.importe) });
-        }
-        const publicaciones: { ownerId: string; publicados: number; conError: number }[] = [];
-        for (const f of publicacionesRaw) {
-            const cliente = clienteDe(f.tienda, f.dueno);
-            if (!cliente) continue;
-            const previo = publicaciones.find(v => v.ownerId === cliente);
-            if (previo) { previo.publicados += Number(f.publicados); previo.conError += Number(f.conError); }
-            else publicaciones.push({ ownerId: cliente, publicados: Number(f.publicados), conError: Number(f.conError) });
-        }
-        const conexiones = conexionesRaw
-            .map(f => ({ ownerId: clienteDe(f.tienda, f.dueno), marketplace: f.marketplace, status: f.status }))
-            .filter((f): f is { ownerId: string; marketplace: string; status: string } => !!f.ownerId);
-
-        const porCliente = <T extends { ownerId: string }>(filas: T[]) =>
-            new Map(filas.map(f => [f.ownerId, f]));
-
-        const ventasPorCliente = porCliente(ventas);
-        const listadosPorCliente = porCliente(publicaciones);
-        const problemasPorCliente = porCliente(problemas);
-        const perfilPorCliente = new Map(perfiles.map(p => [p.user?.id, p]));
-
-        const canalesPorCliente = new Map<string, { marketplace: string; status: string }[]>();
+        const ventasDe = new Map(ventas.map(v => [v.tienda, v]));
+        const listadosDe = new Map(publicaciones.map(v => [v.tienda, v]));
+        const canalesDe = new Map<string, { marketplace: string; status: string }[]>();
         for (const fila of conexiones) {
-            const lista = canalesPorCliente.get(fila.ownerId) ?? [];
+            const lista = canalesDe.get(fila.tienda) ?? [];
             lista.push({ marketplace: fila.marketplace, status: fila.status });
-            canalesPorCliente.set(fila.ownerId, lista);
+            canalesDe.set(fila.tienda, lista);
         }
 
-        const cuentas = clientes.map(cliente => {
-            const venta = ventasPorCliente.get(cliente.id) as any;
-            const listado = listadosPorCliente.get(cliente.id) as any;
-            const perfil = perfilPorCliente.get(cliente.id);
-            const canales = canalesPorCliente.get(cliente.id) ?? [];
-
+        const cuentas = tiendas.map(tienda => {
+            const venta = ventasDe.get(tienda.id) as any;
+            const listado = listadosDe.get(tienda.id) as any;
+            const canales = canalesDe.get(tienda.id) ?? [];
             return {
-                id: cliente.id,
-                nombre: `${cliente.name ?? ''} ${cliente.lastName ?? ''}`.trim() || cliente.email,
-                email: cliente.email,
-                empresa: perfil?.businessName || cliente.nameCompany || null,
-                estado: perfil?.status ?? (cliente.isActive ? 'activo' : 'pausado'),
+                id: tienda.id,
+                nombre: tienda.name,
+                email: tienda.owner?.email ?? '',
+                empresa: null as string | null,
+                estado: 'activo',
                 canales,
                 canalesCaidos: canales.filter(c => c.status !== 'active').length,
                 ventas: {
@@ -289,14 +235,14 @@ export class DashboardService {
                     publicados: Number(listado?.publicados ?? 0),
                     conError: Number(listado?.conError ?? 0),
                 },
-                problemasSinLeer: Number((problemasPorCliente.get(cliente.id) as any)?.problemas ?? 0),
+                problemasSinLeer: 0,
             };
         });
 
         // Primero quien necesita atención: conexiones caídas, luego errores.
         cuentas.sort((a, b) => {
-            const peso = (c: typeof a) => c.canalesCaidos * 100 + c.publicaciones.conError * 10 + c.problemasSinLeer;
-            return peso(b) - peso(a);
+            const peso = (c: typeof a) => c.canalesCaidos * 100 + c.publicaciones.conError * 10;
+            return peso(b) - peso(a) || b.ventas.importe - a.ventas.importe;
         });
 
         return {
