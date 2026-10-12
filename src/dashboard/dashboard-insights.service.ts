@@ -209,12 +209,16 @@ export class DashboardInsightsService {
         return salida;
     }
 
-    /** Ventas de todas las tiendas de una persona desde una fecha: es la base de su comisión. */
+    /**
+     * Ventas de todas las tiendas de una persona desde una fecha: es la base de su comisión.
+     * Se cuentan por el dueño de la tienda, no por quien conectó las cuentas (la agencia suele hacerlo por el cliente).
+     */
     private async ventasDelDueno(userId: string, desde: Date, hasta?: Date): Promise<number> {
         const qb = this.orders
             .createQueryBuilder('o')
+            .leftJoin('o.store', 's')
             .select('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-            .where('o."ownerId" = :userId', { userId })
+            .where('COALESCE(s."ownerId", o."ownerId") = :userId', { userId })
             .andWhere('o."orderDate" >= :desde', { desde });
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
         const fila = await qb.getRawOne();
@@ -278,13 +282,14 @@ export class DashboardInsightsService {
 
             // Ventas por cliente y mes (hora de Lima), de los 3 meses anteriores y el actual
             this.orders.query(
-                `SELECT o."ownerId" AS dueno,
+                `SELECT COALESCE(s."ownerId", o."ownerId") AS dueno,
                         to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM') AS mes,
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
-                  WHERE o."ownerId" = ANY($1) AND o."orderDate" >= $2
-                  GROUP BY o."ownerId", mes`,
+                   LEFT JOIN stores s ON s.id = o."storeId"
+                  WHERE COALESCE(s."ownerId", o."ownerId") = ANY($1) AND o."orderDate" >= $2
+                  GROUP BY COALESCE(s."ownerId", o."ownerId"), mes`,
                 [ids, desdeHace3],
             ),
 
@@ -370,12 +375,20 @@ export class DashboardInsightsService {
         const proximos = filas.filter(f => f.plan.estadoPago === 'por_vencer' || f.plan.estadoPago === 'vence_hoy');
         const montoCuota = (f: typeof filas[number]) => f.plan.cuotaFija ?? 0;
 
+        // El superadmin ve TODO lo que se vendió, también lo de tiendas que no son de ningún cliente de la lista.
+        const global = await this.orders.query(
+            `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
+               FROM marketplace_orders o WHERE o."orderDate" >= $1`,
+            [desdeEsteMes],
+        );
+
         return {
             hoy,
             totales: {
                 clientes: filas.length,
-                ventasDelMes: redondear(filas.reduce((s, f) => s + f.ventas.mes, 0)),
-                pedidosDelMes: filas.reduce((s, f) => s + f.ventas.pedidosMes, 0),
+                ventasDelMes: redondear(Number(global?.[0]?.importe ?? 0)),
+                pedidosDelMes: Number(global?.[0]?.pedidos ?? 0),
+                ventasDeClientes: redondear(filas.reduce((s, f) => s + f.ventas.mes, 0)),
                 // Lo recurrente: cuotas fijas de clientes activos, llevadas a mes.
                 ingresoFijoMensual: redondear(activos.filter(cobrables).reduce((s, f) => s + mensualizar(f.plan.cuotaFija, f.plan.frecuencia), 0)),
                 comisionAcumulada: redondear(activos.reduce((s, f) => s + f.plan.comisionAcumulada, 0)),
@@ -398,7 +411,7 @@ export class DashboardInsightsService {
         return {
             hoy,
             totales: {
-                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ingresoFijoMensual: 0, comisionAcumulada: 0, comisionProyectada: 0,
+                clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ventasDeClientes: 0, ingresoFijoMensual: 0, comisionAcumulada: 0, comisionProyectada: 0,
                 cobradoEsteMes: 0, vencidos: { cantidad: 0, monto: 0 }, proximos: { cantidad: 0, monto: 0 }, sinPlan: 0,
                 porModelo: { fijo: 0, comision: 0, mixto: 0 },
             },

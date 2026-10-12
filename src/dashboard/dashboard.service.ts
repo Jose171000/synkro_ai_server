@@ -184,30 +184,36 @@ export class DashboardService {
         const [perfiles, conexiones, ventas, publicaciones, problemas] = await Promise.all([
             this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } }),
 
+            // Cuentas, ventas y publicaciones se atribuyen al dueño de la tienda: la agencia suele
+            // conectar los canales en nombre del cliente, y esos registros quedan a nombre de quien los conectó.
             this.connections
                 .createQueryBuilder('c')
-                .select(['c."ownerId" AS "ownerId"', 'c.marketplace AS marketplace', 'c.status AS status'])
-                .where('c."ownerId" IN (:...ids)', { ids })
+                .leftJoin('c.store', 's')
+                .select(['COALESCE(s."ownerId", c."ownerId") AS "ownerId"', 'c.marketplace AS marketplace', 'c.status AS status'])
+                .where('COALESCE(s."ownerId", c."ownerId") IN (:...ids)', { ids })
                 .getRawMany(),
 
             this.orders
                 .createQueryBuilder('o')
-                .select('o."ownerId"', 'ownerId')
+                .leftJoin('o.store', 's')
+                .select('COALESCE(s."ownerId", o."ownerId")', 'ownerId')
                 .addSelect('COUNT(*)', 'pedidos')
                 .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-                .where('o."ownerId" IN (:...ids)', { ids })
+                .where('COALESCE(s."ownerId", o."ownerId") IN (:...ids)', { ids })
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
-                .groupBy('o."ownerId"')
+                .groupBy('COALESCE(s."ownerId", o."ownerId")')
                 .getRawMany(),
 
             this.listings
                 .createQueryBuilder('l')
                 .innerJoin('l.product', 'p')
-                .select('p."ownerId"', 'ownerId')
+                .leftJoin('l.connection', 'c')
+                .leftJoin('c.store', 's')
+                .select('COALESCE(s."ownerId", p."ownerId")', 'ownerId')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'published')`, 'publicados')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'error')`, 'conError')
-                .where('p."ownerId" IN (:...ids)', { ids })
-                .groupBy('p."ownerId"')
+                .where('COALESCE(s."ownerId", p."ownerId") IN (:...ids)', { ids })
+                .groupBy('COALESCE(s."ownerId", p."ownerId")')
                 .getRawMany(),
 
             this.notifications
