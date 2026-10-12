@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -60,6 +60,28 @@ export class DashboardController {
     })
     getClientDetail(@Param('id', ParseUUIDPipe) id: string, @Query('storeId') storeId?: string) {
         return this.insights.getClientDetail(id, storeId);
+    }
+
+    @Get('agency/stores')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'Todas las tiendas y a qué cliente pertenece cada una',
+        description: 'Con su dueño, cuánto vendió este mes y cuántos canales tiene. Una tienda se asigna a un cliente a mano, o se reconoce por su dueño o por el nombre de su negocio.',
+    })
+    getStoreAssignments() {
+        return this.insights.getStoreAssignments();
+    }
+
+    @Patch('agency/stores/:id/client')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'Asigna una tienda a un cliente (clientId null la deja sin asignar)',
+        description: 'Cuenta, ventas y comisión de esa tienda pasan a ser del cliente, sin importar a nombre de quién esté la tienda o las cuentas conectadas.',
+    })
+    assignStore(@Param('id', ParseUUIDPipe) id: string, @Body() body: { clientId: string | null }) {
+        return this.insights.assignStore(id, body?.clientId ?? null);
     }
 
     @Get('accounts')

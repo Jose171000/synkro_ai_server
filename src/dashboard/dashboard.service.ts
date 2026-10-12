@@ -8,6 +8,7 @@ import { Product } from '../products/entities/product.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
+import { ClientStoresService } from './client-stores';
 
 /** Por debajo de estas unidades, un producto publicado se considera en riesgo. */
 const LOW_STOCK_THRESHOLD = 5;
@@ -28,6 +29,7 @@ export class DashboardService {
         @InjectRepository(Notification) private readonly notifications: Repository<Notification>,
         @InjectRepository(User) private readonly users: Repository<User>,
         @InjectRepository(ClientProfile) private readonly profiles: Repository<ClientProfile>,
+        private readonly clientStores: ClientStoresService,
     ) { }
 
     /**
@@ -181,39 +183,42 @@ export class DashboardService {
 
         const ids = clientes.map(c => c.id);
 
-        const [perfiles, conexiones, ventas, publicaciones, problemas] = await Promise.all([
+        // Cuentas, ventas y publicaciones se atribuyen al cliente de cada tienda (asignado, dueño o nombre del negocio),
+        // no a quien las conectó: la agencia suele conectar los canales en nombre del cliente.
+        const mapa = await this.clientStores.mapa();
+        const idsDeClientes = new Set(ids);
+        const clienteDe = (tienda: string | null, dueno: string): string | undefined =>
+            tienda ? mapa.clienteDe.get(tienda) : (idsDeClientes.has(dueno) ? dueno : undefined);
+
+        const [perfiles, conexionesRaw, ventasRaw, publicacionesRaw, problemas] = await Promise.all([
             this.profiles.find({ where: ids.map(id => ({ user: { id } })) as any, relations: { user: true } }),
 
-            // Cuentas, ventas y publicaciones se atribuyen al dueño de la tienda: la agencia suele
-            // conectar los canales en nombre del cliente, y esos registros quedan a nombre de quien los conectó.
             this.connections
                 .createQueryBuilder('c')
-                .leftJoin('c.store', 's')
-                .select(['COALESCE(s."ownerId", c."ownerId") AS "ownerId"', 'c.marketplace AS marketplace', 'c.status AS status'])
-                .where('COALESCE(s."ownerId", c."ownerId") IN (:...ids)', { ids })
+                .select(['c."storeId" AS tienda', 'c."ownerId" AS dueno', 'c.marketplace AS marketplace', 'c.status AS status'])
                 .getRawMany(),
 
             this.orders
                 .createQueryBuilder('o')
-                .leftJoin('o.store', 's')
-                .select('COALESCE(s."ownerId", o."ownerId")', 'ownerId')
+                .select('o."storeId"', 'tienda')
+                .addSelect('o."ownerId"', 'dueno')
                 .addSelect('COUNT(*)', 'pedidos')
                 .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-                .where('COALESCE(s."ownerId", o."ownerId") IN (:...ids)', { ids })
-                .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
-                .groupBy('COALESCE(s."ownerId", o."ownerId")')
+                .where('o."orderDate" >= :desde', { desde: desdeEsteMes })
+                .groupBy('o."storeId"')
+                .addGroupBy('o."ownerId"')
                 .getRawMany(),
 
             this.listings
                 .createQueryBuilder('l')
                 .innerJoin('l.product', 'p')
                 .leftJoin('l.connection', 'c')
-                .leftJoin('c.store', 's')
-                .select('COALESCE(s."ownerId", p."ownerId")', 'ownerId')
+                .select('c."storeId"', 'tienda')
+                .addSelect('p."ownerId"', 'dueno')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'published')`, 'publicados')
                 .addSelect(`COUNT(*) FILTER (WHERE l."syncStatus" = 'error')`, 'conError')
-                .where('COALESCE(s."ownerId", p."ownerId") IN (:...ids)', { ids })
-                .groupBy('COALESCE(s."ownerId", p."ownerId")')
+                .groupBy('c."storeId"')
+                .addGroupBy('p."ownerId"')
                 .getRawMany(),
 
             this.notifications
@@ -225,6 +230,27 @@ export class DashboardService {
                 .groupBy('n."ownerId"')
                 .getRawMany(),
         ]);
+
+        // Se reúne por cliente lo que llegó por tienda.
+        const ventas: { ownerId: string; pedidos: number; importe: number }[] = [];
+        for (const f of ventasRaw) {
+            const cliente = clienteDe(f.tienda, f.dueno);
+            if (!cliente) continue;
+            const previo = ventas.find(v => v.ownerId === cliente);
+            if (previo) { previo.pedidos += Number(f.pedidos); previo.importe += Number(f.importe); }
+            else ventas.push({ ownerId: cliente, pedidos: Number(f.pedidos), importe: Number(f.importe) });
+        }
+        const publicaciones: { ownerId: string; publicados: number; conError: number }[] = [];
+        for (const f of publicacionesRaw) {
+            const cliente = clienteDe(f.tienda, f.dueno);
+            if (!cliente) continue;
+            const previo = publicaciones.find(v => v.ownerId === cliente);
+            if (previo) { previo.publicados += Number(f.publicados); previo.conError += Number(f.conError); }
+            else publicaciones.push({ ownerId: cliente, publicados: Number(f.publicados), conError: Number(f.conError) });
+        }
+        const conexiones = conexionesRaw
+            .map(f => ({ ownerId: clienteDe(f.tienda, f.dueno), marketplace: f.marketplace, status: f.status }))
+            .filter((f): f is { ownerId: string; marketplace: string; status: string } => !!f.ownerId);
 
         const porCliente = <T extends { ownerId: string }>(filas: T[]) =>
             new Map(filas.map(f => [f.ownerId, f]));

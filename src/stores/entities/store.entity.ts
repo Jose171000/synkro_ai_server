@@ -20,6 +20,14 @@ export class Store {
     owner: User;
 
     /**
+     * Cliente de la agencia al que pertenece el negocio, si la agencia lo asignó.
+     * Distinto del dueño: la agencia suele crear las tiendas de sus clientes desde sus propias cuentas.
+     */
+    @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+    @Index()
+    client: User | null;
+
+    /**
      * Código del enlace público de solo lectura. Largo y aleatorio, nunca el
      * nombre ni el id de la tienda, para que no se pueda recorrer probando
      * tiendas. Nulo mientras el enlace no se haya activado.

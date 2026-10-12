@@ -9,8 +9,8 @@ import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { Payment } from '../admin/entities/payment.entity';
 import { MonthlyBilling } from '../admin/entities/monthly-billing.entity';
-import { Store } from '../stores/entities/store.entity';
 import { DashboardService } from './dashboard.service';
+import { ClientStoresService } from './client-stores';
 import {
     CicloDeCobro,
     cicloDeCobro,
@@ -133,8 +133,8 @@ export class DashboardInsightsService {
         @InjectRepository(ClientProfile) private readonly profiles: Repository<ClientProfile>,
         @InjectRepository(Payment) private readonly payments: Repository<Payment>,
         @InjectRepository(MonthlyBilling) private readonly billings: Repository<MonthlyBilling>,
-        @InjectRepository(Store) private readonly stores: Repository<Store>,
         private readonly summary: DashboardService,
+        private readonly clientStores: ClientStoresService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -254,15 +254,17 @@ export class DashboardInsightsService {
     }
 
     /**
-     * Ventas de todas las tiendas de una persona desde una fecha: es la base de su comisión.
-     * Se cuentan por el dueño de la tienda, no por quien conectó las cuentas (la agencia suele hacerlo por el cliente).
+     * Ventas de todas las tiendas de un cliente desde una fecha: es la base de su comisión.
+     * Sus tiendas son las que se le asignaron, las que son suyas o las que llevan el nombre
+     * de su negocio (ver client-stores.ts), sin importar quién conectó las cuentas.
      */
-    private async ventasDelDueno(userId: string, desde: Date, hasta?: Date): Promise<number> {
+    private async ventasDeCliente(clienteId: string, desde: Date, hasta?: Date): Promise<number> {
+        const { tiendasDe } = await this.clientStores.mapa();
+        const ids = tiendasDe.get(clienteId) ?? [];
         const qb = this.orders
             .createQueryBuilder('o')
-            .leftJoin('o.store', 's')
             .select('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
-            .where('COALESCE(s."ownerId", o."ownerId") = :userId', { userId })
+            .where('(o."storeId" IN (:...ids) OR (o."storeId" IS NULL AND o."ownerId" = :clienteId))', { ids: ids.length ? ids : ['00000000-0000-0000-0000-000000000000'], clienteId })
             .andWhere('o."orderDate" >= :desde', { desde });
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
         const fila = await qb.getRawOne();
@@ -277,9 +279,9 @@ export class DashboardInsightsService {
         const desdeEsteMes = inicioDeMesLima(hoy);
         const ciclo = cicloDeCobro(perfil.nextDueDate, perfil.feeFrequency, perfil.planStartDate, hoy);
         const [ventasMes, ventasMesPasado, ventasCiclo, ultimoPago, liquidacion] = await Promise.all([
-            this.ventasDelDueno(userId, desdeEsteMes),
-            this.ventasDelDueno(userId, inicioDeMesLima(hoy, -1), desdeEsteMes),
-            this.ventasDelDueno(userId, limaMedianoche(ciclo.desde), limaMedianoche(ciclo.hasta)),
+            this.ventasDeCliente(userId, desdeEsteMes),
+            this.ventasDeCliente(userId, inicioDeMesLima(hoy, -1), desdeEsteMes),
+            this.ventasDeCliente(userId, limaMedianoche(ciclo.desde), limaMedianoche(ciclo.hasta)),
             this.payments.findOne({ where: { client: { id: userId } }, order: { paidAt: 'DESC' } }),
             this.billings.findOne({ where: { client: { id: userId }, period: this.periodoAnterior(hoy) } }),
         ]);
@@ -336,19 +338,22 @@ export class DashboardInsightsService {
         const desdeMes = `${mesesAnteriores[mesesAnteriores.length - 1]}-01`;
         const desdeVentas = [desdeMes, ...[...ciclos.values()].map(c => c.desde)].sort()[0];
 
+        const mapa = await this.clientStores.mapa();
+        const conexionesPorTienda: { tienda: string; cantidad: string }[] = await this.orders.query(
+            `SELECT "storeId" AS tienda, COUNT(*) AS cantidad FROM marketplace_connections WHERE "storeId" IS NOT NULL GROUP BY "storeId"`,
+        );
         const [ventas, ultimosPagos, cobradoMes, liquidaciones, global] = await Promise.all([
-            // Ventas por cliente y DÍA (hora de Lima): de ahí salen el mes, los anteriores y el ciclo de cobro de cada uno.
-            // Se atribuyen al dueño de la tienda, no a quien conectó las cuentas.
+            // Ventas por tienda y DÍA (hora de Lima): de ahí salen el mes, los anteriores y el ciclo de cobro de cada cliente.
+            // Cada tienda se atribuye a su cliente (ver client-stores.ts), no a quien conectó las cuentas.
             this.orders.query(
-                `SELECT COALESCE(s."ownerId", o."ownerId") AS dueno,
+                `SELECT o."storeId" AS tienda, o."ownerId" AS dueno,
                         to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM-DD') AS dia,
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
-                   LEFT JOIN stores s ON s.id = o."storeId"
-                  WHERE COALESCE(s."ownerId", o."ownerId") = ANY($1) AND o."orderDate" >= $2
-                  GROUP BY COALESCE(s."ownerId", o."ownerId"), dia`,
-                [ids, limaMedianoche(desdeVentas)],
+                  WHERE o."orderDate" >= $1
+                  GROUP BY o."storeId", o."ownerId", dia`,
+                [limaMedianoche(desdeVentas)],
             ),
 
             // El último pago de cada cliente (DISTINCT ON necesita las columnas en crudo para traer el clientId).
@@ -380,10 +385,20 @@ export class DashboardInsightsService {
         const pagoDe = new Map(ultimosPagos.map(p => [p.clientId, p]));
         const liquidacionDe = new Map(liquidaciones.map(l => [l.client.id, l]));
         const diasDe = new Map<string, { dia: string; pedidos: number; importe: number }[]>();
+        const ventasPorTiendaSinCliente = new Map<string, { pedidos: number; importe: number }>();
+        const idsDeClientes = new Set(ids);
         for (const f of ventas) {
-            const lista = diasDe.get(f.dueno) ?? [];
-            lista.push({ dia: f.dia, pedidos: Number(f.pedidos), importe: Number(f.importe) });
-            diasDe.set(f.dueno, lista);
+            // El cliente de la venta: el de su tienda; si no tiene tienda (ventas antiguas), el que la registró.
+            const cliente = f.tienda ? mapa.clienteDe.get(f.tienda) : (idsDeClientes.has(f.dueno) ? f.dueno : undefined);
+            const dato = { dia: f.dia, pedidos: Number(f.pedidos), importe: Number(f.importe) };
+            if (cliente) {
+                const lista = diasDe.get(cliente) ?? [];
+                lista.push(dato);
+                diasDe.set(cliente, lista);
+            } else if (f.tienda && f.dia.startsWith(mesActual)) {
+                const previo = ventasPorTiendaSinCliente.get(f.tienda) ?? { pedidos: 0, importe: 0 };
+                ventasPorTiendaSinCliente.set(f.tienda, { pedidos: previo.pedidos + dato.pedidos, importe: previo.importe + dato.importe });
+            }
         }
         const suma = (dias: { dia: string; pedidos: number; importe: number }[], pertenece: (dia: string) => boolean) =>
             dias.filter(d => pertenece(d.dia)).reduce((s, d) => ({ pedidos: s.pedidos + d.pedidos, importe: s.importe + d.importe }), { pedidos: 0, importe: 0 });
@@ -433,6 +448,7 @@ export class DashboardInsightsService {
                 liquidacionMesAnterior: liq ? { periodo: liq.period, comision: Number(liq.commissionAmount), estado: liq.status } : null,
                 propuesta,
                 notasDePropuesta: perfil?.proposalNotes ?? null,
+                tiendas: mapa.tiendas.filter(t => t.clienteId === cliente.id).map(t => ({ id: t.id, nombre: t.nombre, origen: t.origen })),
             };
         });
 
@@ -449,9 +465,25 @@ export class DashboardInsightsService {
         const soloComision = (lista: typeof filas) => sumarImportes(...lista.map(f => f.plan.cobro.comision));
         const resumen = (lista: typeof filas) => ({ cantidad: lista.length, ...total(lista) });
 
+        const conexiones = new Map(conexionesPorTienda.map(c => [c.tienda, Number(c.cantidad)]));
+        // Tiendas con ventas o canales que no son de ningún cliente: se ven aquí para poder asignarlas.
+        const sinAsignar = mapa.tiendas
+            .filter(t => !t.clienteId)
+            .map(t => ({
+                id: t.id,
+                nombre: t.nombre,
+                dueno: t.duenoEmail,
+                ventasMes: redondear(ventasPorTiendaSinCliente.get(t.id)?.importe ?? 0),
+                pedidosMes: ventasPorTiendaSinCliente.get(t.id)?.pedidos ?? 0,
+                canales: conexiones.get(t.id) ?? 0,
+            }))
+            .filter(t => t.ventasMes > 0 || t.canales > 0)
+            .sort((a, b) => b.ventasMes - a.ventasMes);
+
         return {
             hoy,
             igvPorcentaje: IGV_PORCENTAJE,
+            sinAsignar,
             totales: {
                 clientes: filas.length,
                 ventasDelMes: redondear(Number(global?.[0]?.importe ?? 0)),
@@ -484,6 +516,7 @@ export class DashboardInsightsService {
         return {
             hoy,
             igvPorcentaje: IGV_PORCENTAJE,
+            sinAsignar: [] as { id: string; nombre: string; dueno: string; ventasMes: number; pedidosMes: number; canales: number }[],
             totales: {
                 clientes: 0, ventasDelMes: 0, pedidosDelMes: 0, ventasDeClientes: 0, ingresoFijoMensual: 0,
                 porIngresar: cero, porIngresarCuotas: cero, porIngresarComisiones: cero,
@@ -514,7 +547,8 @@ export class DashboardInsightsService {
         const cliente = await this.users.findOne({ where: { id: clientId } });
         if (!cliente) throw new NotFoundException('Cliente no encontrado');
 
-        const tiendas = await this.stores.find({ where: { owner: { id: clientId } }, order: { createdAt: 'ASC' } });
+        const { tiendas: todas } = await this.clientStores.mapa();
+        const tiendas = todas.filter(t => t.clienteId === clientId);
         const elegida = tiendas.find(t => t.id === storeId) ?? tiendas[0];
         if (!elegida) {
             return { tiendas: [], tiendaId: null, resumen: null, insights: null, plan: await this.planDelCliente(clientId, hoyEnLima()) };
@@ -523,11 +557,45 @@ export class DashboardInsightsService {
         const scope = { userId: clientId, storeId: elegida.id };
         const [resumen, insights] = await Promise.all([this.summary.getSummary(scope), this.getInsights(scope)]);
         return {
-            tiendas: tiendas.map(t => ({ id: t.id, nombre: t.name })),
+            tiendas: tiendas.map(t => ({ id: t.id, nombre: t.nombre })),
             tiendaId: elegida.id,
             resumen,
             insights,
             plan: insights.plan,
         };
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // Agencia: asignar tiendas a clientes
+    // ─────────────────────────────────────────────────────────────
+
+    /** Todas las tiendas, con su dueño, a qué cliente pertenecen y de qué manera, y cuánto vendieron este mes. */
+    async getStoreAssignments() {
+        const [{ tiendas }, ventas, conexiones] = await Promise.all([
+            this.clientStores.mapa(),
+            this.orders.query(
+                `SELECT o."storeId" AS tienda, COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
+                   FROM marketplace_orders o WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1 GROUP BY o."storeId"`,
+                [inicioDeMesLima(hoyEnLima())],
+            ),
+            this.orders.query(`SELECT "storeId" AS tienda, COUNT(*) AS cantidad FROM marketplace_connections WHERE "storeId" IS NOT NULL GROUP BY "storeId"`),
+        ]);
+        const ventasDe = new Map<string, { pedidos: number; importe: number }>(ventas.map((v: any) => [v.tienda, { pedidos: Number(v.pedidos), importe: Number(v.importe) }]));
+        const canalesDe = new Map<string, number>(conexiones.map((c: any) => [c.tienda, Number(c.cantidad)]));
+        return tiendas.map(t => ({
+            id: t.id,
+            nombre: t.nombre,
+            dueno: t.duenoEmail,
+            clienteId: t.clienteId,
+            origen: t.origen,
+            ventasMes: redondear(ventasDe.get(t.id)?.importe ?? 0),
+            pedidosMes: ventasDe.get(t.id)?.pedidos ?? 0,
+            canales: canalesDe.get(t.id) ?? 0,
+        }));
+    }
+
+    async assignStore(storeId: string, clientId: string | null) {
+        return this.clientStores.asignar(storeId, clientId);
+    }
+
 }
