@@ -251,3 +251,19 @@ describe('WooApiService', () => {
         });
     });
 });
+
+describe('diagnóstico de una página HTML en lugar de la API', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resumenHtml, describirErrorWoo } = require('./woo-api.service');
+
+    it('el mensaje incluye el código y el título de la página, que delata al firewall', () => {
+        const html = '<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body></body></html>';
+        expect(resumenHtml(html, 403)).toBe('HTTP 403, página «Attention Required! | Cloudflare»');
+        expect(describirErrorWoo({ response: { status: 403, data: html, headers: { 'content-type': 'text/html' } } }))
+            .toMatch(/HTTP 403, página «Attention Required! \| Cloudflare»/);
+    });
+
+    it('sin título solo informa el código', () => {
+        expect(resumenHtml('<html><body>x</body></html>', 200)).toBe('HTTP 200');
+    });
+});

@@ -48,6 +48,13 @@ export function normalizarSitioWoo(site: string): string {
     return `${url.protocol}//${url.host.toLowerCase()}${ruta}`;
 }
 
+/** Qué página devolvió la tienda en lugar de datos: el título suele delatar al firewall (Cloudflare, Wordfence, Imunify…). */
+export function resumenHtml(data: any, status?: number): string {
+    const cuerpo = typeof data === 'string' ? data : '';
+    const titulo = cuerpo.match(/<title[^>]*>([^<]{1,120})<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim();
+    return `HTTP ${status ?? '?'}${titulo ? `, página «${titulo}»` : ''}`;
+}
+
 /** Traduce un fallo de WooCommerce a un mensaje claro en español. */
 export function describirErrorWoo(error: any): string {
     const status = error?.response?.status;
@@ -57,7 +64,8 @@ export function describirErrorWoo(error: any): string {
         && (/<\s*(!doctype|html|body)/i.test(data) || /text\/html/i.test(cabecera));
 
     if (error?.noJson || esHtml) {
-        return 'La tienda respondió con una página web en lugar de datos de WooCommerce. Suele pasar por un firewall o plugin de seguridad que bloquea la API, o porque la dirección no es la de la tienda. Permite las llamadas a /wp-json/ y revisa la URL.';
+        const detalle = error?.htmlResumen ?? resumenHtml(data, status);
+        return `La tienda respondió con una página web en lugar de datos de WooCommerce (${detalle}). Suele pasar por un firewall o plugin de seguridad que bloquea la API desde servidores externos, o porque la dirección no es la de la tienda. Permite las llamadas a /wp-json/ y revisa la URL.`;
     }
     if (status === 401 || status === 403) {
         return 'WooCommerce rechazó las claves. Revisa que la Consumer Key y el Secret sean de lectura y escritura';
@@ -101,7 +109,7 @@ export class WooApiService implements ChannelClient {
             const res = await fn();
             if (typeof res.data === 'string') {
                 // Una página HTML con código 200: el firewall o la web respondió en lugar de la API.
-                throw Object.assign(new Error('Respuesta no JSON'), { noJson: true });
+                throw Object.assign(new Error('Respuesta no JSON'), { noJson: true, htmlResumen: resumenHtml(res.data, (res as any).status) });
             }
             const paginas = Number(res.headers?.['x-wp-totalpages']);
             return { data: res.data, paginas: Number.isFinite(paginas) && paginas > 0 ? paginas : 1 };
