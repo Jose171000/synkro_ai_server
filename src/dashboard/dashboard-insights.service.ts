@@ -190,7 +190,7 @@ export class DashboardInsightsService {
         const filas: { dia: string; pedidos: string; importe: string }[] = await this.orders.query(
             `SELECT to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM-DD') AS dia,
                     COUNT(*) AS pedidos,
-                    COALESCE(SUM(o."totalAmount"), 0) AS importe
+                    COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                FROM marketplace_orders o
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '15 days'
@@ -213,7 +213,7 @@ export class DashboardInsightsService {
     private async ventasDelDueno(userId: string, desde: Date, hasta?: Date): Promise<number> {
         const qb = this.orders
             .createQueryBuilder('o')
-            .select('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
+            .select('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
             .where('o."ownerId" = :userId', { userId })
             .andWhere('o."orderDate" >= :desde', { desde });
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
@@ -281,7 +281,7 @@ export class DashboardInsightsService {
                 `SELECT o."ownerId" AS dueno,
                         to_char(o."orderDate" AT TIME ZONE 'America/Lima', 'YYYY-MM') AS mes,
                         COUNT(*) AS pedidos,
-                        COALESCE(SUM(o."totalAmount"), 0) AS importe
+                        COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
                   WHERE o."ownerId" = ANY($1) AND o."orderDate" >= $2
                   GROUP BY o."ownerId", mes`,

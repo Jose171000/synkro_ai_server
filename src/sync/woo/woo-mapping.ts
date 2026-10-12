@@ -177,9 +177,11 @@ export function normalizarPedidoWoo(pedido: any): ChannelOrder {
 
     const lines: OrderLine[] = (Array.isArray(pedido?.line_items) ? pedido.line_items : []).map((i: any) => {
         const cantidad = numero(i?.quantity) ?? 1;
+        // Si la tienda carga los precios con impuesto incluido, lo que pagó el cliente por el producto lleva ese impuesto.
+        const impuesto = pedido?.prices_include_tax ? numero(i?.total_tax) ?? 0 : 0;
         const totalLinea = numero(i?.total);
-        // Lo pagado por unidad (con descuentos); si no hay total de línea, el precio de catálogo.
-        const unitario = totalLinea !== null && cantidad > 0 ? totalLinea / cantidad : numero(i?.price) ?? 0;
+        // Lo pagado por unidad (con descuentos, sin envío); si no hay total de línea, el precio de catálogo.
+        const unitario = totalLinea !== null && cantidad > 0 ? (totalLinea + impuesto) / cantidad : numero(i?.price) ?? 0;
         const variacion = numero(i?.variation_id);
         return {
             sku: texto(i?.sku),

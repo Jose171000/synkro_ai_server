@@ -87,7 +87,7 @@ export class DashboardService {
                 .createQueryBuilder('o')
                 .select('o.marketplace', 'marketplace')
                 .addSelect('COUNT(*)', 'pedidos')
-                .addSelect('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
+                .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
                 .where('o."storeId" = :storeId', { storeId })
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
                 .groupBy('o.marketplace')
@@ -143,7 +143,7 @@ export class DashboardService {
         const qb = this.orders
             .createQueryBuilder('o')
             .select('COUNT(*)', 'pedidos')
-            .addSelect('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
+            .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
             .where('o."storeId" = :storeId', { storeId })
             .andWhere('o."orderDate" >= :desde', { desde });
 
@@ -194,7 +194,7 @@ export class DashboardService {
                 .createQueryBuilder('o')
                 .select('o."ownerId"', 'ownerId')
                 .addSelect('COUNT(*)', 'pedidos')
-                .addSelect('COALESCE(SUM(o."totalAmount"), 0)', 'importe')
+                .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
                 .where('o."ownerId" IN (:...ids)', { ids })
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
                 .groupBy('o."ownerId"')

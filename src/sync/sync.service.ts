@@ -20,7 +20,7 @@ import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
-import { normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
 import { filasDeItemMeli, MeliListingRow } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
@@ -1843,6 +1843,7 @@ export class SyncService implements OnModuleInit {
                         shipByDate: norm.shipByDate,
                         details: norm.details as any,
                         items: norm.lines as any,
+                        productsAmount: importeDeProductos(norm.lines, Number(yaRegistrado.totalAmount)),
                     });
                     completados++;
                 }
@@ -1866,6 +1867,7 @@ export class SyncService implements OnModuleInit {
                 store: connection.store ? ({ id: connection.store.id } as any) : null,
                 connection: { id: connection.id } as any,
                 totalAmount: Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0),
+                productsAmount: importeDeProductos(norm.lines, Number((pedido as any).Price ?? (pedido as any).GrandTotal ?? 0)),
                 currency: moneda,
                 itemsCount: Number((pedido as any).ItemsCount ?? items.length ?? 1),
                 items: norm.lines as any,
@@ -2047,6 +2049,7 @@ export class SyncService implements OnModuleInit {
                 store: connection.store ? ({ id: connection.store.id } as any) : null,
                 connection: { id: connection.id } as any,
                 totalAmount: Number(order.total_amount || 0),
+                productsAmount: importeDeProductos(norm.lines, Number(order.total_amount || 0)),
                 currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
                 itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
                 items: norm.lines as any,
@@ -2193,6 +2196,7 @@ export class SyncService implements OnModuleInit {
             shipByDate: norm.shipByDate,
             details: norm.details as any,
             items: norm.lines as any,
+            productsAmount: importeDeProductos(norm.lines, Number(existente.totalAmount)),
         });
     }
 

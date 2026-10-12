@@ -12,7 +12,7 @@ import { SyncScope, SyncService } from '../sync.service';
 import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
 import { resolverMoneda } from '../../common/currency';
-import { OrderLine } from '../order-details';
+import { importeDeProductos, OrderLine } from '../order-details';
 import {
     ChannelAuth,
     ChannelClient,
@@ -418,6 +418,7 @@ export class EcommerceSyncService implements OnModuleInit {
                 store: connection.store ? ({ id: connection.store.id } as any) : null,
                 connection: { id: connection.id } as any,
                 totalAmount: orden.totalAmount,
+                productsAmount: importeDeProductos(norm.lines, orden.totalAmount),
                 currency: resolverMoneda(orden.currency, connection.currency),
                 itemsCount: norm.lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0) || 1,
                 items: norm.lines as any,

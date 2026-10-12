@@ -284,6 +284,22 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
 }
 
 /**
+ * Lo que pagó el cliente solo por los productos: cantidad × precio pagado de
+ * cada línea, SIN envío, comisiones ni otros cargos. Es la base sobre la que se
+ * cobra a los clientes de la agencia. Si la venta no trae líneas con precio
+ * (ventas antiguas), no se puede separar y se usa el total de la venta.
+ */
+export function importeDeProductos(lines: { quantity?: number | null; unitPrice?: number | null }[] | null | undefined, totalDeLaVenta: number): number {
+    const suma = (lines ?? []).reduce((s, l) => {
+        const cantidad = Number(l?.quantity ?? 1);
+        const precio = Number(l?.unitPrice ?? 0);
+        return Number.isFinite(cantidad) && Number.isFinite(precio) ? s + cantidad * precio : s;
+    }, 0);
+    const redondeada = Math.round((suma + Number.EPSILON) * 100) / 100;
+    return redondeada > 0 ? redondeada : Number(totalDeLaVenta) || 0;
+}
+
+/**
  * Quita de los detalles los datos de contacto de quien compra. Se usa cuando
  * quien mira la venta solo tiene permiso de lectura: ve QUÉ se vendió y a quién
  * se le puso el nombre, pero no su teléfono, correo, documento ni dirección.

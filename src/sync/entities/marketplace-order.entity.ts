@@ -35,6 +35,13 @@ export class MarketplaceOrder {
     @Column('decimal', { precision: 12, scale: 2 })
     totalAmount: number;
 
+    /**
+     * Lo que pagó el cliente solo por los productos (sin envío ni otros cargos):
+     * la base sobre la que se cobra la comisión. Ver importeDeProductos().
+     */
+    @Column('decimal', { precision: 12, scale: 2, nullable: true })
+    productsAmount: number | null;
+
     @Column({ type: 'varchar', length: 5, default: 'PEN' })
     currency: string;
 

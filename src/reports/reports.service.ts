@@ -122,7 +122,7 @@ export class ReportsService {
         const rows = await this.orderRepository.createQueryBuilder('o')
             .select(`TO_CHAR("o"."orderDate"::date, 'YYYY-MM-DD')`, 'date')
             .addSelect('"o"."marketplace"', 'channel')
-            .addSelect('SUM("o"."totalAmount")', 'sales')
+            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
@@ -177,12 +177,12 @@ export class ReportsService {
             .select('"o"."connectionId"', 'connectionId')
             .addSelect('"o"."marketplace"', 'channel')
             .addSelect('MAX(COALESCE("c"."label", "c"."externalNickname", "c"."externalUserId"))', 'label')
-            .addSelect('SUM("o"."totalAmount")', 'sales')
+            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
-            .orderBy('SUM("o"."totalAmount")', 'DESC')
+            .orderBy('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'DESC')
             .getRawMany();
 
         const ultima = await this.orderRepository.createQueryBuilder('o')

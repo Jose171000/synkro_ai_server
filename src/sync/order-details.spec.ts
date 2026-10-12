@@ -160,3 +160,27 @@ describe('quién ve los datos de contacto', () => {
         expect(ocultarContacto(null)).toBeNull();
     });
 });
+
+import { importeDeProductos } from './order-details';
+
+describe('importe de los productos (base de la comisión)', () => {
+    it('suma cantidad x precio pagado de cada línea, sin el envío que trae el total de la venta', () => {
+        // Total de la venta 118 = 100 de productos + 18 de envío
+        const lineas = [{ quantity: 2, unitPrice: 30 }, { quantity: 1, unitPrice: 40 }];
+        expect(importeDeProductos(lineas, 118)).toBe(100);
+    });
+
+    it('redondea a dos decimales', () => {
+        expect(importeDeProductos([{ quantity: 3, unitPrice: 33.333 }], 0)).toBe(100);
+    });
+
+    it('una venta sin líneas con precio (antigua) usa su total', () => {
+        expect(importeDeProductos([], 80)).toBe(80);
+        expect(importeDeProductos(null, 80)).toBe(80);
+        expect(importeDeProductos([{ quantity: 1, unitPrice: 0 }], 80)).toBe(80);
+    });
+
+    it('una línea sin cantidad cuenta como una unidad', () => {
+        expect(importeDeProductos([{ unitPrice: 25 }], 99)).toBe(25);
+    });
+});

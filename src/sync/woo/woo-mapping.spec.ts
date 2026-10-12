@@ -222,3 +222,24 @@ describe('normalizarPedidoWoo', () => {
         expect(r.currency).toBeNull();
     });
 });
+
+describe('precio pagado por los productos (base de la comisión)', () => {
+    const pedido = (over: any) => ({
+        id: 9, number: '9', status: 'processing', currency: 'PEN', total: '133.00', date_created_gmt: '2026-10-09T12:00:00',
+        shipping_total: '15.00',
+        line_items: [{ id: 1, product_id: 5, variation_id: 0, sku: 'A', name: 'A', quantity: 2, total: '84.75', total_tax: '15.25', price: 50 }],
+        ...over,
+    });
+
+    it('con precios con impuesto incluido, lo pagado por el producto lleva el impuesto y no el envío', () => {
+        const o = normalizarPedidoWoo(pedido({ prices_include_tax: true }));
+        // (84.75 + 15.25) / 2 = 50 por unidad → 100 en productos; el envío (15) queda fuera.
+        expect(o.normalized.lines[0].unitPrice).toBe(50);
+        expect(o.normalized.lines[0].quantity * o.normalized.lines[0].unitPrice).toBe(100);
+    });
+
+    it('con precios sin impuesto, el impuesto no cuenta como precio del producto', () => {
+        const o = normalizarPedidoWoo(pedido({ prices_include_tax: false }));
+        expect(o.normalized.lines[0].unitPrice).toBeCloseTo(42.375, 3);
+    });
+});
