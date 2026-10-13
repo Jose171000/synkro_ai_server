@@ -88,8 +88,9 @@ function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[
     const redis: any = { set: jest.fn(async (k: string) => { if (claves.has(k)) return null; claves.add(k); return 'OK'; }), del: jest.fn(async (k: string) => { claves.delete(k); }) };
     const notificaciones: any = { notify: jest.fn(async (u: string, a: any) => { avisos.push({ u, ...a }); }) };
 
+    const alertas: any = { notificar: jest.fn(async () => undefined) };
     const service = new EcommerceSyncService(
-        sync, {} as any, repoEnlaces as any, repoVentas as any, repoProductos as any, redis, notificaciones,
+        sync, {} as any, repoEnlaces as any, repoVentas as any, repoProductos as any, redis, notificaciones, alertas,
         cliente, cliente,
     );
     return { service, cliente, sync, productos, enlaces, ventas, avisos, conexiones, repoProductos };

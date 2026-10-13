@@ -148,6 +148,24 @@ export class MailService {
         });
     }
 
+    /** Aviso de una venta nueva al dueño y al equipo de la tienda. */
+    async sendSaleAlert(
+        to: string,
+        data: {
+            name: string; storeName: string; channel: string; orderNumber: string; customerName: string | null;
+            currency: string; total: string; itemsCount: number;
+            items: { title: string; sku: string | null; quantity: number; unitPrice: string }[];
+            shipBy: string | null;
+        },
+    ): Promise<void> {
+        await this.deliver({
+            to,
+            subject: `Nueva venta en ${data.channel}: ${data.currency} ${data.total} — ${data.storeName}`,
+            template: 'sale-alert',
+            context: { ...data, dashboardUrl: `${this.frontendUrl}/dashboard` },
+        });
+    }
+
     async sendTestEmail(to: string, name: string): Promise<void> {
         await this.deliver({
             to,

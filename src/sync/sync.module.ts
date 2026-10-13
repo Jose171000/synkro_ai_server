@@ -4,6 +4,8 @@ import { SectionAccessGuard } from '../common/guards/section-access.guard';
 import { User } from '../users/entities/user.entity';
 import { BullModule } from '@nestjs/bullmq';
 import { SyncController } from './sync.controller';
+import { StoreMember } from '../stores/entities/store-member.entity';
+import { SaleAlertsService } from './sale-alerts.service';
 import { SyncService } from './sync.service';
 import { SyncProcessor } from './sync.processor';
 import { MeliApiService } from './meli/meli-api.service';
@@ -27,13 +29,13 @@ import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, User, Store]),
+        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, User, Store, StoreMember]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
         NotificationsModule,
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService],
 })
 export class SyncModule { }

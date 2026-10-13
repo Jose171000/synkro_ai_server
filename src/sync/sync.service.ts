@@ -9,6 +9,7 @@ import { REDIS_CLIENT } from '../redis/redis.module';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
+import { SaleAlertsService } from './sale-alerts.service';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
@@ -142,6 +143,7 @@ export class SyncService implements OnModuleInit {
         private readonly notifications: NotificationsService,
         private readonly changeRequests: ChangeRequestsService,
         private readonly stores: StoresService,
+        private readonly saleAlerts: SaleAlertsService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -1880,6 +1882,7 @@ export class SyncService implements OnModuleInit {
             }));
             nuevos++;
             if (soloRegistro) continue;
+            void this.saleAlerts.notificar(guardada, 'Falabella');
 
             // El stock que había antes y el que quedó después de ESTA venta se
             // guardan en cada línea: es lo que permite auditar la venta luego.
@@ -2071,6 +2074,7 @@ export class SyncService implements OnModuleInit {
         }
         // Historial: queda la constancia de la venta, sin tocar el stock ni avisar.
         if (options.soloRegistro) return true;
+        if (guardada) void this.saleAlerts.notificar(guardada, 'Mercado Libre');
 
         const efectos: Record<string, StockEffect> = {};
 

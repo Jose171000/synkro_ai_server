@@ -7,6 +7,7 @@ import { MarketplaceConnection } from '../entities/marketplace-connection.entity
 import { ListingLink } from '../entities/listing-link.entity';
 import { MarketplaceOrder } from '../entities/marketplace-order.entity';
 import { Product } from '../../products/entities/product.entity';
+import { SaleAlertsService } from '../sale-alerts.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { SyncScope, SyncService } from '../sync.service';
 import { WooApiService } from '../woo/woo-api.service';
@@ -70,6 +71,7 @@ export class EcommerceSyncService implements OnModuleInit {
         @Inject(REDIS_CLIENT)
         private readonly redis: Redis,
         private readonly notifications: NotificationsService,
+        private readonly saleAlerts: SaleAlertsService,
         woo: WooApiService,
         shopify: ShopifyApiService,
     ) {
@@ -438,6 +440,7 @@ export class EcommerceSyncService implements OnModuleInit {
             }
         }
         if (options.soloRegistro) return true;
+        if (guardada) void this.saleAlerts.notificar(guardada, NOMBRES[canal]);
 
         const efectos: Record<number, { productId: string; stockBefore: number; stockAfter: number }> = {};
         for (let i = 0; i < norm.lines.length; i++) {

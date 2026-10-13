@@ -12,6 +12,7 @@ import { MeliApiService } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SaleAlertsService } from './sale-alerts.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
@@ -70,6 +71,7 @@ async function construir(conexiones: any[]) {
             { provide: YavendioApiService, useValue: {} },
             { provide: FalabellaApiService, useValue: { verifyCredentials: jest.fn().mockResolvedValue(undefined) } },
             { provide: NotificationsService, useValue: { notify: jest.fn() } },
+            { provide: SaleAlertsService, useValue: { notificar: jest.fn() } },
             { provide: ChangeRequestsService, useValue: {} },
             { provide: StoresService, useValue: {} },
         ],
