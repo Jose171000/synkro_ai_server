@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -108,7 +108,7 @@ export class SyncService implements OnModuleInit {
      */
     async propagateStock(userId: string, productId: string, exceptConnectionId: string): Promise<void> {
         const enlaces = await this.listingLinkRepository.find({
-            where: { product: { id: productId }, syncStatus: 'published' },
+            where: { product: { id: productId }, syncStatus: In(['published', 'paused']) },
             relations: { connection: true },
         });
         for (const enlace of enlaces) {
@@ -1449,7 +1449,7 @@ export class SyncService implements OnModuleInit {
         const links = await this.listingLinkRepository.find({
             where: {
                 product: { id: productId },
-                syncStatus: 'published',
+                syncStatus: In(['published', 'paused']),
                 connection: { store: { id: scope.storeId } },
             },
             relations: { connection: true },
@@ -1499,7 +1499,7 @@ export class SyncService implements OnModuleInit {
             where: {
                 marketplace: 'mercadolibre',
                 product: { id: productId },
-                syncStatus: 'published',
+                syncStatus: In(['published', 'paused']),
                 ...(connectionId ? { connection: { id: connectionId } } : {}),
             },
             relations: { connection: true },
@@ -1547,7 +1547,7 @@ export class SyncService implements OnModuleInit {
             where: {
                 marketplace: 'falabella',
                 product: { id: productId },
-                syncStatus: 'published',
+                syncStatus: In(['published', 'paused']),
                 ...(connectionId ? { connection: { id: connectionId } } : {}),
             },
             relations: { connection: { owner: true } },
@@ -1953,7 +1953,7 @@ export class SyncService implements OnModuleInit {
 
             // Propagar el nuevo stock a las demás cuentas donde esté publicado.
             const otros = await this.listingLinkRepository.find({
-                where: { product: { id: product.id }, syncStatus: 'published' },
+                where: { product: { id: product.id }, syncStatus: In(['published', 'paused']) },
                 relations: { connection: true },
             });
             for (const enlace of otros) {
@@ -2143,7 +2143,7 @@ export class SyncService implements OnModuleInit {
 
             // Propagate the new stock to every OTHER account where it's published
             const otherLinks = await this.listingLinkRepository.find({
-                where: { product: { id: product.id }, syncStatus: 'published' },
+                where: { product: { id: product.id }, syncStatus: In(['published', 'paused']) },
                 relations: { connection: true },
             });
             for (const other of otherLinks) {
