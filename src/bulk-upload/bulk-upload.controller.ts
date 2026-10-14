@@ -19,6 +19,7 @@ import { UserRole } from '../users/user-role';
 import { UploadService } from '../upload/upload.service';
 import { StoreAccessGuard } from '../stores/store-access.guard';
 import { SyncService } from '../sync/sync.service';
+import { ProductsService } from '../products/products.service';
 
 /** Canales donde la carga masiva puede publicar sola. */
 const CANALES_PUBLICABLES = ['mercadolibre', 'falabella'];
@@ -36,6 +37,7 @@ export class BulkUploadController {
         @InjectQueue('category-edit-queue')     private readonly categoryEditQueue: Queue,
         private readonly uploadService: UploadService,
         private readonly syncService: SyncService,
+        private readonly productsService: ProductsService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -151,9 +153,26 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
                     .map((c: any) => c.marketplace as string))]
                 : [];
 
+            // Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
+            const skuRechazado = new Map<number, string>();
+            const existentes = await this.productsService.skusExistentes(
+                req.user.id,
+                rows.map((row: any) => this.getVal(row, ['sku']) ?? ''),
+            );
+            const vistos = new Map<string, number>();
+            rows.forEach((row: any, i: number) => {
+                const sku = (this.getVal(row, ['sku']) ?? '').trim();
+                if (!sku) return;
+                const clave = sku.toLowerCase();
+                if (existentes.has(clave)) skuRechazado.set(i, `el SKU ${sku} ya existe en tus productos`);
+                else if (vistos.has(clave)) skuRechazado.set(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
+                else vistos.set(clave, i);
+            });
+
             // Pre-count valid rows so each job knows the correct batchTotal
             const validRows = rows.filter((_row: any, i: number) => {
                 const row: any = rows[i];
+                if (skuRechazado.has(i)) return false;
                 const sku         = this.getVal(row, ['sku']);
                 const productName = this.getVal(row, ['productname', 'nombre', 'name', 'producto']);
                 const description = this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']);
@@ -170,6 +189,12 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
 
                 if (!sku || !productName || !description) {
                     console.log(`[BulkUpload] Fila ${i+1} descartada -> SKU: ${sku}, Nombre: ${productName}`);
+                    totalSkipped++;
+                    continue;
+                }
+
+                if (skuRechazado.has(i)) {
+                    rejectedImages.push(`Fila ${i + 2}: ${skuRechazado.get(i)}`);
                     totalSkipped++;
                     continue;
                 }

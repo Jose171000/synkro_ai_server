@@ -19,16 +19,10 @@ export class ProductsService {
 
     async create(createProductDto: CreateProductDto, userId: string) {
         const { images = [], ...productDetails } = createProductDto;
+        productDetails.sku = (productDetails.sku ?? '').trim();
 
-        // Check for duplicate SKU within same user
-        const existing = await this.productRepository.findOne({
-            where: { sku: createProductDto.sku, owner: { id: userId } },
-        });
-        if (existing) {
-            throw new ConflictException(
-                `El SKU "${createProductDto.sku}" ya está en uso por el producto "${existing.name}". Por favor usa un SKU diferente.`
-            );
-        }
+        // Cada SKU es único: ni repetido ni con otra combinación de mayúsculas o espacios
+        await this.assertSkuLibre(productDetails.sku, userId);
 
         const product = this.productRepository.create({
             ...productDetails,
@@ -36,6 +30,34 @@ export class ProductsService {
             images: images.map(url => this.productRepository.manager.create(ProductImage, { url }))
         });
         return this.productRepository.save(product);
+    }
+
+    /** El SKU identifica al producto en todos los canales: «abc-1» y «ABC-1 » son el mismo. */
+    async assertSkuLibre(sku: string, userId: string, exceptId?: string): Promise<void> {
+        const existing = await this.productRepository
+            .createQueryBuilder('p')
+            .where('p."ownerId" = :userId', { userId })
+            .andWhere('LOWER(TRIM(p.sku)) = LOWER(TRIM(:sku))', { sku })
+            .andWhere(exceptId ? 'p.id <> :exceptId' : '1=1', { exceptId })
+            .getOne();
+        if (existing) {
+            throw new ConflictException(
+                `El SKU "${sku}" ya está en uso por el producto "${existing.name}". Cada producto necesita un SKU distinto.`,
+            );
+        }
+    }
+
+    /** De una lista de SKUs, cuáles ya existen (en minúsculas y sin espacios). */
+    async skusExistentes(userId: string, skus: string[]): Promise<Set<string>> {
+        const claves = [...new Set(skus.map((s) => s.trim().toLowerCase()).filter(Boolean))];
+        if (!claves.length) return new Set();
+        const filas: { sku: string }[] = await this.productRepository
+            .createQueryBuilder('p')
+            .select('LOWER(TRIM(p.sku))', 'sku')
+            .where('p."ownerId" = :userId', { userId })
+            .andWhere('LOWER(TRIM(p.sku)) IN (:...claves)', { claves })
+            .getRawMany();
+        return new Set(filas.map((f) => f.sku));
     }
 
     async findAll(userId: string, query: QueryProductsDto) {
@@ -144,14 +166,8 @@ export class ProductsService {
 
     async createWithAI(dto: CreateProductWithAiDto, userId: string) {
         // Step 1: Check for duplicate SKU within same user BEFORE calling DeepSeek
-        const existing = await this.productRepository.findOne({
-            where: { sku: dto.sku, owner: { id: userId } },
-        });
-        if (existing) {
-            throw new ConflictException(
-                `El SKU "${dto.sku}" ya está en uso por el producto "${existing.name}". Por favor usa un SKU diferente.`
-            );
-        }
+        dto.sku = (dto.sku ?? '').trim();
+        await this.assertSkuLibre(dto.sku, userId);
 
         const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
 
@@ -246,6 +262,12 @@ export class ProductsService {
         const product = await this.findOne(id, userId);
 
         const { images, ...productDetails } = updateDto;
+        if (productDetails.sku !== undefined) {
+            productDetails.sku = productDetails.sku.trim();
+            if (productDetails.sku.toLowerCase() !== product.sku.trim().toLowerCase()) {
+                await this.assertSkuLibre(productDetails.sku, userId, product.id);
+            }
+        }
         Object.assign(product, productDetails);
 
         if (images && images.length > 0) {
