@@ -28,8 +28,8 @@ export class BatchNotificationService {
      * @param meta     Batch metadata passed in every job's data payload
      * @param success  Whether this particular job succeeded
      */
-    async trackAndNotify(meta: BatchMeta, success: boolean): Promise<void> {
-        if (!meta?.batchId) return; // safety guard — jobs without batch tracking skip silently
+    async trackAndNotify(meta: BatchMeta, success: boolean): Promise<boolean> {
+        if (!meta?.batchId) return false; // safety guard — jobs without batch tracking skip silently
 
         const key = `batch:${meta.batchId}`;
 
@@ -60,7 +60,8 @@ export class BatchNotificationService {
         this.logger.log(`[Batch ${meta.batchId}] ${processedN + failedN}/${totalN} (✓${processedN} ✗${failedN})`);
 
         // Batch complete — send email and cleanup
-        if (processedN + failedN >= totalN) {
+        const completo = processedN + failedN >= totalN;
+        if (completo) {
             await this.redis.del(key);
 
             try {
@@ -76,5 +77,21 @@ export class BatchNotificationService {
                 this.logger.error(`[Batch ${meta.batchId}] Failed to send email: ${err.message}`);
             }
         }
+        return completo;
+    }
+
+    /** Deja anotado un producto para publicarlo en el canal cuando termine todo el lote. */
+    async deferPublish(batchId: string, channel: string, productId: string): Promise<void> {
+        const key = `batch:${batchId}:publish:${channel}`;
+        await this.redis.sadd(key, productId);
+        await this.redis.expire(key, this.TTL_SECONDS);
+    }
+
+    /** Saca (y borra) los productos anotados: solo quien lo pida primero los recibe. */
+    async takeDeferred(batchId: string, channel: string): Promise<string[]> {
+        const key = `batch:${batchId}:publish:${channel}`;
+        const res = await this.redis.multi().smembers(key).del(key).exec();
+        const ids = res?.[0]?.[1];
+        return Array.isArray(ids) ? (ids as string[]) : [];
     }
 }

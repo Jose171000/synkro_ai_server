@@ -1,4 +1,4 @@
-import { IsArray, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { CategoryAttribute } from '../../categories/entities/marketplace-category.entity';
 
@@ -45,4 +45,12 @@ export class GenerateListingsDto {
     @IsObject()
     @IsOptional()
     categoryRequirements?: Record<string, CategoryAttribute[]>;
+
+    @ApiProperty({
+        description: 'Modo masivo: los datos obligatorios que no se puedan deducir se estiman en vez de quedar vacíos.',
+        required: false,
+    })
+    @IsBoolean()
+    @IsOptional()
+    estimateMissing?: boolean;
 }

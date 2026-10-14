@@ -34,6 +34,8 @@ export class AiService {
     imageUrls?: string[],
     /** Dueño de la cuenta: permite consultar a sus canales qué exige cada categoría. */
     userId?: string,
+    /** Modo masivo: se estima todo lo que falte (datos obligatorios y medidas) para poder publicar sin revisión. */
+    estimar?: boolean,
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
@@ -42,6 +44,7 @@ export class AiService {
     const vision: ProductVision | null = dto.imageUrls?.length
       ? await this.vision.analyze(dto.imageUrls, { name: dto.name, description: dto.description })
       : null;
+    const textoDelCliente = [dto.name, dto.description].filter(Boolean).join('. ');
     const enriquecido = this.combinarConVision(dto.name, dto.description, vision);
     // Sin texto y sin poder leer las fotos no hay de dónde sacar el producto: se pide más información.
     if (!enriquecido.name && !enriquecido.description) {
@@ -129,6 +132,7 @@ export class AiService {
       description: dto.description,
       targetMarketplaces: dto.targetMarketplaces,
       extractedAttributes: vision ? this.atributosDeVision(vision) : undefined,
+      estimateMissing: dto.estimar,
       categoryRequirements
     };
 
@@ -146,11 +150,28 @@ export class AiService {
 
       const finalJson = JSON.parse(finalResponse.choices[0].message.content || '{}');
 
+      // Lo que la IA estimó (solo en modo masivo) se anota aparte y se quita de los atributos.
+      const estimatedAttributes: Record<string, string[]> = {};
+      for (const [marketplace, listing] of Object.entries<any>(finalJson ?? {})) {
+        const lista = listing?.attributes?._estimated;
+        if (listing?.attributes && '_estimated' in listing.attributes) {
+          delete listing.attributes._estimated;
+          if (Array.isArray(lista) && lista.length) estimatedAttributes[marketplace] = lista.map(String);
+        }
+      }
+
+      // Falabella calcula el envío con las medidas del paquete: se estiman si el cliente no las dio.
+      const packageEstimate = dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')
+        ? await this.estimarPaquete(textoDelCliente, enriquecido.name, vision)
+        : null;
+
       // Bundle the results from Phase A (Categorization) and Phase B (Generation) together
       return {
         categorizedAs: catJson,
         generatedListings: finalJson,
         vision,
+        packageEstimate,
+        estimatedAttributes,
         // Lo obligatorio que la IA no pudo deducir: es lo único que el cliente tiene que completar.
         missingAttributes: this.atributosFaltantes(finalJson, categoryRequirements),
       };
@@ -171,6 +192,42 @@ export class AiService {
     const nombre = nombreVago ? [vision.suggestedName, nombreCliente].filter(Boolean).join(' ') : nombreCliente;
     const descripcion = [descCliente, vision.description].filter((t, i, a) => t && a.indexOf(t) === i).join(' ');
     return { name: nombre, description: descripcion || nombre, titulo: nombreVago ? vision.suggestedName : nombreCliente };
+  }
+
+  /**
+   * Medidas del paquete ya embalado (cm) y peso (kg). Si el cliente las dio en su texto se respetan
+   * tal cual; si no, se estiman con lo que se sabe del producto. Devuelve null si no se pudo.
+   */
+  public async estimarPaquete(textoDelCliente: string, nombre: string, vision: ProductVision | null) {
+    try {
+      const respuesta = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Eres un experto en logística de e-commerce. Estima las dimensiones del PAQUETE ya embalado y listo para enviar de este producto.
+
+Producto: ${nombre}
+Tipo: ${vision?.productType ?? 'no indicado'} · Material: ${vision?.material ?? 'no indicado'}
+Texto escrito por el cliente: "${textoDelCliente || '(nada)'}"
+
+Reglas:
+- Si el texto del cliente indica medidas o peso, úsalos EXACTOS (conviértelos a cm y kg).
+- Lo que no indique, estímalo con valores típicos de ese tipo de producto ya empacado.
+- Devuelve "fromClient": true SOLO si el cliente dio las cuatro cosas (ancho, largo, alto y peso).
+- Valores positivos; ancho <= largo.
+
+Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight": cm, "packageWeight": kg, "fromClient": boolean }`,
+          },
+        ],
+      });
+      return normalizarPaquete(JSON.parse(respuesta.choices[0]?.message?.content || '{}'));
+    } catch (error) {
+      console.warn('[AiService] No se pudieron estimar las medidas del paquete:', error);
+      return null;
+    }
   }
 
   /** Datos de las fotos que van al prompt como atributos ya conocidos. */
@@ -255,7 +312,7 @@ Elige el ID de categoría más apropiado de la lista. Si ninguna encaja, elige e
    * Generates the dynamic prompt string by aggregating rules based on the user's selected marketplaces.
    */
   public buildDynamicPrompt(dto: GenerateListingsDto): string {
-    const { productName, description, targetMarketplaces, extractedAttributes, categoryRequirements } = dto;
+    const { productName, description, targetMarketplaces, extractedAttributes, categoryRequirements, estimateMissing } = dto;
 
     if (!targetMarketplaces || targetMarketplaces.length === 0) {
       throw new BadRequestException('At least one target marketplace must be specified.');
@@ -294,7 +351,9 @@ ${extractedAttributes ? '- Atributos extraídos: ' + JSON.stringify(extractedAtt
           // Build structured attribute blocks for the LLM
           let attributeBlock = '';
           if (required.length > 0) {
-            attributeBlock += `\n    [OBLIGATORIOS — complétalos con la información del producto. Si NO se puede deducir con certeza, devuelve null: NUNCA inventes un valor]:\n`;
+            attributeBlock += `\n    ${estimateMissing
+              ? '[OBLIGATORIOS — complétalos SIEMPRE. Si no se deduce del producto, ESTIMA el valor más probable (si hay lista de opciones, la más cercana; si no, un valor genérico típico) y añade el nombre de ese atributo a "_estimated"]'
+              : '[OBLIGATORIOS — complétalos con la información del producto. Si NO se puede deducir con certeza, devuelve null: NUNCA inventes un valor]'}:\n`;
             attributeBlock += required.map((a: CategoryAttribute) =>
               `      • "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}`
             ).join('\n');
@@ -313,7 +372,7 @@ ${extractedAttributes ? '- Atributos extraídos: ' + JSON.stringify(extractedAtt
           // Build JSON schema: required attrs always included, optional marked with nullable hint
           const requiredKeys = required.map((a: CategoryAttribute) => `"${a.name}": "${a.example}"`).join(', ');
           const optionalKeys = optional.map((a: CategoryAttribute) => `"${a.name}": "${a.example} (opcional)"`).join(', ');
-          const allKeys = [requiredKeys, optionalKeys].filter(Boolean).join(', ');
+          const allKeys = [requiredKeys, optionalKeys, estimateMissing ? '"_estimated": ["NOMBRE_DEL_ATRIBUTO_ESTIMADO"]' : ''].filter(Boolean).join(', ');
           const dynamicAttributesKeys = allKeys;
 
           // Inyectamos el nodo "attributes" justo antes de cerrar la llave final del esquema de este marketplace
@@ -363,4 +422,17 @@ con esta estructura exacta:
 
     return finalPrompt;
   }
+}
+
+/** Medidas del paquete que devuelve la IA → números seguros (cm enteros, kg), o null si no sirven. */
+export function normalizarPaquete(crudo: any): { width: number; length: number; height: number; weight: number; fromClient: boolean } | null {
+  if (!crudo || typeof crudo !== 'object') return null;
+  const dim = (v: any) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 1), 200) : null;
+  };
+  const peso = Number(crudo.packageWeight);
+  const width = dim(crudo.packageWidth), length = dim(crudo.packageLength), height = dim(crudo.packageHeight);
+  if (!width || !length || !height || !Number.isFinite(peso) || peso <= 0) return null;
+  return { width, length, height, weight: Math.min(Math.round(peso * 1000) / 1000, 70), fromClient: crudo.fromClient === true };
 }

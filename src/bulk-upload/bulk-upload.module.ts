@@ -17,6 +17,8 @@ import { MarketplaceCategory } from '../categories/entities/marketplace-category
 import { UploadModule } from '../upload/upload.module';
 import { MailModule } from '../mail/mail.module';
 import { RedisModule } from '../redis/redis.module';
+import { SyncModule } from '../sync/sync.module';
+import { StoresModule } from '../stores/stores.module';
 
 @Module({
     imports: [
@@ -33,6 +35,8 @@ import { RedisModule } from '../redis/redis.module';
         UploadModule,
         MailModule,
         RedisModule,
+        SyncModule,
+        StoresModule,
     ],
     controllers: [BulkUploadController],
     providers: [

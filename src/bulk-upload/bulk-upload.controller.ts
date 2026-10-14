@@ -17,6 +17,11 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { UploadService } from '../upload/upload.service';
+import { StoreAccessGuard } from '../stores/store-access.guard';
+import { SyncService } from '../sync/sync.service';
+
+/** Canales donde la carga masiva puede publicar sola. */
+const CANALES_PUBLICABLES = ['mercadolibre', 'falabella'];
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()
@@ -30,6 +35,7 @@ export class BulkUploadController {
         @InjectQueue('product-edit-queue')      private readonly productEditQueue: Queue,
         @InjectQueue('category-edit-queue')     private readonly categoryEditQueue: Queue,
         private readonly uploadService: UploadService,
+        private readonly syncService: SyncService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -93,6 +99,7 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
             required: ['excel'],
         },
     })
+    @UseGuards(StoreAccessGuard)
     @UseInterceptors(AnyFilesInterceptor())
     async uploadExcel(@UploadedFiles() files: Express.Multer.File[], @Req() req) {
         const excelFile = files?.find(f => f.fieldname === 'excel');
@@ -135,6 +142,15 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
             const rejectedImages: string[] = [];
             const batchId = randomUUID(); // unique ID for this bulk-upload batch
 
+            // Canales de la tienda donde se puede publicar sola. Solo el dueño publica;
+            // el resto de los roles crea los productos y los deja listos.
+            const storeId: string | undefined = req.store?.storeId;
+            const conectados: string[] = storeId && req.store?.role === 'owner'
+                ? [...new Set((await this.syncService.getConnections(storeId))
+                    .filter((c: any) => c.status === 'active' && CANALES_PUBLICABLES.includes(c.marketplace))
+                    .map((c: any) => c.marketplace as string))]
+                : [];
+
             // Pre-count valid rows so each job knows the correct batchTotal
             const validRows = rows.filter((_row: any, i: number) => {
                 const row: any = rows[i];
@@ -168,13 +184,19 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
                 }
 
                 const imageUrl = (settled as PromiseFulfilledResult<string | undefined>).value;
+                // Sin columna de canales se usan todos los que la tienda tiene conectados.
+                const indicados = (this.getVal(row, ['targetmarketplaces', 'marketplaces']) || '')
+                    .split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
+                const targets = indicados.length ? indicados : (conectados.length ? conectados : ['mercadolibre']);
 
                 await this.listingsQueue.add('process-product', {
                     sku,
                     productName,
                     description,
-                    targetMarketplaces: (this.getVal(row, ['targetmarketplaces', 'marketplaces']) || 'amazon,mercadolibre')
-                        .split(',').map((s: string) => s.trim().toLowerCase()),
+                    targetMarketplaces: targets,
+                    // Se publica solo donde la tienda tiene cuenta conectada.
+                    publishTo: targets.filter((t: string) => conectados.includes(t)),
+                    storeId,
                     userId:     req.user.id,
                     userEmail:  req.user.email,
                     imageUrl,

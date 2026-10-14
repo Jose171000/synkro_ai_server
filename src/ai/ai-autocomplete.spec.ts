@@ -88,3 +88,54 @@ describe('autocompletar un producto desde sus fotos', () => {
         expect(r.vision).toBeNull();
     });
 });
+
+describe('medidas del paquete y modo masivo', () => {
+    const { normalizarPaquete } = require('./ai.service');
+
+    it('las medidas de la IA se vuelven números seguros y lo inservible se descarta', () => {
+        expect(normalizarPaquete({ packageWidth: 30.4, packageLength: 40, packageHeight: 5, packageWeight: 1.23456, fromClient: true }))
+            .toEqual({ width: 30, length: 40, height: 5, weight: 1.235, fromClient: true });
+        expect(normalizarPaquete({ packageWidth: 0, packageLength: 40, packageHeight: 5, packageWeight: 1 })).toBeNull();
+        expect(normalizarPaquete({ packageWidth: 9999, packageLength: 40, packageHeight: 5, packageWeight: 999 }))
+            .toMatchObject({ width: 200, weight: 70, fromClient: false });
+        expect(normalizarPaquete(null)).toBeNull();
+    });
+
+    function construir() {
+        const canales: any = {
+            predecirCategoriaMeli: jest.fn(async () => null),
+            requisitos: jest.fn(async () => [{ name: 'tipo_tela', description: 'Tipo de tela', example: 'Algodón', isRequired: true, options: ['Algodón', 'Poliéster'] }]),
+        };
+        const busqueda: any = { findSimilarCategories: jest.fn(async () => [{ categoryId: '1234', name: 'Sábanas', requiredAttributes: [] }]) };
+        const semilla: any = { generateEmbedding: jest.fn(async () => [0.1]) };
+        const vision: any = { analyze: jest.fn(async () => null) };
+        const service = new AiService(busqueda, semilla, vision, canales);
+        const prompts: string[] = [];
+        const create = jest.fn(async (req: any) => {
+            const p = req.messages[req.messages.length - 1].content as string;
+            prompts.push(p);
+            if (p.includes('logística')) return { choices: [{ message: { content: JSON.stringify({ packageWidth: 30, packageLength: 40, packageHeight: 10, packageWeight: 2, fromClient: false }) } }] };
+            if (p.includes('REGLAS ESTRICTAS')) return { choices: [{ message: { content: JSON.stringify({ falabella: { name: 'Sábanas', description: 'x', brand: 'GENERICO', attributes: { tipo_tela: 'Algodón', _estimated: ['tipo_tela'] } } }) } }] };
+            return { choices: [{ message: { content: JSON.stringify({ falabella_category_id: '1234' }) } }] };
+        });
+        (service as any).openai = { chat: { completions: { create } } };
+        return { service, prompts };
+    }
+
+    it('en modo masivo pide estimar lo que falte, anota qué se estimó y estima el paquete para Falabella', async () => {
+        const { service, prompts } = construir();
+        const r = await service.generateProductContent({ name: 'Sábanas bamboo queen', description: 'sábanas', targetMarketplaces: ['falabella'], userId: 'u', estimar: true });
+
+        expect(prompts.find((p) => p.includes('REGLAS ESTRICTAS'))).toContain('ESTIMA el valor más probable');
+        expect(r.estimatedAttributes).toEqual({ falabella: ['tipo_tela'] });
+        expect((r.generatedListings as any).falabella.attributes).toEqual({ tipo_tela: 'Algodón' });
+        expect(r.packageEstimate).toEqual({ width: 30, length: 40, height: 10, weight: 2, fromClient: false });
+    });
+
+    it('en modo normal no estima atributos y sin Falabella no calcula el paquete', async () => {
+        const { service, prompts } = construir();
+        const r = await service.generateProductContent({ name: 'Sábanas bamboo queen', description: 'sábanas', targetMarketplaces: ['mercadolibre'] });
+        expect(prompts.some((p) => p.includes('ESTIMA el valor más probable'))).toBe(false);
+        expect(r.packageEstimate).toBeNull();
+    });
+});

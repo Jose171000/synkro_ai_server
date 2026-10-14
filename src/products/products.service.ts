@@ -190,7 +190,11 @@ export class ProductsService {
         // Step 4: Return the fully enriched product, con lo que la IA vio y lo que aún falta
         const guardado = await this.productRepository.save(savedProduct);
         return Object.assign(guardado, {
-            aiReport: { vision: aiContent.vision ?? null, missingAttributes: aiContent.missingAttributes ?? {} },
+            aiReport: {
+                vision: aiContent.vision ?? null,
+                missingAttributes: aiContent.missingAttributes ?? {},
+                estimated: (guardado.aiAttributes as any)?.estimated ?? null,
+            },
         });
     }
 
@@ -270,7 +274,7 @@ export class ProductsService {
      * lo de Falabella se perdía en silencio y luego la publicación fallaba
      * pidiendo datos que la IA sí había generado.
      */
-    private applyAiContent(product: Product, aiContent: any): void {
+    applyAiContent(product: Product, aiContent: any): void {
         const listings = aiContent?.generatedListings ?? aiContent ?? {};
         const primero = Object.values(listings)[0] as any;
 
@@ -321,6 +325,21 @@ export class ProductsService {
         const delFalabella = completos((listings as any).falabella?.attributes);
         if (Object.keys(delFalabella).length) {
             product.aiAttributes = { ...delFalabella, ...((product.aiAttributes as any) || {}) };
+        }
+
+        // Medidas del paquete: las que dio el cliente mandan; si no, las estimadas quedan marcadas para revisión.
+        const paquete = aiContent?.packageEstimate;
+        if (paquete) {
+            if (product.packageWidth == null) product.packageWidth = paquete.width;
+            if (product.packageLength == null) product.packageLength = paquete.length;
+            if (product.packageHeight == null) product.packageHeight = paquete.height;
+            if (product.packageWeight == null) product.packageWeight = paquete.weight;
+        }
+        if (paquete || Object.keys(aiContent?.estimatedAttributes ?? {}).length) {
+            product.aiAttributes = {
+                ...((product.aiAttributes as any) || {}),
+                estimated: { measures: !!paquete && !paquete.fromClient, attributes: aiContent?.estimatedAttributes ?? {} },
+            };
         }
 
         // Lo que se vio en las fotos: la marca y el color quedan listos para publicar.

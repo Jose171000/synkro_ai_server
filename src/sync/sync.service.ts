@@ -1042,6 +1042,9 @@ export class SyncService implements OnModuleInit {
             ...((product.aiAttributes as any) || {}),
             ...(datos.attributes || {}),
         };
+        // Quien guarda las medidas las está revisando: dejan de estar marcadas como estimadas.
+        const previo = (product.aiAttributes as any).estimated;
+        if (previo) (product.aiAttributes as any).estimated = { ...previo, measures: false };
 
         await this.productRepository.save(product);
 
