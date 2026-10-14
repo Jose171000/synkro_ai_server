@@ -180,6 +180,12 @@ export class MeliApiService {
         return data?.[0]?.category_id;
     }
 
+    /** Nombre de una categoría y el camino desde la raíz («Hogar › Cama › Sábanas»). */
+    async getCategory(categoryId: string): Promise<{ id: string; name: string; path_from_root?: { id: string; name: string }[] }> {
+        const { data } = await this.http.get(`/categories/${categoryId}`);
+        return data;
+    }
+
     /** Atributos que pide una categoría (marca, color, talla…), con sus valores admitidos. */
     async getCategoryAttributes(categoryId: string, accessToken?: string): Promise<any[]> {
         const { data } = await this.http.get(

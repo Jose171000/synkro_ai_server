@@ -61,9 +61,14 @@ export class AiService {
         const topCategories = await this.vectorSearchService.findSimilarCategories(
           productEmbedding,
           marketplace,
-          5,
+          // De Mercado Libre se piden más: parte de lo guardado son ejemplos de otro país que se descartan.
+          marketplace.toLowerCase() === "mercadolibre" ? 20 : 5,
         );
-        categoriesPerMarketplace[marketplace.toLowerCase()] = topCategories;
+        // Las categorías de ejemplo de Mercado Libre son de otro país: solo valen las del sitio configurado.
+        const sitio = process.env.MELI_SITE_ID || 'MPE';
+        categoriesPerMarketplace[marketplace.toLowerCase()] = marketplace.toLowerCase() === 'mercadolibre'
+          ? topCategories.filter(c => c.categoryId.startsWith(sitio)).slice(0, 5)
+          : topCategories;
       }
 
       // Step 3: Build the categorization prompt with only the relevant top-5 categories
@@ -105,7 +110,11 @@ export class AiService {
         }
         const categoryId = catJson[`${marketplace}_category_id`];
         if (!categoryId) continue;
-        const reales = await this.channelAttributes.requisitos(marketplace, String(categoryId), dto.userId);
+        // Cada categoría consultada queda guardada con sus atributos y las palabras que llevaron a ella.
+        const reales = await this.channelAttributes.requisitos(marketplace, String(categoryId), dto.userId, {
+          titulo: enriquecido.titulo,
+          palabras: [vision?.productType ?? '', ...(vision?.keywords ?? [])].filter(Boolean),
+        });
         if (reales) categoryRequirements[marketplace] = reales;
       }
 

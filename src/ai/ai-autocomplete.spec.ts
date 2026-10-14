@@ -72,7 +72,7 @@ describe('autocompletar un producto desde sus fotos', () => {
 
         expect(vision.analyze).toHaveBeenCalledWith(['https://x/1.jpg'], expect.anything());
         expect(r.categorizedAs.mercadolibre_category_id).toBe('MPE1234');
-        expect(canales.requisitos).toHaveBeenCalledWith('mercadolibre', 'MPE1234', 'u1');
+        expect(canales.requisitos).toHaveBeenCalledWith('mercadolibre', 'MPE1234', 'u1', { titulo: 'Juego de sábanas turquesa queen', palabras: ['juego de sábanas', 'sábanas', 'cama'] });
         // El nombre corto del cliente se completa con lo que se ve en la foto.
         const prompt = create.mock.calls[1][0].messages[1].content as string;
         expect(prompt).toContain('Juego de sábanas turquesa queen');
