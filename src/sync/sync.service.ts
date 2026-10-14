@@ -968,6 +968,10 @@ export class SyncService implements OnModuleInit {
             attributes: [
                 { id: 'BRAND', value_name: brand },
                 { id: 'MODEL', value_name: product.sku },
+                // Los datos que la categoría pide y la IA completó (color, material, talla…).
+                ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
+                    .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && valor !== null && valor !== undefined && String(valor).trim() !== '')
+                    .map(([id, valor]) => ({ id, value_name: String(valor) })),
             ],
         };
     }

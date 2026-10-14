@@ -6,6 +6,7 @@ export interface CategoryAttribute {
     description: string;  // e.g. "Talla del calzado en sistema US, número decimal"
     example: string;      // e.g. "10.5"
     isRequired: boolean;  // true = obligatorio en el listing, false = recomendado/opcional
+    options?: string[];   // valores admitidos por el canal, si es una lista cerrada
 }
 
 @Entity('marketplace_categories')

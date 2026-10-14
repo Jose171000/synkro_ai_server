@@ -4,6 +4,8 @@ import { MARKETPLACE_PROMPT_RULES } from './marketplace.constants';
 import { VectorSearchService } from '../categories/vector-search.service';
 import { CategorySeederService } from '../categories/category-seeder.service';
 import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/marketplace-category.entity';
+import { ProductVisionService, ProductVision } from './product-vision.service';
+import { ChannelAttributesService } from './channel-attributes.service';
 import OpenAI from 'openai';
 
 @Injectable()
@@ -13,6 +15,8 @@ export class AiService {
   constructor(
     private readonly vectorSearchService: VectorSearchService,
     private readonly categorySeederService: CategorySeederService,
+    private readonly vision: ProductVisionService,
+    private readonly channelAttributes: ChannelAttributesService,
   ) {
     this.openai = new OpenAI({
       baseURL: 'https://api.deepseek.com',
@@ -24,14 +28,31 @@ export class AiService {
    * ORCHESTRATOR: generateProductContent
    * Orchestrates Phase A and Phase B to generate the final listings using DeepSeek.
    */
-  public async generateProductContent(dto: { name: string, description: string, category?: string, subcategory?: string, targetMarketplaces: string[], tone?: string }) {
+  public async generateProductContent(dto: {
+    name: string, description: string, category?: string, subcategory?: string, targetMarketplaces: string[], tone?: string,
+    /** Fotos del producto: la IA las mira para completar lo que el cliente no escribió. */
+    imageUrls?: string[],
+    /** Dueño de la cuenta: permite consultar a sus canales qué exige cada categoría. */
+    userId?: string,
+  }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
+
+    // PHASE 0: las fotos. Todo lo que se ve (tipo, color, material, marca) deja de depender de lo que escriba el cliente.
+    const vision: ProductVision | null = dto.imageUrls?.length
+      ? await this.vision.analyze(dto.imageUrls, { name: dto.name, description: dto.description })
+      : null;
+    const enriquecido = this.combinarConVision(dto.name, dto.description, vision);
+    // Sin texto y sin poder leer las fotos no hay de dónde sacar el producto: se pide más información.
+    if (!enriquecido.name && !enriquecido.description) {
+      throw new BadRequestException('No se pudo identificar el producto. Escribe una breve descripción o sube fotos más claras.');
+    }
+    dto = { ...dto, name: enriquecido.name, description: enriquecido.description };
 
     try {
       // PHASE A: Vector Search + LLM Categorization
       // Step 1: Get the embedding for the product text
-      const productText = `${dto.name} ${dto.description}`;
+      const productText = [dto.name, dto.description, vision?.productType, ...(vision?.keywords ?? [])].filter(Boolean).join(' ');
       const productEmbedding = await this.categorySeederService.generateEmbedding(productText);
 
       // Step 2: For each marketplace, find the top 5 most semantically similar categories
@@ -74,6 +95,20 @@ export class AiService {
         }
       });
 
+      // Step 5: lo que cada canal REALMENTE pide. Mercado Libre tiene su propio clasificador
+      // (las categorías guardadas aquí son de ejemplo y de otro país), y cada categoría
+      // tiene sus atributos obligatorios con valores permitidos.
+      for (const marketplace of dto.targetMarketplaces.map(m => m.toLowerCase())) {
+        if (marketplace === 'mercadolibre') {
+          const real = await this.channelAttributes.predecirCategoriaMeli(enriquecido.titulo);
+          if (real) catJson['mercadolibre_category_id'] = real;
+        }
+        const categoryId = catJson[`${marketplace}_category_id`];
+        if (!categoryId) continue;
+        const reales = await this.channelAttributes.requisitos(marketplace, String(categoryId), dto.userId);
+        if (reales) categoryRequirements[marketplace] = reales;
+      }
+
     } catch (error) {
       console.error('[AiService] Failed during Phase A Categorization:', error);
       categoryRequirements = {};
@@ -84,6 +119,7 @@ export class AiService {
       productName: dto.name,
       description: dto.description,
       targetMarketplaces: dto.targetMarketplaces,
+      extractedAttributes: vision ? this.atributosDeVision(vision) : undefined,
       categoryRequirements
     };
 
@@ -104,13 +140,54 @@ export class AiService {
       // Bundle the results from Phase A (Categorization) and Phase B (Generation) together
       return {
         categorizedAs: catJson,
-        generatedListings: finalJson
+        generatedListings: finalJson,
+        vision,
+        // Lo obligatorio que la IA no pudo deducir: es lo único que el cliente tiene que completar.
+        missingAttributes: this.atributosFaltantes(finalJson, categoryRequirements),
       };
 
     } catch (error) {
       console.error('[AiService] Failed during Phase B Generation:', error);
       throw new InternalServerErrorException('Failed to generate product content via AI.');
     }
+  }
+
+  /** El nombre y la descripción que usa la IA: lo del cliente, completado con lo que se ve en las fotos. */
+  private combinarConVision(name: string, description: string, vision: ProductVision | null) {
+    const nombreCliente = (name ?? '').trim();
+    const descCliente = (description ?? '').trim();
+    if (!vision) return { name: nombreCliente, description: descCliente, titulo: nombreCliente };
+    // Si el cliente solo escribió algo corto o repitió el mismo texto, el nombre de la foto es mejor base.
+    const nombreVago = nombreCliente.length < 12;
+    const nombre = nombreVago ? [vision.suggestedName, nombreCliente].filter(Boolean).join(' ') : nombreCliente;
+    const descripcion = [descCliente, vision.description].filter((t, i, a) => t && a.indexOf(t) === i).join(' ');
+    return { name: nombre, description: descripcion || nombre, titulo: nombreVago ? vision.suggestedName : nombreCliente };
+  }
+
+  /** Datos de las fotos que van al prompt como atributos ya conocidos. */
+  private atributosDeVision(vision: ProductVision): Record<string, any> {
+    const base: Record<string, any> = {
+      tipo: vision.productType, marca: vision.brand, color: vision.color, material: vision.material, genero: vision.gender,
+      ...vision.attributes,
+    };
+    return Object.fromEntries(Object.entries(base).filter(([, v]) => v));
+  }
+
+  /** Atributos obligatorios de cada canal que quedaron vacíos tras la generación. */
+  public atributosFaltantes(generated: any, requirements: Record<string, CategoryAttribute[]>): Record<string, { name: string; description: string; options?: string[] }[]> {
+    const faltantes: Record<string, { name: string; description: string; options?: string[] }[]> = {};
+    for (const [marketplace, atributos] of Object.entries(requirements ?? {})) {
+      const rellenos = generated?.[marketplace]?.attributes ?? {};
+      const sinValor = atributos
+        .filter((a) => a.isRequired)
+        .filter((a) => {
+          const v = rellenos[a.name];
+          return v === null || v === undefined || String(v).trim() === '' || /^(null|n\/a|desconocido|no especificado)$/i.test(String(v).trim());
+        })
+        .map((a) => ({ name: a.name, description: a.description, ...(a.options?.length ? { options: a.options } : {}) }));
+      if (sinValor.length) faltantes[marketplace] = sinValor;
+    }
+    return faltantes;
   }
 
   /**
@@ -208,15 +285,15 @@ ${extractedAttributes ? '- Atributos extraídos: ' + JSON.stringify(extractedAtt
           // Build structured attribute blocks for the LLM
           let attributeBlock = '';
           if (required.length > 0) {
-            attributeBlock += `\n    [OBLIGATORIOS — DEBES completar estos campos sin excepción]:\n`;
+            attributeBlock += `\n    [OBLIGATORIOS — complétalos con la información del producto. Si NO se puede deducir con certeza, devuelve null: NUNCA inventes un valor]:\n`;
             attributeBlock += required.map((a: CategoryAttribute) =>
-              `      • "${a.name}": ${a.description} (ejemplo: "${a.example}")`
+              `      • "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}`
             ).join('\n');
           }
           if (optional.length > 0) {
             attributeBlock += `\n    [OPCIONALES — completa si puedes inferirlos del producto]:\n`;
             attributeBlock += optional.map((a: CategoryAttribute) =>
-              `      ◦ "${a.name}": ${a.description} (ejemplo: "${a.example}")`
+              `      ◦ "${a.name}": ${a.description}${a.options?.length ? ` — si lo completas, elige uno de: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}`
             ).join('\n');
           }
 

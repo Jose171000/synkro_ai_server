@@ -155,8 +155,13 @@ export class ProductsService {
 
         const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
 
+        // El cliente puede dar solo fotos, SKU y precio: el nombre y la descripción los completa la IA.
+        const nombreDelCliente = (dto.name ?? '').trim();
+        const descripcionDelCliente = (dto.description ?? '').trim();
         const product = this.productRepository.create({
             ...productDetails,
+            name: nombreDelCliente || dto.sku,
+            description: descripcionDelCliente,
             owner: { id: userId },
             images: images.map(url => this.productRepository.manager.create(ProductImage, { url })),
             status: 'pending',
@@ -165,21 +170,28 @@ export class ProductsService {
 
         // Step 2: Call DeepSeek (Phase A + Phase B)
         const aiContent = await this.aiService.generateProductContent({
-            name: dto.name,
-            description: dto.description,
+            name: nombreDelCliente,
+            description: descripcionDelCliente,
             category: dto.category,
             subcategory: dto.subCategory,
             targetMarketplaces: targetMarketplaces || ['amazon', 'mercadolibre'],
             tone: tone || 'professional',
+            imageUrls: images,
+            userId,
         });
 
         // Step 3: Map AI results to product fields
         this.applyAiContent(savedProduct, aiContent);
 
         savedProduct.status = 'synced';
+        if (!nombreDelCliente && aiContent.vision?.suggestedName) savedProduct.name = aiContent.vision.suggestedName;
+        if (!descripcionDelCliente) savedProduct.description = savedProduct.aiDescription || aiContent.vision?.description || '';
 
-        // Step 4: Return the fully enriched product
-        return this.productRepository.save(savedProduct);
+        // Step 4: Return the fully enriched product, con lo que la IA vio y lo que aún falta
+        const guardado = await this.productRepository.save(savedProduct);
+        return Object.assign(guardado, {
+            aiReport: { vision: aiContent.vision ?? null, missingAttributes: aiContent.missingAttributes ?? {} },
+        });
     }
 
     async findAllForExport(userId: string, filters?: ExportQueryDto): Promise<Product[]> {
@@ -296,6 +308,31 @@ export class ProductsService {
             if (!product.aiDescription && falabella.description) {
                 product.aiDescription = falabella.description;
             }
+        }
+
+        // Los atributos de cada canal se guardan aparte: el primero ya no tapa a los demás.
+        // Mercado Libre los manda con su id; los de Falabella se leen por nombre, desde la raíz.
+        const completos = (obj: any): Record<string, any> =>
+            Object.fromEntries(Object.entries(obj ?? {}).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== ''));
+        const meli = completos((listings as any).mercadolibre?.attributes);
+        if (Object.keys(meli).length) {
+            product.aiAttributes = { ...((product.aiAttributes as any) || {}), mercadolibre_attributes: meli };
+        }
+        const delFalabella = completos((listings as any).falabella?.attributes);
+        if (Object.keys(delFalabella).length) {
+            product.aiAttributes = { ...delFalabella, ...((product.aiAttributes as any) || {}) };
+        }
+
+        // Lo que se vio en las fotos: la marca y el color quedan listos para publicar.
+        const vision = aiContent?.vision;
+        if (vision) {
+            const actuales = (product.aiAttributes as any) || {};
+            product.aiAttributes = {
+                ...actuales,
+                brand: actuales.brand || vision.brand || undefined,
+                color: actuales.color || vision.color || undefined,
+                vision,
+            };
         }
 
         if (aiContent?.categorizedAs) {

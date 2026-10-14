@@ -36,6 +36,6 @@ import { Product } from '../products/entities/product.entity';
     ],
     controllers: [SyncController],
     providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService, YavendioApiService, FalabellaApiService],
+    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService],
 })
 export class SyncModule { }

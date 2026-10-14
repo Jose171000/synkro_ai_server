@@ -168,16 +168,25 @@ export class MeliApiService {
      * official domain discovery API. Used as fallback when the product
      * has no category id (or a demo/foreign one) at publish time.
      */
-    async predictCategory(accessToken: string, title: string): Promise<string | undefined> {
+    async predictCategory(accessToken: string | undefined, title: string): Promise<string | undefined> {
         const site = process.env.MELI_SITE_ID || 'MPE';
         const { data } = await this.http.get(
             `/sites/${site}/domain_discovery/search`,
             {
                 params: { q: title, limit: 1 },
-                headers: { Authorization: `Bearer ${accessToken}` },
+                ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
             },
         );
         return data?.[0]?.category_id;
+    }
+
+    /** Atributos que pide una categoría (marca, color, talla…), con sus valores admitidos. */
+    async getCategoryAttributes(categoryId: string, accessToken?: string): Promise<any[]> {
+        const { data } = await this.http.get(
+            `/categories/${categoryId}/attributes`,
+            accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {},
+        );
+        return Array.isArray(data) ? data : [];
     }
 
     /** Fetches an order (used when processing sale notifications). */

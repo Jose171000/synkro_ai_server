@@ -2,11 +2,16 @@ import { Module } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { CategoryModule } from '../categories/category.module';
+import { SyncModule } from '../sync/sync.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
+import { ProductVisionService } from './product-vision.service';
+import { ChannelAttributesService } from './channel-attributes.service';
 
 @Module({
-  imports: [CategoryModule],
+  imports: [CategoryModule, SyncModule, TypeOrmModule.forFeature([MarketplaceConnection])],
   controllers: [AiController],
-  providers: [AiService],
+  providers: [AiService, ProductVisionService, ChannelAttributesService],
   exports: [AiService],
 })
 export class AiModule { }

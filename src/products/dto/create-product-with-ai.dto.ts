@@ -7,15 +7,15 @@ export class CreateProductWithAiDto {
     @IsNotEmpty()
     sku: string;
 
-    @ApiProperty({ example: 'Zapatillas Nike Air Max', description: 'Nombre del producto' })
+    @ApiPropertyOptional({ example: 'Zapatillas Nike Air Max', description: 'Nombre del producto. Si se omite, la IA lo deduce de las fotos.' })
     @IsString()
-    @IsNotEmpty()
-    name: string;
+    @IsOptional()
+    name?: string;
 
-    @ApiProperty({ example: 'Zapatillas deportivas de color azul, talla 43, para correr.', description: 'Descripción del producto' })
+    @ApiPropertyOptional({ example: 'Zapatillas deportivas de color azul, talla 43, para correr.', description: 'Descripción del producto. Opcional: la IA completa lo que se ve en las fotos.' })
     @IsString()
-    @IsNotEmpty()
-    description: string;
+    @IsOptional()
+    description?: string;
 
     @ApiPropertyOptional({ example: 'Calzado', description: 'Categoría del producto (ayuda a la IA a categorizar mejor)' })
     @IsString()
