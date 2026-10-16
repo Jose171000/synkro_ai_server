@@ -153,3 +153,24 @@ describe('XML de actualización de precio y stock', () => {
         expect(buildStockUpdateXml([{ sellerSku: 'A&B', quantity: 1 }])).toContain('A&amp;B');
     });
 });
+
+describe('fotos de las fichas (acción Image)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildImageFeedXml } = require('./falabella-product-xml');
+
+    it('agrupa las fotos por SKU, escapa el texto y descarta lo que no es una dirección web', () => {
+        const xml = buildImageFeedXml([
+            { sellerSku: 'A&B-1', urls: ['https://x.com/a.jpg?x=1&y=2', 'no-es-url', 'http://x.com/b.jpg'] },
+        ]);
+        expect(xml).toContain('<ProductImage>');
+        expect(xml).toContain('A&amp;B-1');
+        expect(xml.match(/<Image>/g)).toHaveLength(2);
+        expect(xml).toContain('x=1&amp;y=2');
+        expect(xml).not.toContain('no-es-url');
+    });
+
+    it('manda como máximo 8 fotos por producto', () => {
+        const urls = Array.from({ length: 12 }, (_, i) => `https://x.com/${i}.jpg`);
+        expect(buildImageFeedXml([{ sellerSku: 'S', urls }]).match(/<Image>/g)).toHaveLength(8);
+    });
+});

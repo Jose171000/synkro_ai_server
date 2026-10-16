@@ -167,3 +167,23 @@ export function buildStockUpdateXml(items: { sellerSku: string; quantity: number
         .join('');
     return `<?xml version="1.0" encoding="UTF-8"?><Request><Warehouse>${cuerpo}</Warehouse></Request>`;
 }
+
+/**
+ * XML para asignar las fotos de fichas ya creadas (acción Image). El alta de producto no lleva
+ * imágenes: sin este paso Falabella rechaza la ficha en su control de calidad.
+ * Admite hasta 8 fotos por producto, con direcciones https.
+ */
+export function buildImageFeedXml(items: { sellerSku: string; urls: string[] }[]): string {
+    const cuerpo = items
+        .map(item => {
+            const urls = item.urls.filter(u => /^https?:\/\//i.test(u)).slice(0, 8);
+            return (
+                '<ProductImage>' +
+                tag('SellerSku', item.sellerSku) +
+                '<Images>' + urls.map(u => tag('Image', u)).join('') + '</Images>' +
+                '</ProductImage>'
+            );
+        })
+        .join('');
+    return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+}

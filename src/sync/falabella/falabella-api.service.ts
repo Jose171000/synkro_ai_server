@@ -4,6 +4,7 @@ import { buildSignedQuery, falabellaTimestamp } from './falabella-signature';
 import {
     buildPriceUpdateXml,
     buildProductFeedXml,
+    buildImageFeedXml,
     buildStockUpdateXml,
     escapeXml,
     FalabellaProductInput,
@@ -756,6 +757,35 @@ export class FalabellaApiService {
         });
         const products = body?.Products?.Product ?? [];
         return Array.isArray(products) ? products : [products];
+    }
+
+    /** Asigna las fotos de fichas ya creadas. Devuelve el identificador del feed. */
+    async setImages(credentials: FalabellaCredentials, items: { sellerSku: string; urls: string[] }[]): Promise<string> {
+        const xml = buildImageFeedXml(items);
+        const feedId = await this.postFeed(credentials, 'Image', xml);
+        this.logger.log(`Fotos de ${items.length} producto(s) enviadas a Falabella. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
+     * Por qué el control de calidad rechazó cada ficha (acción GetQcStatus). Devuelve SKU → motivo.
+     * Los nombres de los campos del motivo varían según la versión de la API, por eso se leen varios.
+     */
+    async getQcStatus(credentials: FalabellaCredentials, skus: string[]): Promise<Map<string, string>> {
+        const motivos = new Map<string, string>();
+        const lista = [...new Set(skus.map(s => String(s).trim()).filter(Boolean))].slice(0, 100);
+        if (!lista.length) return motivos;
+        const body = await this.call<any>(credentials, 'GetQcStatus', { SkuSellerList: JSON.stringify(lista), Limit: 100, Offset: 0 });
+        const filas = [].concat(body?.Products?.Product ?? body?.QcStatus?.Product ?? body?.Product ?? []).filter(Boolean) as any[];
+        for (const f of filas) {
+            const sku = String(f?.SellerSku ?? '').trim();
+            const crudo = f?.Reason ?? f?.RejectReason ?? f?.RejectionReason ?? f?.QcReason ?? f?.Comment ?? f?.Comments ?? f?.Reasons;
+            const texto = Array.isArray(crudo)
+                ? crudo.map((r: any) => (typeof r === 'string' ? r : r?.Reason ?? r?.Name ?? r?.Comment ?? '')).filter(Boolean).join('; ')
+                : typeof crudo === 'string' ? crudo : crudo?.Reason ?? '';
+            if (sku && texto) motivos.set(sku, String(texto).trim());
+        }
+        return motivos;
     }
 
     /** Las fichas del vendedor que ya existen en Falabella con esos SKUs (de a 100 como máximo). */

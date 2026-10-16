@@ -1298,11 +1298,14 @@ export class SyncService implements OnModuleInit {
             .getProductsBySku(credentials, products.map(p => p.sku))
             .catch(() => [] as { SellerSku?: string }[]);
         const skusEnFalabella = new Set(existentes.map(f => String(f?.SellerSku ?? '').trim().toLowerCase()));
+        const paraFotos: Product[] = [];
         for (const p of products.filter(p => skusEnFalabella.has(p.sku.trim().toLowerCase()))) {
             await this.vincularComoPublicado(connection.id, p);
+            paraFotos.push(p);
             vinculados++;
             rechazados.push({ sku: p.sku, nombre: p.name, motivo: 'ya existía en Falabella: se vinculó con tu producto (no hace falta publicarlo otra vez)' });
         }
+        if (paraFotos.length) await this.enviarImagenesAFalabella(connection.id, credentials, userId, paraFotos);
         products.splice(0, products.length, ...products.filter(p => !skusEnFalabella.has(p.sku.trim().toLowerCase())));
         if (!products.length) {
             return {
@@ -1431,6 +1434,36 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /**
+     * Envía las fotos de los productos a Falabella. El alta no las lleva: sin ellas la ficha queda
+     * rechazada en el control de calidad. Nunca interrumpe lo que se esté haciendo.
+     */
+    private async enviarImagenesAFalabella(connectionId: string, credentials: FalabellaCredentials, userId: string, products: Product[]): Promise<void> {
+        try {
+            const items = products
+                .map(p => ({
+                    sellerSku: p.sku,
+                    urls: (p.images ?? []).map(i => i.url).filter(Boolean),
+                }))
+                .filter(i => i.urls.length);
+            if (!items.length) return;
+            const feedId = await this.falabellaApi.setImages(credentials, items);
+            const feed = await this.feedRepository.save(this.feedRepository.create({
+                marketplace: 'falabella',
+                externalFeedId: feedId,
+                action: 'Image',
+                skus: items.map(i => i.sellerSku),
+                status: 'pending',
+                totalRecords: items.length,
+                owner: { id: userId } as any,
+                connection: { id: connectionId } as any,
+            }));
+            await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId }, { delay: 60_000 });
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudieron enviar las fotos a Falabella: ${error?.message}`);
+        }
+    }
+
     /** El producto ya existe en Falabella (se subió a mano o en un envío anterior): se vincula como publicado. */
     private async vincularComoPublicado(connectionId: string, product: Product): Promise<void> {
         let link = await this.listingLinkRepository.findOne({
@@ -1488,11 +1521,28 @@ export class SyncService implements OnModuleInit {
             if (error.sku) erroresPorSku.set(error.sku, error.message);
         }
 
+        // Las fotos no cambian el estado de ningún producto: solo se avisa si Falabella las rechazó.
+        if (feed.action === 'Image') {
+            if (estado.failedRecords > 0) {
+                const detalle = estado.errors.slice(0, 3).map(e => `${e.sku ? e.sku + ': ' : ''}${e.message}`).join(' — ');
+                await this.notifications.notify(userId, {
+                    type: 'publish-error',
+                    severity: 'error',
+                    title: 'Falabella rechazó las fotos de ' + estado.failedRecords + (estado.failedRecords === 1 ? ' producto' : ' productos'),
+                    body: detalle || 'Revisa el detalle del lote en Marketplaces.',
+                    marketplace: 'falabella',
+                    meta: { feedId: feed.externalFeedId },
+                });
+            }
+            return { status: estado.status };
+        }
+
         // Los feeds de precio o stock no publican nada: se tratan aparte.
         if (feed.action !== 'ProductCreate') {
             return this.aplicarResultadoActualizacion(feed, userId, feedConnectionId, erroresPorSku, estado);
         }
 
+        const recienCreados: Product[] = [];
         for (const sku of feed.skus || []) {
             const link = await this.listingLinkRepository.findOne({
                 where: { connection: { id: feedConnectionId }, product: { sku } },
@@ -1515,9 +1565,13 @@ export class SyncService implements OnModuleInit {
                 link.lastStockSynced = link.product?.stock ?? link.lastStockSynced;
                 link.lastPriceSynced = link.product?.price ?? link.lastPriceSynced;
                 link.lastSyncedAt = new Date();
+                if (link.product) recienCreados.push(link.product);
             }
             await this.listingLinkRepository.save(link);
         }
+
+        // Con la ficha creada se mandan sus fotos: es el paso que falta para pasar el control de calidad.
+        if (recienCreados.length) await this.enviarImagenesAFalabella(feedConnectionId, credentials, userId, recienCreados);
 
         console.log(
             `[Sync] Feed Falabella ${feed.externalFeedId}: ${estado.status}, ` +
@@ -2641,6 +2695,7 @@ export class SyncService implements OnModuleInit {
 
         let actualizadas = 0;
         let ausentes = 0;
+        const rechazadasPorQc: ListingLink[] = [];
         for (const enlace of enlaces) {
             const ficha = porSku.get(enlace.product.sku);
             if (!ficha) {
@@ -2669,7 +2724,22 @@ export class SyncService implements OnModuleInit {
             enlace.lastSyncedAt = new Date();
             enlace.lastError = estado === 'error' ? 'Falabella rechazó la ficha en su control de calidad.' : (null as any);
             await this.listingLinkRepository.save(enlace);
+            if (estado === 'error') rechazadasPorQc.push(enlace);
             actualizadas++;
+        }
+
+        // Por qué la rechazó el control de calidad: así se sabe qué corregir en vez de adivinarlo.
+        if (rechazadasPorQc.length) {
+            const motivos = await this.falabellaApi
+                .getQcStatus(this.credentialsOf(connection), rechazadasPorQc.map(e => e.product.sku))
+                .catch((error: any) => { console.warn(`[Sync] No se pudo leer el motivo del rechazo: ${error?.message}`); return new Map<string, string>(); });
+            for (const enlace of rechazadasPorQc) {
+                const motivo = motivos.get(enlace.product.sku);
+                if (motivo) {
+                    enlace.lastError = `Falabella rechazó la ficha: ${motivo}`;
+                    await this.listingLinkRepository.save(enlace);
+                }
+            }
         }
         return { revisadas: enlaces.length, actualizadas, ausentes };
     }
