@@ -11,6 +11,8 @@ import { MarketplaceConnection } from '../sync/entities/marketplace-connection.e
 /** Cuántos atributos opcionales se piden a la IA: más de eso solo infla el prompt. */
 const MAX_OPCIONALES = 10;
 const MAX_OPCIONES = 40;
+/** Las listas de Falabella pueden ser largas (materiales, colores…): se guardan completas para poder ajustar el valor a una de ellas. */
+const MAX_OPCIONES_FALABELLA = 400;
 /** Lo aprendido se vuelve a consultar al canal pasado este tiempo: los canales cambian sus categorías. */
 const VIGENCIA_MS = 30 * 24 * 3600 * 1000;
 /** Tope del texto que describe una categoría; al llenarse deja de aprender palabras. */
@@ -144,7 +146,9 @@ export class ChannelAttributesService {
 
         const aprendidos = guardada?.requiredAttributes?.length ? guardada.requiredAttributes : null;
         const vigente = !!guardada && !!aprendidos && Date.now() - new Date(guardada.updatedAt).getTime() < VIGENCIA_MS;
-        if (aprendidos && vigente) {
+        // Lo aprendido antes de guardar las listas completas de Falabella tiene las opciones cortadas en 40: se vuelve a pedir.
+        const recortada = marketplace === 'falabella' && !!aprendidos?.some((x) => x.options?.length === MAX_OPCIONES);
+        if (aprendidos && vigente && !recortada) {
             await this.aprenderPalabras(guardada!, contexto);
             return this.paraElCanal(marketplace, aprendidos, opciones.todos);
         }
@@ -186,7 +190,7 @@ export class ChannelAttributesService {
                         description: [a.label || a.name, a.description].filter(Boolean).join(' — '),
                         example: a.options?.[0] ?? '',
                         isRequired: !!a.isMandatory,
-                        ...(a.options?.length ? { options: a.options.slice(0, MAX_OPCIONES) } : {}),
+                        ...(a.options?.length ? { options: a.options.slice(0, MAX_OPCIONES_FALABELLA) } : {}),
                     }));
                 return lista.length ? lista : null;
             }

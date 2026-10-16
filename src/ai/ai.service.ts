@@ -6,6 +6,7 @@ import { CategorySeederService } from '../categories/category-seeder.service';
 import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/marketplace-category.entity';
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
+import { opcionCercana } from '../common/opcion-cercana';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import OpenAI from 'openai';
@@ -350,7 +351,7 @@ Responde únicamente este JSON:
     // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
     if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[] };
     try {
-      const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ''}`).join('\n');
+      const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ${a.options.length > 120 ? 'LISTA CERRADA (algunas opciones): ' + a.options.slice(0, 120).join(' | ') + ' … Escribe el valor más cercano; se ajustará a la lista.' : 'ELIGE EXACTAMENTE UNO DE: ' + a.options.join(' | ')}` : ''}`).join('\n');
       const r = await this.openai.chat.completions.create({
         model: 'deepseek-chat',
         response_format: { type: 'json_object' },
@@ -382,7 +383,8 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
         if (v === null || v === undefined || String(v).trim() === '') continue;
         const k = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
         if (a.options?.length) {
-          const valida = a.options.find(o => k(o) === k(String(v)));
+          // Exacta o, si no, la más cercana de la lista («madera de pino» → «Madera»).
+          const valida = a.options.find(o => k(o) === k(String(v))) ?? opcionCercana(String(v), a.options);
           if (valida) values[a.name] = valida;
         } else {
           values[a.name] = String(v);

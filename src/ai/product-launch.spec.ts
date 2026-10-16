@@ -69,6 +69,14 @@ describe('lanzar un producto en un paso', () => {
         expect(r.channels[0]).toMatchObject({ status: 'error', message: expect.stringContaining('cuenta conectada') });
     });
 
+    it('si Falabella todavía no tiene lo que pide, no dice que está publicando y explica qué falta', async () => {
+        const { service, falabellaPrep, sync } = construir();
+        falabellaPrep.preparar.mockResolvedValue({ listo: false, motivo: 'le faltan datos que pide su categoria en Falabella: Material' });
+        const r = await service.lanzar(SCOPE, 'p1', ['falabella']);
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(r.channels[0]).toMatchObject({ status: 'error', message: expect.stringContaining('Material') });
+    });
+
     it('si la preparación falla igual intenta publicar: el motivo queda en la ficha', async () => {
         const { service, falabellaPrep, sync } = construir();
         falabellaPrep.preparar.mockRejectedValue(new Error('IA caída'));

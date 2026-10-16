@@ -61,6 +61,17 @@ export class ProductLaunchService {
                 // Si no se pudo preparar, igual se intenta publicar: el motivo exacto queda en la ficha.
             }
 
+            // Falabella rechazaría un producto al que le falta algo que pide: se dice qué falta en vez de fingir que se publica.
+            if (canal === 'falabella' && reporte.falabella && !reporte.falabella.listo) {
+                reporte.channels.push({
+                    marketplace: canal,
+                    accounts: 0,
+                    status: 'error',
+                    message: `Falabella: todavía ${reporte.falabella.motivo}. Complétalo en la Ficha del producto y vuelve a pulsar Publicar.`,
+                });
+                continue;
+            }
+
             let encoladas = 0;
             let ultimoError = '';
             for (const cuenta of delCanal) {

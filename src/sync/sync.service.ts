@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
+import { opcionCercana } from '../common/opcion-cercana';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1348,8 +1349,8 @@ export class SyncService implements OnModuleInit {
     private valorPermitido(attribute: FalabellaAttribute, valor: string): string | undefined {
         const limpio = valor.trim();
         if (!attribute.options?.length) return limpio || undefined;
-        const k = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
-        return attribute.options.find(o => k(o) === k(limpio));
+        // La opción exacta o la más cercana («madera de pino» → «Madera»).
+        return opcionCercana(limpio, attribute.options);
     }
 
     /**
