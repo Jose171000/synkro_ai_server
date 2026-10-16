@@ -959,6 +959,11 @@ export class SyncService implements OnModuleInit {
      * Maps an internal product (+ its AI-generated content) to the payload
      * Mercado Libre expects.
      */
+    /** Guarda un producto tal como está (lo usan los flujos que lo completan con IA). */
+    async saveProduct(product: Product): Promise<Product> {
+        return this.productRepository.save(product);
+    }
+
     /** Atributos que se envían a Mercado Libre para un producto: marca, modelo y los que completó la IA. */
     atributosParaMeli(product: Product): { id: string; value_name: string }[] {
         const brand = (product.aiAttributes as any)?.brand || 'Genérica';
@@ -1194,6 +1199,8 @@ export class SyncService implements OnModuleInit {
         if (previo) (product.aiAttributes as any).estimated = { ...previo, measures: false };
 
         await this.productRepository.save(product);
+        // Si ya está publicado, los datos nuevos (medidas, atributos) se envían solos a Falabella.
+        void this.scheduleContentSync(product.id).catch(() => undefined);
 
         // Se comprueba con las reglas reales de publicación: así el usuario
         // sabe en el momento si el producto ya puede salir o le falta algo.

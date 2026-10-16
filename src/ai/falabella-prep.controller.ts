@@ -1,9 +1,10 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
+import { ProductLaunchService } from './product-launch.service';
 
 class PrepareAutoDto {
     @IsOptional()
@@ -16,11 +17,21 @@ class PrepareAutoDto {
     regenerar?: boolean;
 }
 
+class LaunchDto {
+    @IsArray()
+    @ArrayNotEmpty()
+    @IsString({ each: true })
+    marketplaces: string[];
+}
+
 @ApiTags('ai')
 @Controller('ai')
 @ApiHeader({ name: 'X-Store-Id', required: false })
 export class FalabellaPrepController {
-    constructor(private readonly prep: FalabellaAutoPrepService) { }
+    constructor(
+        private readonly prep: FalabellaAutoPrepService,
+        private readonly launch: ProductLaunchService,
+    ) { }
 
     @Post('products/:id/prepare-falabella')
     @HttpCode(HttpStatus.OK)
@@ -35,6 +46,22 @@ export class FalabellaPrepController {
     })
     prepare(@Param('id') id: string, @Body() dto: PrepareAutoDto, @Req() req) {
         return this.prep.preparar({ userId: req.user.id, storeId: req.store.storeId }, id, dto?.connectionId, { regenerar: dto?.regenerar });
+    }
+
+    @Post('products/:id/launch')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Lanza el producto: deja listos los canales y lo publica',
+        description:
+            'Falabella: categoría, marca contra su catálogo, medidas, todos los atributos y descripción HTML. ' +
+            'Mercado Libre: completa los atributos obligatorios que falten. Luego encola la publicación en cada cuenta activa. ' +
+            'Lo que la IA estimó queda marcado para revisarlo desde la ficha.',
+    })
+    launchProduct(@Param('id') id: string, @Body() dto: LaunchDto, @Req() req) {
+        return this.launch.lanzar({ userId: req.user.id, storeId: req.store.storeId }, id, dto.marketplaces);
     }
 
     @Post('products/:id/update-falabella')

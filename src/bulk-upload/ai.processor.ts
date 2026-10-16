@@ -3,6 +3,7 @@ import { Job } from 'bullmq';
 import { AiService } from '../ai/ai.service';
 import { ProductsService } from '../products/products.service';
 import { SyncService } from '../sync/sync.service';
+import { FalabellaAutoPrepService } from '../ai/falabella-auto-prep.service';
 import { InternalServerErrorException } from '@nestjs/common';
 import { BatchNotificationService, BatchMeta } from './batch-notification.service';
 
@@ -12,6 +13,7 @@ export class AiProcessor extends WorkerHost {
         private readonly aiService: AiService,
         private readonly productsService: ProductsService,
         private readonly syncService: SyncService,
+        private readonly falabellaPrep: FalabellaAutoPrepService,
         private readonly batchNotification: BatchNotificationService,
     ) {
         super();
@@ -115,7 +117,19 @@ export class AiProcessor extends WorkerHost {
         try {
             const ids = await this.batchNotification.takeDeferred(batchId, 'falabella');
             if (!ids.length) return;
-            for (const connectionId of await this.cuentasDe(scope.storeId, 'falabella')) {
+            const cuentas = await this.cuentasDe(scope.storeId, 'falabella');
+            // Cada producto se deja listo para Falabella (marca contra su catálogo, atributos, medidas, descripción HTML)
+            // antes de enviar el lote; si uno falla se envía igual y el motivo queda en su ficha.
+            // De a 4 a la vez: son varias llamadas a la IA por producto y un lote grande tardaría demasiado de a uno.
+            for (let i = 0; i < ids.length; i += 4) {
+                const resultados = await Promise.allSettled(
+                    ids.slice(i, i + 4).map((id) => this.falabellaPrep.preparar({ userId: scope.userId, storeId: scope.storeId! }, id, cuentas[0])),
+                );
+                resultados.forEach((r, j) => {
+                    if (r.status === 'rejected') console.warn(`[AiProcessor] No se pudo preparar ${ids[i + j]} para Falabella: ${(r.reason as any)?.message}`);
+                });
+            }
+            for (const connectionId of cuentas) {
                 const r = await this.syncService.publishBatchToFalabella({ userId: scope.userId, storeId: scope.storeId }, connectionId, ids);
                 console.log(`[AiProcessor] Lote ${batchId} → Falabella: ${r.enviados} enviados, ${r.rechazados?.length ?? 0} rechazados.`);
             }

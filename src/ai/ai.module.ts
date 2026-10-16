@@ -10,13 +10,14 @@ import { ProductVisionService } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
 import { FalabellaPrepController } from './falabella-prep.controller';
+import { ProductLaunchService } from './product-launch.service';
 import { StoresModule } from '../stores/stores.module';
 import { Product } from '../products/entities/product.entity';
 
 @Module({
   imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, Product])],
   controllers: [AiController, FalabellaPrepController],
-  providers: [AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService],
-  exports: [AiService],
+  providers: [AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService, ProductLaunchService],
+  exports: [AiService, FalabellaAutoPrepService, ProductLaunchService],
 })
 export class AiModule { }
