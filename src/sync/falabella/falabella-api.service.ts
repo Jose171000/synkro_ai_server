@@ -5,6 +5,7 @@ import {
     buildPriceUpdateXml,
     buildProductFeedXml,
     buildImageFeedXml,
+    buildContentUpdateXml,
     buildStockUpdateXml,
     escapeXml,
     FalabellaProductInput,
@@ -63,6 +64,8 @@ export interface FalabellaAttribute {
     inputType: string;
     /** Valores admitidos, cuando el atributo es una lista cerrada. */
     options: string[];
+    /** Explicación que Falabella da del atributo (unidades, formato…); ayuda a llenarlo bien. */
+    description: string;
 }
 
 export interface FalabellaOrderItem {
@@ -581,6 +584,7 @@ export class FalabellaApiService {
             name: a.Name ?? a.FeedName,
             feedName: a.FeedName ?? a.Name,
             label: a.Label ?? a.Name ?? '',
+            description: String(a.Description ?? a.Tooltip ?? a.Help ?? a.HelpText ?? '').trim(),
             isMandatory: String(a.isMandatory ?? a.IsMandatory ?? '0') === '1',
             inputType: a.InputType ?? '',
             options: [].concat(a.Options?.Option ?? [])
@@ -757,6 +761,14 @@ export class FalabellaApiService {
         });
         const products = body?.Products?.Product ?? [];
         return Array.isArray(products) ? products : [products];
+    }
+
+    /** Cambia nombre, descripción, marca y atributos de fichas ya publicadas. Devuelve el identificador del feed. */
+    async updateProductContent(credentials: FalabellaCredentials, products: FalabellaProductInput[]): Promise<string> {
+        if (!products.length) throw new BadRequestException('No hay fichas que actualizar en Falabella.');
+        const feedId = await this.postFeed(credentials, 'ProductUpdate', buildContentUpdateXml(products));
+        this.logger.log(`Contenido de ${products.length} ficha(s) enviado a Falabella. Feed ${feedId}.`);
+        return feedId;
     }
 
     /** Asigna las fotos de fichas ya creadas. Devuelve el identificador del feed. */

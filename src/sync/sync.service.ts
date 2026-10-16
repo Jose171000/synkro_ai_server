@@ -1005,14 +1005,49 @@ export class SyncService implements OnModuleInit {
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const attributes = await this.falabellaApi.getCategoryAttributes(this.credentialsOf(connection), categoryId);
 
+        // Todos, no solo los obligatorios: los demás suben la calidad del contenido en Falabella.
         return attributes
-            .filter(a => a.isMandatory && !ATRIBUTOS_YA_CUBIERTOS.has(a.name))
+            .filter(a => !ATRIBUTOS_YA_CUBIERTOS.has(a.name))
             .map(a => ({
                 name: a.name,
                 label: a.label || a.name,
+                description: a.description,
                 inputType: a.inputType,
                 options: a.options,
-            }));
+                required: a.isMandatory,
+            }))
+            .sort((x, y) => Number(y.required) - Number(x.required));
+    }
+
+    /**
+     * Cambia en Falabella el nombre, la descripción, la marca y los atributos de una ficha que ya está
+     * publicada, con lo que tenga el producto ahora. El resultado llega después: Falabella procesa en diferido.
+     */
+    async updateFalabellaContent(scope: SyncScope, productId: string, connectionId?: string) {
+        const product = await this.findScopedProduct(scope, productId);
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const credentials = this.credentialsOf(connection);
+
+        const categoria = this.categoriaFalabella(product);
+        const atributos = categoria ? await this.falabellaApi.getCategoryAttributes(credentials, categoria).catch(() => []) : [];
+        const resultado = this.toFalabellaInput(product, 'active', atributos);
+        if ('reason' in resultado) {
+            throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
+        }
+
+        const feedId = await this.falabellaApi.updateProductContent(credentials, [resultado.input]);
+        const feed = await this.feedRepository.save(this.feedRepository.create({
+            marketplace: 'falabella',
+            externalFeedId: feedId,
+            action: 'ContentUpdate',
+            skus: [product.sku],
+            status: 'pending',
+            totalRecords: 1,
+            owner: { id: scope.userId } as any,
+            connection: { id: connection.id } as any,
+        }));
+        await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId: scope.userId }, { delay: 45_000 });
+        return { message: 'Actualización enviada a Falabella. Se procesa en segundo plano y la calidad de la ficha puede tardar en reflejarse.', feedId };
     }
 
     /** Marcas del catálogo de Falabella que coinciden con lo escrito. */
@@ -1172,16 +1207,20 @@ export class SyncService implements OnModuleInit {
         const propios: Record<string, string> = {};
 
         for (const attribute of categoryAttributes) {
-            if (!attribute.isMandatory) continue;
             if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name)) continue;
 
-            const valor = this.buscarAtributo(attributes, attribute.name);
-            if (valor === undefined || valor === null || String(valor).trim() === '') {
-                faltantes.push(attribute.label || attribute.feedName);
+            const bruto = this.buscarAtributo(attributes, attribute.name);
+            const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
+            // En una lista cerrada solo vale una de sus opciones (con la escritura de Falabella).
+            const valor = hayValor ? this.valorPermitido(attribute, String(bruto)) : undefined;
+
+            if (attribute.isMandatory && valor === undefined) {
+                faltantes.push(hayValor ? `${attribute.label || attribute.feedName} (valor no válido)` : (attribute.label || attribute.feedName));
                 continue;
             }
+            // Los opcionales con valor se envían: son los que suben la calidad del contenido.
             // FeedName ya viene con el nombre exacto de la etiqueta XML.
-            propios[attribute.feedName] = String(valor);
+            if (valor !== undefined) propios[attribute.feedName] = valor;
         }
 
         if (faltantes.length) {
@@ -1191,7 +1230,7 @@ export class SyncService implements OnModuleInit {
         return {
             input: {
                 sellerSku: product.sku,
-                name: (product.aiTitle || product.name).slice(0, 200),
+                name: this.nombreParaFalabella(product.aiTitle || product.name),
                 description,
                 brand: attributes.brand || 'GENERICO',
                 primaryCategory: category,
@@ -1209,6 +1248,23 @@ export class SyncService implements OnModuleInit {
                 extraAttributes: propios,
             },
         };
+    }
+
+    /** Falabella pide títulos de 20 a 100 caracteres: se corta en una palabra entera. */
+    nombreParaFalabella(nombre: string): string {
+        const limpio = String(nombre ?? '').replace(/\s+/g, ' ').trim();
+        if (limpio.length <= 100) return limpio;
+        const corte = limpio.slice(0, 100);
+        const espacio = corte.lastIndexOf(' ');
+        return (espacio > 60 ? corte.slice(0, espacio) : corte).replace(/[\s,\-–:;]+$/, '');
+    }
+
+    /** El valor ya normalizado si el atributo lo admite; undefined si es una lista cerrada que no lo incluye. */
+    private valorPermitido(attribute: FalabellaAttribute, valor: string): string | undefined {
+        const limpio = valor.trim();
+        if (!attribute.options?.length) return limpio || undefined;
+        const k = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+        return attribute.options.find(o => k(o) === k(limpio));
     }
 
     /**
@@ -1523,13 +1579,13 @@ export class SyncService implements OnModuleInit {
         }
 
         // Las fotos no cambian el estado de ningún producto: solo se avisa si Falabella las rechazó.
-        if (feed.action === 'Image') {
+        if (feed.action === 'Image' || feed.action === 'ContentUpdate') {
             if (estado.failedRecords > 0) {
                 const detalle = estado.errors.slice(0, 3).map(e => `${e.sku ? e.sku + ': ' : ''}${e.message}`).join(' — ');
                 await this.notifications.notify(userId, {
                     type: 'publish-error',
                     severity: 'error',
-                    title: 'Falabella rechazó las fotos de ' + estado.failedRecords + (estado.failedRecords === 1 ? ' producto' : ' productos'),
+                    title: (feed.action === 'Image' ? 'Falabella rechazó las fotos de ' : 'Falabella rechazó la actualización de ') + estado.failedRecords + (estado.failedRecords === 1 ? ' producto' : ' productos'),
                     body: detalle || 'Revisa el detalle del lote en Marketplaces.',
                     marketplace: 'falabella',
                     meta: { feedId: feed.externalFeedId },

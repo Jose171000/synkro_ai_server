@@ -174,3 +174,25 @@ describe('fotos de las fichas (acción Image)', () => {
         expect(buildImageFeedXml([{ sellerSku: 'S', urls }]).match(/<Image>/g)).toHaveLength(8);
     });
 });
+
+describe('actualizar el contenido de una ficha publicada (ProductUpdate)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildContentUpdateXml } = require('./falabella-product-xml');
+
+    it('lleva nombre, descripción en CDATA, marca y atributos, y no toca precio, stock ni categoría', () => {
+        const xml = buildContentUpdateXml([{
+            sellerSku: 'MK-1', name: 'Torre Montessori', description: '<div>ficha ]]> html</div>', brand: 'GENERICO', primaryCategory: 956,
+            price: 480, stock: 10, packageWidth: 45, packageLength: 40, packageHeight: 90, packageWeight: 9,
+            extraAttributes: { Material: 'Madera', GrupoDeEdad: '2 - 3 años' },
+        }]);
+        expect(xml).toContain('<SellerSku>MK-1</SellerSku>');
+        expect(xml).toContain('<Name>Torre Montessori</Name>');
+        expect(xml).toContain('<![CDATA[<div>ficha ]]]]><![CDATA[> html</div>]]>');
+        expect(xml).toContain('<Brand>GENERICO</Brand>');
+        expect(xml).toContain('<Material>Madera</Material>');
+        expect(xml).toContain('<GrupoDeEdad>2 - 3 años</GrupoDeEdad>');
+        expect(xml).not.toContain('<Price>');
+        expect(xml).not.toContain('<Stock>');
+        expect(xml).not.toContain('PrimaryCategory');
+    });
+});

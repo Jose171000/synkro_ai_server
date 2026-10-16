@@ -130,6 +130,7 @@ export class ChannelAttributesService {
         userId?: string,
         contexto?: ContextoDeProducto,
         credenciales?: FalabellaCredentials,
+        opciones: { todos?: boolean } = {},
     ): Promise<CategoryAttribute[] | null> {
         let guardada: MarketplaceCategory | null = null;
         try {
@@ -145,21 +146,26 @@ export class ChannelAttributesService {
         const vigente = !!guardada && !!aprendidos && Date.now() - new Date(guardada.updatedAt).getTime() < VIGENCIA_MS;
         if (aprendidos && vigente) {
             await this.aprenderPalabras(guardada!, contexto);
-            return this.paraElCanal(marketplace, aprendidos);
+            return this.paraElCanal(marketplace, aprendidos, opciones.todos);
         }
 
         const completos = await this.consultarAlCanal(marketplace, categoryId, userId, credenciales);
         if (completos) {
             await this.recordar(marketplace, categoryId, completos, guardada, contexto);
-            return this.paraElCanal(marketplace, completos);
+            return this.paraElCanal(marketplace, completos, opciones.todos);
         }
         // El canal no respondió: mejor lo aprendido aunque esté viejo que nada.
-        return aprendidos ? this.paraElCanal(marketplace, aprendidos) : null;
+        return aprendidos ? this.paraElCanal(marketplace, aprendidos, opciones.todos) : null;
     }
 
-    private paraElCanal(marketplace: string, atributos: CategoryAttribute[]): CategoryAttribute[] {
-        // Falabella rechaza el lote si falta un obligatorio; los opcionales no aportan.
-        return marketplace === 'falabella' ? atributos.filter((a) => a.isRequired) : paraLaIa(atributos);
+    private paraElCanal(marketplace: string, atributos: CategoryAttribute[], todos = false): CategoryAttribute[] {
+        // Falabella rechaza el lote si falta un obligatorio; los opcionales suben la calidad del contenido (hasta 40).
+        if (marketplace === 'falabella') {
+            return todos
+                ? [...atributos.filter((a) => a.isRequired), ...atributos.filter((a) => !a.isRequired).slice(0, 40)]
+                : atributos.filter((a) => a.isRequired);
+        }
+        return paraLaIa(atributos);
     }
 
     /** Todos los atributos de la categoría, tal como los publica el canal. */
@@ -177,7 +183,7 @@ export class ChannelAttributesService {
                     .filter((a) => !YA_CUBIERTOS_FALABELLA.has(a.name))
                     .map((a) => ({
                         name: a.feedName || a.name,
-                        description: a.label || a.name,
+                        description: [a.label || a.name, a.description].filter(Boolean).join(' — '),
                         example: a.options?.[0] ?? '',
                         isRequired: !!a.isMandatory,
                         ...(a.options?.length ? { options: a.options.slice(0, MAX_OPCIONES) } : {}),

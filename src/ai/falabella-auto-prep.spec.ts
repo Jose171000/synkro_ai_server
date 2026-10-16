@@ -8,6 +8,8 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
         credentialsOf: jest.fn(() => ({ userId: 'x', apiKey: 'k' })),
         categoriaFalabella: jest.fn((p: any) => p.marketplaceIds?.falabella_category_id),
         buscarAtributo: jest.fn((a: any, n: string) => a[n]),
+        nombreParaFalabella: jest.fn((n: string) => n.slice(0, 100)),
+        updateFalabellaContent: jest.fn(async () => ({ message: 'enviado', feedId: 'f1' })),
         toFalabellaInput: jest.fn((p: any) => (p.packageWidth && p.marketplaceIds?.falabella_category_id ? { input: {} } : { reason: 'le faltan datos' })),
     };
     const indice = new Map((opts.marcas ?? ['Fisher-Price']).map((m) => [m.toLowerCase(), m]));
@@ -19,17 +21,20 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
     const ai: any = {
         elegirCategoria: jest.fn(async () => (opts.categoriaElegida === undefined ? '2804' : opts.categoriaElegida)),
         estimarPaquete: jest.fn(async () => ({ width: 30, length: 40, height: 20, weight: 3, fromClient: false })),
-        generarDescripcionHtml: jest.fn(async () => '<div>ficha</div>'),
+        generarDescripcionHtml: jest.fn(async () => ({ html: '<div>ficha</div>', title: 'Torre de aprendizaje Montessori de madera 4 en 1' })),
         completarAtributos: jest.fn(async () => ({ values: { material: 'Madera' }, estimated: ['material'] })),
     };
     const canales: any = {
         candidatasFalabella: jest.fn(async () => [{ categoryId: '2804', name: 'Juguetes › Didácticos' }]),
-        requisitos: jest.fn(async () => [{ name: 'material', description: 'Material', example: '', isRequired: true }]),
+        requisitos: jest.fn(async () => [
+            { name: 'material', description: 'Material', example: '', isRequired: true },
+            { name: 'color', description: 'Color', example: '', isRequired: false },
+        ]),
     };
     const vectores: any = { findSimilarCategories: jest.fn(async () => []) };
     const seeder: any = { generateEmbedding: jest.fn(async () => [0.1]) };
     const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }) };
-    return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products), ai, guardados, canales };
+    return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products), ai, guardados, canales, sync };
 }
 
 const producto = () => ({
@@ -39,14 +44,28 @@ const producto = () => ({
 });
 
 describe('dejar un producto listo para Falabella con un paso', () => {
+    it('actualizar una ficha ya publicada vuelve a redactar con la IA si se pide y envía el contenido', async () => {
+        const p: any = { ...producto(), aiAttributes: { brand: 'GENERICO', descriptionHtml: '<div>vieja</div>' }, marketplaceIds: { falabella_category_id: '2804' }, packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1 };
+        const { service, guardados, sync, ai } = construir(p);
+        const r = await service.actualizarEnFalabella({ userId: 'u', storeId: 's' }, 'p1', { regenerar: true });
+        expect(ai.generarDescripcionHtml).toHaveBeenCalledTimes(1);
+        expect(guardados[0].aiAttributes.descriptionHtml).toBe('<div>ficha</div>');
+        expect(sync.updateFalabellaContent).toHaveBeenCalledTimes(1);
+        expect(r.message).toBe('enviado');
+        expect(r.report.attributes).toEqual({ filled: expect.any(Number), total: 2 });
+    });
+
     it('elige categoría, cambia una marca inexistente por GENERICO, estima medidas y completa lo obligatorio', async () => {
-        const { service, guardados } = construir(producto());
+        const { service, guardados, ai, canales } = construir(producto());
         const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');
 
         expect(r.category).toEqual({ id: '2804', path: 'Juguetes › Didácticos', auto: true });
         expect(r.brand).toEqual({ value: 'GENERICO', replaced: true, original: 'Marca Inventada' });
         expect(r.measures).toMatchObject({ width: 30, weight: 3, estimated: true });
         expect(r.estimatedAttributes).toEqual(['material']);
+        // Se piden TODOS los atributos de la categoría (también los opcionales que suben la calidad)
+        expect(ai.completarAtributos.mock.calls[0][2].map((a: any) => a.name)).toEqual(['material', 'color']);
+        expect(canales.requisitos.mock.calls[0][5]).toEqual({ todos: true });
         expect(r.descriptionGenerated).toBe(true);
         expect(guardados[0].aiAttributes.descriptionHtml).toBe('<div>ficha</div>');
         expect(r.listo).toBe(true);
@@ -55,7 +74,7 @@ describe('dejar un producto listo para Falabella con un paso', () => {
     });
 
     it('respeta una marca del catálogo (con su escritura) y lo que el producto ya tiene', async () => {
-        const p: any = { ...producto(), aiAttributes: { brand: 'fisher-price', material: 'Plástico', descriptionHtml: '<div>ya</div>' }, packageWidth: 10, packageLength: 10, packageHeight: 10, packageWeight: 1, marketplaceIds: { falabella_category_id: '999' } };
+        const p: any = { ...producto(), aiAttributes: { brand: 'fisher-price', material: 'Plástico', color: 'Azul', descriptionHtml: '<div>ya</div>' }, packageWidth: 10, packageLength: 10, packageHeight: 10, packageWeight: 1, marketplaceIds: { falabella_category_id: '999' } };
         const { service, ai, canales } = construir(p);
         const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');
 

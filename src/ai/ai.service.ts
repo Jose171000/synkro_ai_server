@@ -184,7 +184,7 @@ export class AiService {
       const aceptaHtml = dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce'].includes(m));
       const atributosParaFicha: Record<string, any> = { ...(vision ? this.atributosDeVision(vision) : {}) };
       for (const listing of Object.values<any>(finalJson ?? {})) Object.assign(atributosParaFicha, listing?.attributes ?? {});
-      const htmlDescription = aceptaHtml
+      const ficha = aceptaHtml
         ? await this.generarDescripcionHtml({
             nombre: enriquecido.name,
             textoCliente: textoDelCliente,
@@ -194,6 +194,7 @@ export class AiService {
             urlsDelCliente,
           })
         : null;
+      const htmlDescription = ficha?.html ?? null;
 
       // Falabella calcula el envío con las medidas del paquete: se estiman si el cliente no las dio.
       const packageEstimate = dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')
@@ -274,7 +275,7 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
   public async generarDescripcionHtml(datos: {
     nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
     imagenesDelProducto: string[]; urlsDelCliente: string[];
-  }): Promise<string | null> {
+  }): Promise<{ html: string; title: string } | null> {
     try {
       const respuesta = await this.openai.chat.completions.create({
         model: 'deepseek-chat',
@@ -300,7 +301,7 @@ Datos conocidos: ${JSON.stringify(datos.atributos ?? {})}
 
 Responde únicamente este JSON:
 {
-  "title": "título del producto optimizado para SEO",
+  "title": "título del producto optimizado para SEO, entre 40 y 100 caracteres",
   "intro1": "párrafo 1: introducción persuasiva que conecta con el problema del cliente y presenta la solución",
   "intro2": "párrafo 2: detalle sobre la experiencia de uso o el beneficio principal",
   "benefits": [ { "subtitle": "beneficio", "text": "descripción corta e impactante", "alt": "texto alternativo SEO de la imagen" } ],
@@ -313,7 +314,7 @@ Responde únicamente este JSON:
       });
       const contenido = normalizarContenido(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), datos.nombre);
       if (!contenido) return null;
-      return renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto));
+      return { html: renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto)), title: contenido.title };
     } catch (error) {
       console.warn('[AiService] No se pudo generar la descripción HTML:', error);
       return null;
@@ -346,9 +347,10 @@ Responde únicamente este JSON:
    * (los que no se podían deducir y se eligió el más probable).
    */
   public async completarAtributos(nombre: string, descripcion: string, atributos: CategoryAttribute[], conocidos: Record<string, any> = {}) {
+    // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
     if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[] };
     try {
-      const lista = atributos.map(a => `- "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ''}`).join('\n');
+      const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ''}`).join('\n');
       const r = await this.openai.chat.completions.create({
         model: 'deepseek-chat',
         response_format: { type: 'json_object' },
@@ -364,7 +366,10 @@ Datos ya conocidos: ${JSON.stringify(conocidos)}
 Datos a completar:
 ${lista}
 
-Si un dato no se puede deducir, ESTIMA el valor más probable (con lista de opciones, la más cercana; si no, un valor genérico típico) y añade su nombre a "_estimated".
+- OBLIGATORIO que no se puede deducir: ESTIMA el valor más probable (con lista de opciones, la más cercana; si no, un valor genérico típico) y añade su nombre a "_estimated".
+- Opcional que no se puede deducir con seguridad del producto: devuelve null. No inventes.
+- Si el dato lleva unidad de medida (peso, capacidad, garantía), escríbela junto al número (ej. "9 kg", "12 meses"), tal como indique su descripción.
+- Si hay lista de opciones, el valor debe ser idéntico a una de ellas.
 Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...] }`,
           },
         ],
@@ -374,7 +379,14 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
       const values: Record<string, string> = {};
       for (const a of atributos) {
         const v = json[a.name];
-        if (v !== null && v !== undefined && String(v).trim() !== '') values[a.name] = String(v);
+        if (v === null || v === undefined || String(v).trim() === '') continue;
+        const k = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+        if (a.options?.length) {
+          const valida = a.options.find(o => k(o) === k(String(v)));
+          if (valida) values[a.name] = valida;
+        } else {
+          values[a.name] = String(v);
+        }
       }
       return { values, estimated };
     } catch (error) {

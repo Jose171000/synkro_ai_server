@@ -24,7 +24,7 @@ export const MARKETPLACE_PROMPT_RULES: Record<
     falabella: {
         instructions: `
       - REGLAS PARA FALABELLA:
-        - name: Máximo 200 caracteres. Empieza por el tipo de producto, luego marca y características
+        - name: Entre 20 y 100 caracteres (Falabella baja la calidad de títulos más largos). Empieza por el tipo de producto, luego marca y características
           que lo distingan (modelo, capacidad, talla, color). Sin mayúsculas sostenidas ni signos de
           exclamación: Falabella rechaza los títulos promocionales.
         - description: Mínimo 6 caracteres y máximo 25.000. Admite HTML sencillo (<p>, <ul>, <li>, <b>).

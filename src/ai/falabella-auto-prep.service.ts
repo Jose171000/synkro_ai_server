@@ -21,6 +21,8 @@ export interface FalabellaPrepReport {
     estimatedAttributes: string[];
     /** Se redactó la descripción HTML estándar en este paso. */
     descriptionGenerated: boolean;
+    /** Cuántos atributos de la categoría tienen valor tras este paso, de cuántos hay. */
+    attributes: { filled: number; total: number };
 }
 
 const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
@@ -45,7 +47,7 @@ export class FalabellaAutoPrepService {
         private readonly products: Repository<Product>,
     ) { }
 
-    async preparar(scope: SyncScope, productId: string, connectionId?: string): Promise<FalabellaPrepReport> {
+    async preparar(scope: SyncScope, productId: string, connectionId?: string, opciones: { regenerar?: boolean } = {}): Promise<FalabellaPrepReport> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const connection = await this.sync.resolveConnection(scope.storeId, 'falabella', connectionId);
         const creds = this.sync.credentialsOf(connection);
@@ -82,8 +84,9 @@ export class FalabellaAutoPrepService {
 
         // ── Descripción HTML estándar de la agencia ──
         let descripcionGenerada = false;
+        if (opciones.regenerar) delete attrs.descriptionHtml;
         if (!attrs.descriptionHtml) {
-            const html = await this.ai.generarDescripcionHtml({
+            const ficha = await this.ai.generarDescripcionHtml({
                 nombre,
                 textoCliente: quitarUrls(product.description),
                 vision,
@@ -91,9 +94,11 @@ export class FalabellaAutoPrepService {
                 imagenesDelProducto: (product.images ?? []).map((i) => i.url).filter(Boolean),
                 urlsDelCliente: extraerUrlsDeImagen(`${product.name} ${product.description ?? ''}`),
             });
-            if (html) {
-                attrs.descriptionHtml = html;
+            if (ficha) {
+                attrs.descriptionHtml = ficha.html;
                 descripcionGenerada = true;
+                // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
+                if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) product.aiTitle = this.sync.nombreParaFalabella(ficha.title);
             }
         }
 
@@ -128,10 +133,12 @@ export class FalabellaAutoPrepService {
 
         // ── Datos obligatorios de la categoría ──
         let estimadosAhora: string[] = [];
+        let totalAtributos = 0;
+        let llenos = 0;
         if (categoryId) {
-            const requisitos = await this.canales.requisitos('falabella', String(categoryId), undefined, { titulo: nombre, palabras: [] }, creds);
+            // Todos los atributos de la categoría: los obligatorios y los que suben la calidad del contenido.
+            const requisitos = await this.canales.requisitos('falabella', String(categoryId), undefined, { titulo: nombre, palabras: [] }, creds, { todos: true });
             const faltantes = (requisitos ?? []).filter((a) => {
-                if (!a.isRequired) return false;
                 const v = this.sync.buscarAtributo(attrs, a.name);
                 return v === null || v === undefined || String(v).trim() === '';
             });
@@ -141,6 +148,11 @@ export class FalabellaAutoPrepService {
                 estimadosAhora = r.estimated;
                 estimated.attributes.falabella = [...new Set([...(estimated.attributes.falabella ?? []), ...r.estimated])];
             }
+            totalAtributos = (requisitos ?? []).length;
+            llenos = (requisitos ?? []).filter((a) => {
+                const v = this.sync.buscarAtributo(attrs, a.name);
+                return v !== null && v !== undefined && String(v).trim() !== '';
+            }).length;
         }
 
         product.marketplaceIds = ids as any;
@@ -165,6 +177,18 @@ export class FalabellaAutoPrepService {
             },
             estimatedAttributes: estimated.attributes.falabella ?? estimadosAhora,
             descriptionGenerated: descripcionGenerada,
+            attributes: { filled: llenos, total: totalAtributos },
         };
+    }
+
+    /**
+     * Pone al día una ficha que ya está en Falabella: vuelve a completar lo que falte (atributos, medidas,
+     * descripción) y manda el nombre, la descripción, la marca y los atributos actuales. Con `regenerar`
+     * la IA vuelve a redactar el nombre y la descripción a partir de lo que tenga hoy el producto.
+     */
+    async actualizarEnFalabella(scope: SyncScope, productId: string, opciones: { regenerar?: boolean; connectionId?: string } = {}) {
+        const reporte = await this.preparar(scope, productId, opciones.connectionId, { regenerar: opciones.regenerar });
+        const envio = await this.sync.updateFalabellaContent(scope, productId, opciones.connectionId);
+        return { ...envio, report: reporte };
     }
 }

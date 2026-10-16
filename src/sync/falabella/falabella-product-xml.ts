@@ -187,3 +187,33 @@ export function buildImageFeedXml(items: { sellerSku: string; urls: string[] }[]
         .join('');
     return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
 }
+
+/**
+ * XML para cambiar el contenido de fichas ya publicadas (ProductUpdate): nombre, descripción, marca y
+ * los atributos de la categoría. No toca precio, stock ni categoría.
+ */
+export function buildContentUpdateXml(products: FalabellaProductInput[]): string {
+    const cuerpo = products
+        .map(p => {
+            const extras = Object.entries(p.extraAttributes ?? {}).map(([name, value]) => tag(name, value)).join('');
+            const productData = [
+                tag('ConditionType', p.conditionType ?? 'Nuevo'),
+                tag('PackageWidth', Math.trunc(p.packageWidth)),
+                tag('PackageLength', Math.trunc(p.packageLength)),
+                tag('PackageHeight', Math.trunc(p.packageHeight)),
+                tag('PackageWeight', p.packageWeight),
+                extras,
+            ].join('');
+            return [
+                '<Product>',
+                tag('SellerSku', p.sellerSku),
+                tag('Name', p.name),
+                `<Description>${cdata(p.description)}</Description>`,
+                tag('Brand', p.brand),
+                `<ProductData>${productData}</ProductData>`,
+                '</Product>',
+            ].join('');
+        })
+        .join('');
+    return `<?xml version="1.0" encoding="UTF-8"?><Request>${cuerpo}</Request>`;
+}

@@ -573,3 +573,43 @@ describe('publicar en Falabella lo que ya está allí', () => {
         expect(falabella.productCreate).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('atributos de Falabella: todos los que se conocen, con valores válidos', () => {
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+    const producto = (attrs: any) => ({
+        id: 'p1', sku: 'MK-1', name: 'Torre', price: 480, stock: 5, description: 'Torre de madera para niños',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 3,
+        marketplaceIds: { falabella_category_id: '956' }, aiAttributes: { brand: 'GENERICO', ...attrs },
+        store: { id: 't1' }, owner: { id: 'u1' }, images: [],
+    });
+    const atributo = (name: string, over: any = {}) => ({ name, feedName: name.toUpperCase(), label: name, isMandatory: false, inputType: 'textField', options: [], description: '', ...over });
+
+    it('envía también los opcionales con valor y deja fuera un valor que no está en la lista de opciones', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const attrs = [
+            atributo('material', { isMandatory: true, options: ['Madera', 'Plástico'] }),
+            atributo('color', { options: ['Azul', 'Rojo'] }),
+            atributo('garantia', {}),
+            atributo('tipo_de_bloques', { options: ['Encastre', 'Apilables'] }),
+        ];
+        const r: any = (service as any).toFalabellaInput(producto({ material: 'madera', color: 'azul', garantia: '12 meses', tipo_de_bloques: 'Inventado' }), 'active', attrs);
+
+        expect(r.input.extraAttributes).toEqual({ MATERIAL: 'Madera', COLOR: 'Azul', GARANTIA: '12 meses' });
+    });
+
+    it('un obligatorio con un valor que no está en sus opciones no deja publicar y lo dice', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(producto({ material: 'Cartón' }), 'active', [atributo('material', { label: 'Material', isMandatory: true, options: ['Madera'] })]);
+        expect(r.reason).toMatch(/Material \(valor no válido\)/);
+    });
+
+    it('el nombre para Falabella tiene 100 caracteres como máximo y no corta una palabra', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const largo = 'Torre de aprendizaje Montessori evolutiva 4 en 1 de madera de pino con escalones regulables y pizarra para niños pequeños';
+        const n = (service as any).nombreParaFalabella(largo);
+        expect(n.length).toBeLessThanOrEqual(100);
+        expect(largo.startsWith(n)).toBe(true);
+        expect(largo[n.length]).toBe(' ');
+        expect((service as any).nombreParaFalabella('  Nombre   corto  ')).toBe('Nombre corto');
+    });
+});
