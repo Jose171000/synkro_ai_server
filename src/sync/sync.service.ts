@@ -959,12 +959,21 @@ export class SyncService implements OnModuleInit {
      * Maps an internal product (+ its AI-generated content) to the payload
      * Mercado Libre expects.
      */
+    /** Atributos que se envían a Mercado Libre para un producto: marca, modelo y los que completó la IA. */
+    atributosParaMeli(product: Product): { id: string; value_name: string }[] {
+        const brand = (product.aiAttributes as any)?.brand || 'Genérica';
+        return [
+            { id: 'BRAND', value_name: brand },
+            { id: 'MODEL', value_name: product.sku },
+            ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
+                .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && valor !== null && valor !== undefined && String(valor).trim() !== '')
+                .map(([id, valor]) => ({ id, value_name: String(valor) })),
+        ];
+    }
+
     private buildMeliItemPayload(product: Product, categoryId: string): MeliItemPayload {
         // ML builds the final title from family_name + attributes (max 60 chars)
         const familyName = (product.aiTitle || product.name).slice(0, 60);
-
-        // BRAND and MODEL are the minimum attributes ML needs to build the title
-        const brand = (product.aiAttributes as any)?.brand || 'Genérica';
 
         return {
             family_name: familyName,
@@ -975,14 +984,8 @@ export class SyncService implements OnModuleInit {
             condition: 'new',
             listing_type_id: process.env.MELI_LISTING_TYPE_ID || 'gold_special',
             pictures: (product.images || []).map(img => ({ source: img.url })),
-            attributes: [
-                { id: 'BRAND', value_name: brand },
-                { id: 'MODEL', value_name: product.sku },
-                // Los datos que la categoría pide y la IA completó (color, material, talla…).
-                ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
-                    .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && valor !== null && valor !== undefined && String(valor).trim() !== '')
-                    .map(([id, valor]) => ({ id, value_name: String(valor) })),
-            ],
+            // BRAND y MODEL son lo mínimo que pide Mercado Libre; se suman los datos que la categoría pide y la IA completó.
+            attributes: this.atributosParaMeli(product),
         };
     }
 
@@ -1048,6 +1051,81 @@ export class SyncService implements OnModuleInit {
         }));
         await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId: scope.userId }, { delay: 45_000 });
         return { message: 'Actualización enviada a Falabella. Se procesa en segundo plano y la calidad de la ficha puede tardar en reflejarse.', feedId };
+    }
+
+    /**
+     * Programa la puesta al día del contenido (nombre, descripción, atributos) en cada canal donde el producto
+     * está publicado. Va con un retraso y un identificador por producto y cuenta: varios guardados seguidos
+     * se juntan en un solo envío, que respeta los límites de Falabella.
+     * Devuelve los canales a los que se enviará.
+     */
+    async scheduleContentSync(productId: string, delayMs = 45_000): Promise<{ marketplace: string; connectionId: string }[]> {
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { id: productId }, syncStatus: 'published' },
+            relations: { connection: true },
+        });
+        const destinos: { marketplace: string; connectionId: string }[] = [];
+        for (const enlace of enlaces) {
+            if (!enlace.connection || enlace.connection.status !== 'active') continue;
+            if (!['falabella', 'mercadolibre'].includes(enlace.marketplace)) continue;
+            await this.syncQueue.add(
+                'content-update',
+                { productId, connectionId: enlace.connection.id, marketplace: enlace.marketplace },
+                { delay: delayMs, jobId: `content-${productId}-${enlace.connection.id}`, removeOnComplete: true, removeOnFail: 50 },
+            );
+            destinos.push({ marketplace: enlace.marketplace, connectionId: enlace.connection.id });
+        }
+        return destinos;
+    }
+
+    /** Manda el contenido actual de un producto a un canal. Avisa al dueño si no se pudo. */
+    async runContentSync(productId: string, connectionId: string, marketplace: string): Promise<{ ok: boolean; message: string }> {
+        const product = await this.productRepository.findOne({ where: { id: productId }, relations: { owner: true, store: true } });
+        const connection = await this.connectionRepository.findOne({ where: { id: connectionId }, relations: { store: true } });
+        if (!product || !connection || connection.status !== 'active') return { ok: false, message: 'El producto o la cuenta ya no están disponibles.' };
+
+        const userId = product.owner?.id ?? connection.owner?.id;
+        const scope: SyncScope = { userId, storeId: connection.store?.id ?? product.store?.id ?? '' };
+        try {
+            if (marketplace === 'falabella') {
+                const r = await this.updateFalabellaContent(scope, productId, connectionId);
+                return { ok: true, message: r.message };
+            }
+            if (marketplace === 'mercadolibre') {
+                await this.updateMeliContent(productId, connectionId);
+                return { ok: true, message: 'Descripción y atributos actualizados en Mercado Libre.' };
+            }
+            return { ok: false, message: `Canal no soportado: ${marketplace}` };
+        } catch (error: any) {
+            const motivo = error?.response?.message ?? this.describeApiError(error) ?? error?.message ?? 'error desconocido';
+            const texto = Array.isArray(motivo) ? motivo.join(', ') : String(motivo);
+            await this.notifications.notify(userId, {
+                type: 'publish-error',
+                severity: 'error',
+                title: `No se pudo actualizar ${product.sku} en ${nombreCanal(marketplace)}`,
+                body: texto,
+                marketplace,
+                meta: { productId, connectionId },
+            });
+            return { ok: false, message: texto };
+        }
+    }
+
+    /** Mercado Libre: descripción y atributos. El título no se toca: la mayoría de las publicaciones no lo dejan cambiar con ventas. */
+    async updateMeliContent(productId: string, connectionId: string): Promise<void> {
+        const product = await this.productRepository.findOne({ where: { id: productId } });
+        const link = await this.listingLinkRepository.findOne({
+            where: { product: { id: productId }, connection: { id: connectionId }, marketplace: 'mercadolibre', syncStatus: 'published' },
+        });
+        if (!product || !link?.externalId) throw new NotFoundException('Este producto no está publicado en esa cuenta de Mercado Libre.');
+        const connection = await this.getValidConnectionById(connectionId);
+
+        const descripcion = product.aiDescription || product.description;
+        if (descripcion) await this.meliApi.updateItemDescription(connection.accessToken, link.externalId, descripcion);
+        await this.meliApi.updateItemAttributes(connection.accessToken, link.externalId, this.atributosParaMeli(product));
+        link.lastSyncedAt = new Date();
+        link.lastError = null as any;
+        await this.listingLinkRepository.save(link);
     }
 
     /** Marcas del catálogo de Falabella que coinciden con lo escrito. */

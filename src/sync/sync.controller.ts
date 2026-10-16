@@ -15,6 +15,8 @@ import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 import { SetBrandDto } from './dto/set-brand.dto';
+import { SaveSheetDto } from './dto/save-sheet.dto';
+import { ProductSheetService } from './product-sheet.service';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
@@ -40,6 +42,7 @@ export class SyncController {
         private readonly changeRequests: ChangeRequestsService,
         private readonly ordersQuery: OrdersQueryService,
         private readonly ecommerce: EcommerceSyncService,
+        private readonly sheets: ProductSheetService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -223,6 +226,40 @@ export class SyncController {
     })
     getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req, @Query('connectionId') connectionId?: string) {
         return this.syncService.getFalabellaCategoryFields(scopeOf(req), categoryId, connectionId);
+    }
+
+    @Get('products/:id/sheet')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({
+        summary: 'Ficha del producto: lo que se envía a cada canal donde está publicado',
+        description: 'Nombre, descripción, marca, categoría, atributos y medidas tal como los recibe cada marketplace, con su estado.',
+    })
+    getSheet(@Param('id') id: string, @Req() req) {
+        return this.sheets.getSheet(scopeOf(req), id);
+    }
+
+    @Patch('products/:id/sheet')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Guarda cambios en la ficha y los envía a los canales',
+        description: 'Tras guardar, el cambio se envía solo a cada canal donde el producto está publicado (en menos de un minuto; varios guardados seguidos se juntan en un envío).',
+    })
+    saveSheet(@Param('id') id: string, @Body() dto: SaveSheetDto, @Req() req) {
+        return this.sheets.saveSheet(scopeOf(req), id, dto);
+    }
+
+    @Post('products/:id/sheet/sync')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Envía ya el contenido actual del producto a cada canal donde está publicado' })
+    syncSheetNow(@Param('id') id: string, @Req() req) {
+        return this.sheets.syncNow(scopeOf(req), id);
     }
 
     @Get('falabella/brands')

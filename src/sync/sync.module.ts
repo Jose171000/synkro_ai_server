@@ -6,6 +6,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { SyncController } from './sync.controller';
 import { StoreMember } from '../stores/entities/store-member.entity';
 import { SaleAlertsService } from './sale-alerts.service';
+import { ProductSheetService } from './product-sheet.service';
 import { SyncService } from './sync.service';
 import { SyncProcessor } from './sync.processor';
 import { MeliApiService } from './meli/meli-api.service';
@@ -35,7 +36,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, CredentialsEncryptionService, SectionAccessGuard],
+    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService],
 })
 export class SyncModule { }

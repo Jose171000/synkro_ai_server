@@ -154,6 +154,16 @@ export class MeliApiService {
         });
     }
 
+    /** Cambia los atributos de una publicación ya creada (los que Mercado Libre deja modificar). */
+    async updateItemAttributes(accessToken: string, itemId: string, attributes: { id: string; value_name: string }[]): Promise<void> {
+        await this.http.put(`/items/${itemId}`, { attributes }, { headers: { Authorization: `Bearer ${accessToken}` } });
+    }
+
+    /** Cambia el texto de la descripción de una publicación ya creada. */
+    async updateItemDescription(accessToken: string, itemId: string, plainText: string): Promise<void> {
+        await this.http.put(`/items/${itemId}/description`, { plain_text: plainText }, { headers: { Authorization: `Bearer ${accessToken}` } });
+    }
+
     /** Pauses/reactivates a listing. */
     async setItemStatus(accessToken: string, itemId: string, status: 'paused' | 'active'): Promise<void> {
         await this.http.put(

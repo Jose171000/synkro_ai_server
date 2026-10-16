@@ -79,6 +79,13 @@ export class SyncProcessor extends WorkerHost {
                 return this.syncService.checkFalabellaFeed(feedRecordId, userId);
             }
 
+            case 'content-update': {
+                // Se guardó un cambio en el producto: se manda a cada canal donde está publicado.
+                const { productId, connectionId, marketplace } = job.data;
+                const r = await this.syncService.runContentSync(productId, connectionId, marketplace);
+                return { status: r.ok ? 'enviado' : 'omitido', message: r.message };
+            }
+
             case 'poll-orders': {
                 // Pasada periódica: ventas recientes de todas las cuentas.
                 return this.syncService.pollAllOrders();

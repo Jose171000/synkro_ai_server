@@ -10,6 +10,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
+import { SyncService } from '../sync/sync.service';
 import { QueryProductsDto } from './dto/query-products.dto';
 
 @ApiTags('products')
@@ -21,6 +22,7 @@ export class ProductsController {
   constructor(
     private readonly productsService: ProductsService,
     private readonly uploadService: UploadService,
+    private readonly syncService: SyncService,
   ) { }
 
   /**
@@ -169,7 +171,12 @@ export class ProductsController {
   ) {
     // Validate images only if they are being updated — if not sent, existing images remain
     await this.validateImages(updateProductDto.images, false);
-    return this.productsService.update(id, updateProductDto, req.user.id);
+    const actualizado = await this.productsService.update(id, updateProductDto, req.user.id);
+    // Si cambió lo que ven los compradores, se manda solo a cada canal donde el producto está publicado.
+    if (updateProductDto.name !== undefined || updateProductDto.description !== undefined || updateProductDto.images !== undefined) {
+      void this.syncService.scheduleContentSync(id).catch(() => undefined);
+    }
+    return actualizado;
   }
 
   @Delete(':id')

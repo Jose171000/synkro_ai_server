@@ -9,6 +9,7 @@ import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { AuthModule } from '../auth/auth.module';
 import { UploadModule } from '../upload/upload.module';
+import { SyncModule } from '../sync/sync.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { UploadModule } from '../upload/upload.module';
     AiModule,
     AuthModule,
     UploadModule,
+    SyncModule,
   ],
   controllers: [ProductsController],
   providers: [ProductsService, SectionAccessGuard],

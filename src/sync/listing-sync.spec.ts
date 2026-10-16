@@ -613,3 +613,23 @@ describe('atributos de Falabella: todos los que se conocen, con valores válidos
         expect((service as any).nombreParaFalabella('  Nombre   corto  ')).toBe('Nombre corto');
     });
 });
+
+describe('enviar solo los cambios de contenido a cada canal', () => {
+    it('programa un envío por cuenta donde el producto está publicado, con un id fijo para juntar guardados seguidos', async () => {
+        const p = { id: 'p1', sku: 'MK-1' };
+        const { service, trabajos } = await construir({
+            productos: [p],
+            enlaces: [
+                { id: 'e1', marketplace: 'falabella', syncStatus: 'published', product: p, connection: { id: 'fa1', status: 'active' } },
+                { id: 'e2', marketplace: 'mercadolibre', syncStatus: 'published', product: p, connection: { id: 'ml1', status: 'active' } },
+                { id: 'e3', marketplace: 'falabella', syncStatus: 'error', product: p, connection: { id: 'fa2', status: 'active' } },
+                { id: 'e4', marketplace: 'woocommerce', syncStatus: 'published', product: p, connection: { id: 'wo1', status: 'active' } },
+            ],
+        });
+        const r = await service.scheduleContentSync('p1', 1000);
+
+        expect(r).toEqual([{ marketplace: 'falabella', connectionId: 'fa1' }, { marketplace: 'mercadolibre', connectionId: 'ml1' }]);
+        expect(trabajos.map((t: any) => t.n)).toEqual(['content-update', 'content-update']);
+        expect(trabajos[0].d).toMatchObject({ productId: 'p1', connectionId: 'fa1', marketplace: 'falabella' });
+    });
+});
