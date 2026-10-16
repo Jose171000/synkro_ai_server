@@ -829,9 +829,16 @@ export class SyncService implements OnModuleInit {
             throw new BadRequestException('El producto necesita un precio antes de publicarse.');
         }
 
+        const encoladas: string[] = [];
         for (const marketplace of marketplaces) {
             // Validate the connection now so the user gets an immediate error
             const connection = await this.resolveConnection(scope.storeId, marketplace, connectionIds[marketplace]);
+            const yaPublicado = await this.listingLinkRepository.findOne({
+                where: { product: { id: productId }, connection: { id: connection.id }, syncStatus: 'published' },
+                select: { id: true },
+            });
+            if (yaPublicado) continue; // ya está en vivo: lo que cambia después va por el inventario
+            encoladas.push(marketplace);
             await this.syncQueue.add('publish', {
                 productId,
                 userId: scope.userId,
@@ -841,8 +848,11 @@ export class SyncService implements OnModuleInit {
             });
         }
 
+        if (!encoladas.length) {
+            throw new BadRequestException(`Este producto ya está publicado en ${marketplaces.map(nombreCanal).join(', ')}.`);
+        }
         return {
-            message: `Publicación encolada en: ${marketplaces.join(', ')}. Recibirás el estado en /sync/products/${productId}/status.`,
+            message: `Publicación encolada en: ${encoladas.join(', ')}. Recibirás el estado en /sync/products/${productId}/status.`,
         };
     }
 
@@ -1261,6 +1271,26 @@ export class SyncService implements OnModuleInit {
 
         const aceptados: { product: Product; input: FalabellaProductInput }[] = [];
         const rechazados: { sku: string; nombre: string; motivo: string }[] = [];
+
+        // Lo que ya está publicado en esta cuenta no se envía otra vez: Falabella lo rechazaría («el SKU ya existe»).
+        const yaPublicados = new Set(
+            (await this.listingLinkRepository.find({
+                where: {
+                    marketplace: 'falabella',
+                    syncStatus: 'published',
+                    connection: { id: connection.id },
+                    product: { id: In(products.map(p => p.id)) },
+                },
+                relations: { product: true },
+            })).map(l => l.product.id),
+        );
+        for (const p of products.filter(p => yaPublicados.has(p.id))) {
+            rechazados.push({ sku: p.sku, nombre: p.name, motivo: 'ya está publicado en esta cuenta de Falabella' });
+        }
+        products.splice(0, products.length, ...products.filter(p => !yaPublicados.has(p.id)));
+        if (!products.length) {
+            return { message: 'Ese producto ya está publicado en Falabella.', enviados: 0, rechazados, lotes: [] };
+        }
 
         // Se consultan los atributos de cada categoria una sola vez, por mas
         // productos que la compartan.
