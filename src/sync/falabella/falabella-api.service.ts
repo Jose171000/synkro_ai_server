@@ -785,6 +785,8 @@ export class FalabellaApiService {
                 : typeof crudo === 'string' ? crudo : crudo?.Reason ?? '';
             if (sku && texto) motivos.set(sku, String(texto).trim());
         }
+        // Si Falabella respondió pero no se pudo sacar ningún motivo, queda la respuesta a la vista para ajustar la lectura.
+        if (!motivos.size) this.logger.warn(`GetQcStatus sin motivo legible. Respuesta: ${JSON.stringify(body).slice(0, 1200)}`);
         return motivos;
     }
 
