@@ -36,6 +36,10 @@ export class SyncProcessor extends WorkerHost {
                     // así hay una sola forma de hablar con Falabella, y un
                     // producto suelto es simplemente un lote de uno.
                     const resultado = await this.syncService.publishBatchToFalabella({ userId, storeId }, connectionId, [productId]);
+                    // Si ya estaba en Falabella (publicado o vinculado) no es un fallo: no hay nada más que enviar.
+                    if (resultado.enviados === 0 && /^ya (est[aá] publicado|exist[ií]a)/.test(resultado.rechazados[0]?.motivo ?? "")) {
+                        return { status: "ya-publicado" };
+                    }
                     if (resultado.enviados === 0) {
                         throw new Error(resultado.rechazados[0]?.motivo || 'El producto no cumple los requisitos de Falabella.');
                     }

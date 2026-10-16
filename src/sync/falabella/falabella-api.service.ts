@@ -758,6 +758,15 @@ export class FalabellaApiService {
         return Array.isArray(products) ? products : [products];
     }
 
+    /** Las fichas del vendedor que ya existen en Falabella con esos SKUs (de a 100 como máximo). */
+    async getProductsBySku(credentials: FalabellaCredentials, skus: string[]): Promise<FalabellaProduct[]> {
+        const lista = [...new Set(skus.map(s => String(s).trim()).filter(Boolean))].slice(0, 100);
+        if (!lista.length) return [];
+        const body = await this.call<any>(credentials, 'GetProducts', { SkuSellerList: JSON.stringify(lista), Filter: 'all' });
+        const products = body?.Products?.Product ?? [];
+        return (Array.isArray(products) ? products : [products]).filter(Boolean);
+    }
+
     /**
      * Todo el catálogo del vendedor, pasando página a página.
      *

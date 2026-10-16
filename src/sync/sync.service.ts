@@ -1271,6 +1271,7 @@ export class SyncService implements OnModuleInit {
 
         const aceptados: { product: Product; input: FalabellaProductInput }[] = [];
         const rechazados: { sku: string; nombre: string; motivo: string }[] = [];
+        let vinculados = 0;
 
         // Lo que ya está publicado en esta cuenta no se envía otra vez: Falabella lo rechazaría («el SKU ya existe»).
         const yaPublicados = new Set(
@@ -1290,6 +1291,26 @@ export class SyncService implements OnModuleInit {
         products.splice(0, products.length, ...products.filter(p => !yaPublicados.has(p.id)));
         if (!products.length) {
             return { message: 'Ese producto ya está publicado en Falabella.', enviados: 0, rechazados, lotes: [] };
+        }
+
+        // Si el SKU ya existe en Falabella (subido a mano o en un intento anterior) se vincula en vez de reenviarlo.
+        const existentes = await this.falabellaApi
+            .getProductsBySku(credentials, products.map(p => p.sku))
+            .catch(() => [] as { SellerSku?: string }[]);
+        const skusEnFalabella = new Set(existentes.map(f => String(f?.SellerSku ?? '').trim().toLowerCase()));
+        for (const p of products.filter(p => skusEnFalabella.has(p.sku.trim().toLowerCase()))) {
+            await this.vincularComoPublicado(connection.id, p);
+            vinculados++;
+            rechazados.push({ sku: p.sku, nombre: p.name, motivo: 'ya existía en Falabella: se vinculó con tu producto (no hace falta publicarlo otra vez)' });
+        }
+        products.splice(0, products.length, ...products.filter(p => !skusEnFalabella.has(p.sku.trim().toLowerCase())));
+        if (!products.length) {
+            return {
+                message: vinculados ? 'Ese producto ya estaba en Falabella: quedó vinculado.' : 'Nada que publicar.',
+                enviados: 0,
+                rechazados,
+                lotes: [],
+            };
         }
 
         // Se consultan los atributos de cada categoria una sola vez, por mas
@@ -1410,6 +1431,27 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /** El producto ya existe en Falabella (se subió a mano o en un envío anterior): se vincula como publicado. */
+    private async vincularComoPublicado(connectionId: string, product: Product): Promise<void> {
+        let link = await this.listingLinkRepository.findOne({
+            where: { product: { id: product.id }, connection: { id: connectionId } },
+        });
+        if (!link) {
+            link = this.listingLinkRepository.create({
+                marketplace: 'falabella',
+                externalId: product.sku,
+                product,
+                connection: { id: connectionId } as any,
+            });
+        }
+        link.syncStatus = 'published';
+        link.lastError = null as any;
+        link.lastStockSynced = product.stock;
+        link.lastPriceSynced = product.price as any;
+        link.lastSyncedAt = new Date();
+        await this.listingLinkRepository.save(link);
+    }
+
     /**
      * Consulta el estado de un lote y aplica el resultado a cada producto.
      * Si Falabella sigue procesando, se vuelve a preguntar más tarde.
@@ -1458,7 +1500,12 @@ export class SyncService implements OnModuleInit {
             });
             if (!link) continue;
 
-            const error = erroresPorSku.get(sku);
+            let error = erroresPorSku.get(sku);
+            // «SKU already used by another product»: ya está en Falabella, no es un fallo. Se comprueba y se vincula.
+            if (error && /already used|already exists|ya existe|ya está en uso/i.test(error)) {
+                const fichas = await this.falabellaApi.getProductsBySku(credentials, [sku]).catch(() => []);
+                if (fichas.length) error = undefined;
+            }
             if (error) {
                 link.syncStatus = 'error';
                 link.lastError = error;

@@ -522,3 +522,54 @@ describe('historial de ventas', () => {
         expect(meli.searchOrdersPage).toHaveBeenCalledTimes(2);
     });
 });
+
+describe('publicar en Falabella lo que ya está allí', () => {
+    const fal = (over: any = {}) => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', ...over });
+    const listo = (over: any = {}) => ({
+        id: 'p1', sku: 'MK-TOR-004', name: 'Torre', price: 480, stock: 50, description: 'Torre de madera para niños',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 3,
+        marketplaceIds: { falabella_category_id: '2804' }, aiAttributes: { brand: 'GENERICO' },
+        store: { id: 't1' }, owner: { id: 'u1' }, ...over,
+    });
+    const preparar = async (producto: any, enlaces: any[] = []) => {
+        const t = await construir({ conexiones: [fal()], productos: [producto], enlaces });
+        t.falabella.brandsIndex = jest.fn().mockResolvedValue(new Map());
+        t.falabella.getCategoryAttributes = jest.fn().mockResolvedValue([]);
+        t.falabella.getProductsBySku = jest.fn().mockResolvedValue([]);
+        t.falabella.productCreate = jest.fn().mockResolvedValue('feed-1');
+        return t;
+    };
+
+    it('un producto ya publicado en esa cuenta no se vuelve a enviar', async () => {
+        const p = listo();
+        const { service, falabella } = await preparar(p, [{ id: 'e1', marketplace: 'falabella', syncStatus: 'published', product: p, connection: { id: 'fa1' } }]);
+
+        const r: any = await service.publishBatchToFalabella(SCOPE, 'fa1', ['p1']);
+
+        expect(r.enviados).toBe(0);
+        expect(r.rechazados[0].motivo).toMatch(/ya está publicado/);
+        expect(falabella.productCreate).not.toHaveBeenCalled();
+    });
+
+    it('si el SKU ya existe en Falabella se vincula como publicado en vez de reenviarlo', async () => {
+        const p = listo();
+        const { service, falabella, enlaces } = await preparar(p);
+        falabella.getProductsBySku.mockResolvedValue([{ SellerSku: 'mk-tor-004' }]);
+
+        const r: any = await service.publishBatchToFalabella(SCOPE, 'fa1', ['p1']);
+
+        expect(r.enviados).toBe(0);
+        expect(r.rechazados[0].motivo).toMatch(/ya existía/);
+        expect(falabella.productCreate).not.toHaveBeenCalled();
+        expect(enlaces).toEqual([expect.objectContaining({ marketplace: 'falabella', syncStatus: 'published', lastError: null })]);
+    });
+
+    it('un producto nuevo sí se envía', async () => {
+        const p = listo();
+        const { service, falabella } = await preparar(p);
+        (service as any).feedRepository = { create: (x: any) => x, save: async (x: any) => ({ ...x, id: 'f1' }) };
+        const r: any = await service.publishBatchToFalabella(SCOPE, 'fa1', ['p1']);
+        expect(r.enviados).toBe(1);
+        expect(falabella.productCreate).toHaveBeenCalledTimes(1);
+    });
+});
