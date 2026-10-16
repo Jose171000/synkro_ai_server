@@ -1,0 +1,149 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Product } from '../products/entities/product.entity';
+import { MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
+import { VectorSearchService } from '../categories/vector-search.service';
+import { CategorySeederService } from '../categories/category-seeder.service';
+import { SyncScope, SyncService } from '../sync/sync.service';
+import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
+import { AiService } from './ai.service';
+import { ChannelAttributesService } from './channel-attributes.service';
+import { ProductVision } from './product-vision.service';
+
+export interface FalabellaPrepReport {
+    listo: boolean;
+    motivo?: string;
+    category: { id: string; path: string; auto: boolean } | null;
+    brand: { value: string; replaced: boolean; original?: string };
+    measures: { width: number | null; length: number | null; height: number | null; weight: number | null; estimated: boolean };
+    estimatedAttributes: string[];
+}
+
+const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
+/**
+ * Deja un producto listo para Falabella con un solo paso: elige su categoría, comprueba la marca contra el
+ * catálogo, estima las medidas del paquete y completa los datos obligatorios de la categoría.
+ * Todo lo que no vino del cliente queda marcado para que se pueda revisar.
+ */
+@Injectable()
+export class FalabellaAutoPrepService {
+    private readonly logger = new Logger(FalabellaAutoPrepService.name);
+
+    constructor(
+        private readonly sync: SyncService,
+        private readonly falabella: FalabellaApiService,
+        private readonly ai: AiService,
+        private readonly canales: ChannelAttributesService,
+        private readonly vectores: VectorSearchService,
+        private readonly seeder: CategorySeederService,
+        @InjectRepository(Product)
+        private readonly products: Repository<Product>,
+    ) { }
+
+    async preparar(scope: SyncScope, productId: string, connectionId?: string): Promise<FalabellaPrepReport> {
+        const product = await this.sync.findScopedProduct(scope, productId);
+        const connection = await this.sync.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const creds = this.sync.credentialsOf(connection);
+
+        let attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        const ids: Record<string, any> = { ...((product.marketplaceIds as any) || {}) };
+        const nombre = product.aiTitle || product.name;
+        const descripcion = product.aiDescription || product.description || nombre;
+        const vision = (attrs.vision as ProductVision | undefined) ?? null;
+        const estimated = { measures: !!attrs.estimated?.measures, attributes: { ...(attrs.estimated?.attributes ?? {}) } as Record<string, string[]> };
+
+        // ── Categoría ──
+        let categoryId = this.sync.categoriaFalabella(product);
+        let categoriaAuto = false;
+        if (!categoryId) {
+            let candidatas: MarketplaceCategory[] = [];
+            try {
+                const emb = await this.seeder.generateEmbedding(`${nombre} ${descripcion.slice(0, 300)}`);
+                candidatas = await this.vectores.findSimilarCategories(emb, 'falabella', 8);
+            } catch (error: any) {
+                this.logger.warn(`Búsqueda por significado no disponible: ${error?.message}`);
+            }
+            if (candidatas.length < 3) {
+                const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...nombre.split(/\s+/)].filter(Boolean);
+                candidatas = [...candidatas, ...(await this.canales.candidatasFalabella(creds, palabras))].slice(0, 25);
+            }
+            const elegida = await this.ai.elegirCategoria('falabella', nombre, descripcion, candidatas);
+            if (elegida) {
+                categoryId = elegida;
+                ids.falabella_category_id = elegida;
+                categoriaAuto = true;
+            }
+        }
+
+        // ── Marca: Falabella solo acepta las de su catálogo ──
+        const original = String(attrs.brand ?? '').trim();
+        let marca = original;
+        let reemplazada = false;
+        const indice = await this.falabella.brandsIndex(creds).catch(() => null);
+        if (indice) {
+            const canonica = indice.get(normalizar(original));
+            if (canonica) marca = canonica;
+            else if (normalizar(original) !== 'generico') {
+                marca = 'GENERICO';
+                reemplazada = !!original;
+            }
+        } else if (!marca) {
+            marca = 'GENERICO';
+        }
+        attrs.brand = marca || 'GENERICO';
+
+        // ── Medidas del paquete ──
+        if ([product.packageWidth, product.packageLength, product.packageHeight, product.packageWeight].some((v) => v == null)) {
+            const paquete = await this.ai.estimarPaquete(`${product.name}. ${product.description ?? ''}`, nombre, vision);
+            if (paquete) {
+                product.packageWidth ??= paquete.width;
+                product.packageLength ??= paquete.length;
+                product.packageHeight ??= paquete.height;
+                product.packageWeight ??= paquete.weight;
+                estimated.measures = true;
+            }
+        }
+
+        // ── Datos obligatorios de la categoría ──
+        let estimadosAhora: string[] = [];
+        if (categoryId) {
+            const requisitos = await this.canales.requisitos('falabella', String(categoryId), undefined, { titulo: nombre, palabras: [] }, creds);
+            const faltantes = (requisitos ?? []).filter((a) => {
+                if (!a.isRequired) return false;
+                const v = this.sync.buscarAtributo(attrs, a.name);
+                return v === null || v === undefined || String(v).trim() === '';
+            });
+            if (faltantes.length) {
+                const r = await this.ai.completarAtributos(nombre, descripcion, faltantes, { marca: attrs.brand, color: attrs.color });
+                attrs = { ...attrs, ...r.values };
+                estimadosAhora = r.estimated;
+                estimated.attributes.falabella = [...new Set([...(estimated.attributes.falabella ?? []), ...r.estimated])];
+            }
+        }
+
+        product.marketplaceIds = ids as any;
+        product.aiAttributes = { ...attrs, estimated };
+        await this.products.save(product);
+
+        // ── ¿Ya puede salir? Con las mismas reglas de la publicación real ──
+        const atributosCategoria = categoryId ? await this.falabella.getCategoryAttributes(creds, categoryId).catch(() => []) : [];
+        const validacion = this.sync.toFalabellaInput(product, 'active', atributosCategoria);
+        const path = categoryId
+            ? (await this.falabella.getCategories(creds).catch((): { id: string; path: string }[] => [])).find((c) => c.id === String(categoryId))?.path ?? `Categoría ${categoryId}`
+            : null;
+
+        return {
+            listo: !('reason' in validacion),
+            motivo: 'reason' in validacion ? validacion.reason : undefined,
+            category: categoryId ? { id: String(categoryId), path: path!, auto: categoriaAuto } : null,
+            brand: { value: attrs.brand, replaced: reemplazada, ...(reemplazada ? { original } : {}) },
+            measures: {
+                width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight,
+                estimated: estimated.measures,
+            },
+            estimatedAttributes: estimated.attributes.falabella ?? estimadosAhora,
+        };
+    }
+}

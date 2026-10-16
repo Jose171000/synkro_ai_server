@@ -14,6 +14,7 @@ import { ConnectShopifyDto } from './dto/connect-shopify.dto';
 import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
+import { SetBrandDto } from './dto/set-brand.dto';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
@@ -222,6 +223,27 @@ export class SyncController {
     })
     getFalabellaCategoryFields(@Param('categoryId') categoryId: string, @Req() req, @Query('connectionId') connectionId?: string) {
         return this.syncService.getFalabellaCategoryFields(scopeOf(req), categoryId, connectionId);
+    }
+
+    @Get('falabella/brands')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Busca marcas del catálogo de Falabella',
+        description: 'Falabella solo acepta marcas de su catálogo (o GENERICO). Primero salen las que empiezan por el texto.',
+    })
+    searchFalabellaBrands(@Query('search') search: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.searchFalabellaBrands(scopeOf(req), search || '', connectionId);
+    }
+
+    @Patch('falabella/products/:id/brand')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Cambia la marca con la que se publica un producto en Falabella' })
+    setFalabellaBrand(@Param('id') id: string, @Body() dto: SetBrandDto, @Req() req) {
+        return this.syncService.setFalabellaBrand(scopeOf(req), id, dto.brand, dto.connectionId);
     }
 
     @Patch('falabella/products/:id/preparation')

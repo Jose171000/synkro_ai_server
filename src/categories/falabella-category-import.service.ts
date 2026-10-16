@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import OpenAI from 'openai';
 import { MarketplaceCategory } from './entities/marketplace-category.entity';
 import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
+import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 
 /**
  * Trae el catálogo de categorías de Falabella para que la IA pueda elegir
@@ -38,6 +39,8 @@ export class FalabellaCategoryImportService {
     constructor(
         @InjectRepository(MarketplaceCategory)
         private readonly categoryRepository: Repository<MarketplaceCategory>,
+        @InjectRepository(MarketplaceConnection)
+        private readonly connections: Repository<MarketplaceConnection>,
         private readonly falabellaApi: FalabellaApiService,
         private readonly syncService: SyncService,
     ) {
@@ -75,6 +78,27 @@ export class FalabellaCategoryImportService {
         return salida;
     }
 
+    private importando = false;
+
+    /**
+     * Si todavía no hay categorías de Falabella guardadas las trae en segundo plano, una sola vez a la vez.
+     * Así la IA las tiene la próxima vez sin que nadie tenga que acordarse de importarlas.
+     */
+    async asegurarImportadas(userId: string): Promise<void> {
+        if (this.importando) return;
+        try {
+            const cuantas = await this.categoryRepository.count({ where: { marketplace: 'falabella' } });
+            if (cuantas >= 500) return;
+            this.importando = true;
+            this.logger.log('No hay categorías de Falabella guardadas: se importan en segundo plano.');
+            await this.importCategories(userId);
+        } catch (error: any) {
+            this.logger.warn(`No se pudieron importar las categorías de Falabella: ${error?.message}`);
+        } finally {
+            this.importando = false;
+        }
+    }
+
     /**
      * Importa (o actualiza) las categorías de Falabella.
      *
@@ -82,7 +106,12 @@ export class FalabellaCategoryImportService {
      * pide autenticado. Es idempotente: las que ya existen se actualizan.
      */
     async importCategories(userId: string): Promise<ImportResult> {
-        const credentials = await this.syncService.getFalabellaCredentials(userId);
+        // El árbol es el mismo para todos: sirve la cuenta del usuario o, si no tiene, cualquiera activa.
+        const cuenta =
+            (await this.connections.findOne({ where: { marketplace: 'falabella', status: 'active', owner: { id: userId } } as any })) ??
+            (await this.connections.findOne({ where: { marketplace: 'falabella', status: 'active' } as any }));
+        if (!cuenta) throw new BadRequestException('No hay ninguna cuenta de Falabella conectada para traer sus categorías.');
+        const credentials = await this.syncService.getFalabellaCredentials(cuenta.id);
         const categorias = await this.falabellaApi.getCategories(credentials);
 
         if (!categorias.length) {

@@ -542,7 +542,7 @@ export class SyncService implements OnModuleInit {
         return connection?.currency ?? undefined;
     }
 
-    private credentialsOf(connection: MarketplaceConnection): FalabellaCredentials {
+    credentialsOf(connection: MarketplaceConnection): FalabellaCredentials {
         return { userId: connection.externalUserId, apiKey: connection.accessToken };
     }
 
@@ -582,7 +582,7 @@ export class SyncService implements OnModuleInit {
      * antes de este cambio) se acepta si es del usuario y se adopta: pasa a
      * la tienda desde la que se usa.
      */
-    private async findScopedProduct(scope: SyncScope, productId: string): Promise<Product> {
+    async findScopedProduct(scope: SyncScope, productId: string): Promise<Product> {
         const product = await this.productRepository.findOne({
             where: [
                 { id: productId, store: { id: scope.storeId } },
@@ -1005,6 +1005,30 @@ export class SyncService implements OnModuleInit {
             }));
     }
 
+    /** Marcas del catálogo de Falabella que coinciden con lo escrito. */
+    async searchFalabellaBrands(scope: SyncScope, term: string, connectionId?: string): Promise<string[]> {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        return this.falabellaApi.searchBrands(this.credentialsOf(connection), term);
+    }
+
+    /**
+     * Cambia la marca con la que se publica el producto en Falabella. Falabella solo acepta
+     * marcas de su catálogo (o «GENERICO»), así que se comprueba aquí y se guarda tal como la escriben ellos.
+     */
+    async setFalabellaBrand(scope: SyncScope, productId: string, brand: string, connectionId?: string) {
+        const product = await this.findScopedProduct(scope, productId);
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const indice = await this.falabellaApi.brandsIndex(this.credentialsOf(connection));
+        const clave = brand.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+        const canonica = indice.get(clave) ?? (clave === 'generico' ? 'GENERICO' : undefined);
+        if (!canonica) {
+            throw new BadRequestException(`La marca «${brand.trim()}» no existe en el catálogo de Falabella. Búscala en la lista o usa GENERICO.`);
+        }
+        product.aiAttributes = { ...((product.aiAttributes as any) || {}), brand: canonica };
+        await this.productRepository.save(product);
+        return { brand: canonica };
+    }
+
     /**
      * Guarda en un producto lo que Falabella exige y el sistema no puede
      * deducir solo: la categoría, las medidas del paquete y los atributos
@@ -1076,7 +1100,7 @@ export class SyncService implements OnModuleInit {
     }
 
     /** La categoría de Falabella asignada al producto, si la tiene. */
-    private categoriaFalabella(product: Product): string | number | undefined {
+    categoriaFalabella(product: Product): string | number | undefined {
         const marketplaceIds = (product.marketplaceIds as any) || {};
         const attributes = (product.aiAttributes as any) || {};
         return marketplaceIds.falabella_category_id ?? attributes.falabella_category_id;
@@ -1096,7 +1120,7 @@ export class SyncService implements OnModuleInit {
      * faltan las medidas" que mandar 500 y devolverle errores sueltos
      * imposibles de interpretar.
      */
-    private toFalabellaInput(
+    toFalabellaInput(
         product: Product,
         status: 'active' | 'inactive' = 'active',
         categoryAttributes: FalabellaAttribute[] = [],
@@ -1181,7 +1205,7 @@ export class SyncService implements OnModuleInit {
      * los nombra `tipo_automotriz` y quien carga el producto puede haberlo
      * guardado como `tipoAutomotriz` o `TipoAutomotriz`.
      */
-    private buscarAtributo(attributes: Record<string, any>, feedName: string): any {
+    buscarAtributo(attributes: Record<string, any>, feedName: string): any {
         const normalizar = (texto: string) => texto.toLowerCase().replace(/[^a-z0-9]/g, '');
         const buscado = normalizar(feedName);
         for (const [clave, valor] of Object.entries(attributes || {})) {
@@ -1256,10 +1280,28 @@ export class SyncService implements OnModuleInit {
             }
         }
 
+        // Falabella rechaza el producto entero si la marca no está en su catálogo: se comprueba antes.
+        const marcas = await this.falabellaApi.brandsIndex(credentials).catch(() => null);
+        const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
         for (const product of products) {
             const categoria = this.categoriaFalabella(product);
+            let paraValidar = product;
+            const marca = String((product.aiAttributes as any)?.brand ?? '').trim();
+            if (marcas && marca && normalizar(marca) !== 'generico') {
+                const canonica = marcas.get(normalizar(marca));
+                if (!canonica) {
+                    rechazados.push({
+                        sku: product.sku,
+                        nombre: product.name,
+                        motivo: `la marca «${marca}» no existe en el catálogo de Falabella: elige una de la lista o usa GENERICO`,
+                    });
+                    continue;
+                }
+                paraValidar = { ...product, aiAttributes: { ...((product.aiAttributes as any) || {}), brand: canonica } } as Product;
+            }
             const resultado = this.toFalabellaInput(
-                product,
+                paraValidar,
                 options.status ?? 'active',
                 atributosPorCategoria.get(String(categoria)) ?? [],
             );

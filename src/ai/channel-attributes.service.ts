@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { CategoryAttribute, MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
 import { CategorySeederService } from '../categories/category-seeder.service';
 import { MeliApiService } from '../sync/meli/meli-api.service';
-import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
+import { FalabellaApiService, FalabellaCredentials } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 
@@ -83,6 +83,33 @@ export class ChannelAttributesService {
         private readonly categories: Repository<MarketplaceCategory>,
     ) { }
 
+    /** Credenciales de la cuenta de Falabella de un usuario, si tiene una activa. */
+    async credencialesDe(userId: string): Promise<FalabellaCredentials | null> {
+        const cuenta = await this.connections.findOne({
+            where: { marketplace: 'falabella', owner: { id: userId }, status: 'active' } as any,
+        });
+        return cuenta ? this.sync.getFalabellaCredentials(cuenta.id) : null;
+    }
+
+    /**
+     * Categorías de Falabella que podrían servir para unas palabras, buscadas en su árbol en vivo.
+     * Sirve cuando todavía no hay categorías guardadas con su vector.
+     */
+    async candidatasFalabella(creds: FalabellaCredentials, palabras: string[]): Promise<MarketplaceCategory[]> {
+        const vistas = new Map<string, MarketplaceCategory>();
+        const unicas = [...new Set(palabras.map((p) => p.trim().toLowerCase()).filter((p) => p.length > 3))].slice(0, 6);
+        for (const palabra of unicas) {
+            try {
+                for (const c of await this.falabella.searchCategories(creds, palabra, 8)) {
+                    if (!vistas.has(c.id)) vistas.set(c.id, { categoryId: c.id, name: c.path } as MarketplaceCategory);
+                }
+            } catch (error: any) {
+                this.logger.warn(`Búsqueda de categorías de Falabella para «${palabra}»: ${error?.message}`);
+            }
+        }
+        return [...vistas.values()].slice(0, 25);
+    }
+
     /** Categoría real de Mercado Libre para un título (el predictor oficial). */
     async predecirCategoriaMeli(titulo: string): Promise<string | null> {
         try {
@@ -102,6 +129,7 @@ export class ChannelAttributesService {
         categoryId: string,
         userId?: string,
         contexto?: ContextoDeProducto,
+        credenciales?: FalabellaCredentials,
     ): Promise<CategoryAttribute[] | null> {
         let guardada: MarketplaceCategory | null = null;
         try {
@@ -120,7 +148,7 @@ export class ChannelAttributesService {
             return this.paraElCanal(marketplace, aprendidos);
         }
 
-        const completos = await this.consultarAlCanal(marketplace, categoryId, userId);
+        const completos = await this.consultarAlCanal(marketplace, categoryId, userId, credenciales);
         if (completos) {
             await this.recordar(marketplace, categoryId, completos, guardada, contexto);
             return this.paraElCanal(marketplace, completos);
@@ -135,19 +163,16 @@ export class ChannelAttributesService {
     }
 
     /** Todos los atributos de la categoría, tal como los publica el canal. */
-    private async consultarAlCanal(marketplace: string, categoryId: string, userId?: string): Promise<CategoryAttribute[] | null> {
+    private async consultarAlCanal(marketplace: string, categoryId: string, userId?: string, credenciales?: FalabellaCredentials): Promise<CategoryAttribute[] | null> {
         try {
             if (marketplace === 'mercadolibre') {
                 const atributos = atributosDeMeli(await this.meli.getCategoryAttributes(categoryId), Infinity);
                 return atributos.length ? atributos : null;
             }
-            if (marketplace === 'falabella' && userId) {
-                const cuenta = await this.connections.findOne({
-                    where: { marketplace: 'falabella', owner: { id: userId }, status: 'active' } as any,
-                });
-                if (!cuenta) return null;
-                const credenciales = await this.sync.getFalabellaCredentials(cuenta.id);
-                const atributos = await this.falabella.getCategoryAttributes(credenciales, categoryId);
+            if (marketplace === 'falabella' && (userId || credenciales)) {
+                const creds = credenciales ?? (await this.credencialesDe(userId!));
+                if (!creds) return null;
+                const atributos = await this.falabella.getCategoryAttributes(creds, categoryId);
                 const lista: CategoryAttribute[] = atributos
                     .filter((a) => !YA_CUBIERTOS_FALABELLA.has(a.name))
                     .map((a) => ({

@@ -51,7 +51,7 @@ describe('autocompletar un producto desde sus fotos', () => {
         };
         const busqueda: any = { findSimilarCategories: jest.fn(async () => []) };
         const semilla: any = { generateEmbedding: jest.fn(async () => [0.1, 0.2]) };
-        const service = new AiService(busqueda, semilla, vision, canales);
+        const service = new AiService(busqueda, semilla, vision, canales, { asegurarImportadas: jest.fn() } as any);
         const create = jest.fn(async (req: any) => {
             const pedido = req.messages[1].content as string;
             // La segunda llamada (generación) es la que lleva las reglas de los marketplaces.
@@ -104,12 +104,13 @@ describe('medidas del paquete y modo masivo', () => {
     function construir() {
         const canales: any = {
             predecirCategoriaMeli: jest.fn(async () => null),
+            credencialesDe: jest.fn(async () => null),
             requisitos: jest.fn(async () => [{ name: 'tipo_tela', description: 'Tipo de tela', example: 'Algodón', isRequired: true, options: ['Algodón', 'Poliéster'] }]),
         };
         const busqueda: any = { findSimilarCategories: jest.fn(async () => [{ categoryId: '1234', name: 'Sábanas', requiredAttributes: [] }]) };
         const semilla: any = { generateEmbedding: jest.fn(async () => [0.1]) };
         const vision: any = { analyze: jest.fn(async () => null) };
-        const service = new AiService(busqueda, semilla, vision, canales);
+        const service = new AiService(busqueda, semilla, vision, canales, { asegurarImportadas: jest.fn() } as any);
         const prompts: string[] = [];
         const create = jest.fn(async (req: any) => {
             const p = req.messages[req.messages.length - 1].content as string;

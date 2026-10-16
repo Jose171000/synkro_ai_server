@@ -246,6 +246,9 @@ export class FalabellaApiService {
     /** Categorías finales ya aplanadas, con su ruta. */
     private readonly categoryCache = new Map<string, { at: number; categories: FalabellaCategory[] }>();
 
+    /** Catálogo de marcas (es global y pesa): se guarda unas horas. */
+    private brandCache: { at: number; list: FalabellaBrand[] } | null = null;
+
     constructor() {
         this.http = axios.create({ baseURL: API_BASE, timeout: 30000 });
     }
@@ -327,6 +330,36 @@ export class FalabellaApiService {
         const body = await this.call<any>(credentials, 'GetBrands');
         const brands = body?.Brands?.Brand ?? [];
         return Array.isArray(brands) ? brands : [brands];
+    }
+
+    /** Marcas del catálogo, con caché de 6 horas. */
+    async getBrandsCached(credentials: FalabellaCredentials): Promise<FalabellaBrand[]> {
+        if (this.brandCache && Date.now() - this.brandCache.at < 6 * 3600 * 1000) return this.brandCache.list;
+        const list = (await this.getBrands(credentials)).filter(b => b?.Name);
+        this.brandCache = { at: Date.now(), list };
+        return list;
+    }
+
+    /** Nombre normalizado (sin tildes ni mayúsculas) → nombre tal como lo escribe Falabella. */
+    async brandsIndex(credentials: FalabellaCredentials): Promise<Map<string, string>> {
+        const index = new Map<string, string>();
+        for (const b of await this.getBrandsCached(credentials)) index.set(this.normalizar(String(b.Name).trim()), String(b.Name).trim());
+        return index;
+    }
+
+    /** Marcas que coinciden con lo escrito; primero las que empiezan por el texto. */
+    async searchBrands(credentials: FalabellaCredentials, term: string, limit = 30): Promise<string[]> {
+        const buscado = this.normalizar((term || '').trim());
+        const nombres = (await this.getBrandsCached(credentials)).map(b => String(b.Name).trim());
+        if (!buscado) return nombres.slice(0, limit);
+        const empiezan: string[] = [];
+        const contienen: string[] = [];
+        for (const n of nombres) {
+            const k = this.normalizar(n);
+            if (k.startsWith(buscado)) empiezan.push(n);
+            else if (k.includes(buscado)) contienen.push(n);
+        }
+        return [...empiezan, ...contienen].slice(0, limit);
     }
 
     /**

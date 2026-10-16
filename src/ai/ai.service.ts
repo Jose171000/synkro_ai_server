@@ -6,6 +6,7 @@ import { CategorySeederService } from '../categories/category-seeder.service';
 import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/marketplace-category.entity';
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
+import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import OpenAI from 'openai';
 
 @Injectable()
@@ -17,6 +18,7 @@ export class AiService {
     private readonly categorySeederService: CategorySeederService,
     private readonly vision: ProductVisionService,
     private readonly channelAttributes: ChannelAttributesService,
+    private readonly falabellaImport: FalabellaCategoryImportService,
   ) {
     this.openai = new OpenAI({
       baseURL: 'https://api.deepseek.com',
@@ -72,6 +74,19 @@ export class AiService {
         categoriesPerMarketplace[marketplace.toLowerCase()] = marketplace.toLowerCase() === 'mercadolibre'
           ? topCategories.filter(c => c.categoryId.startsWith(sitio)).slice(0, 5)
           : topCategories;
+      }
+
+      // Falabella: sin categorías guardadas la IA no tenía de dónde elegir. Se piden al árbol de Falabella en
+      // vivo (con las palabras del producto) y, en segundo plano, se importan todas para la próxima vez.
+      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella') && dto.userId
+        && (categoriesPerMarketplace['falabella']?.length ?? 0) < 3) {
+        void this.falabellaImport.asegurarImportadas(dto.userId);
+        const creds = await this.channelAttributes.credencialesDe(dto.userId).catch(() => null);
+        if (creds) {
+          const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...enriquecido.titulo.split(/\s+/)].filter(Boolean);
+          const vivas = await this.channelAttributes.candidatasFalabella(creds, palabras);
+          categoriesPerMarketplace['falabella'] = [...(categoriesPerMarketplace['falabella'] ?? []), ...vivas].slice(0, 25);
+        }
       }
 
       // Step 3: Build the categorization prompt with only the relevant top-5 categories
@@ -227,6 +242,69 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
     } catch (error) {
       console.warn('[AiService] No se pudieron estimar las medidas del paquete:', error);
       return null;
+    }
+  }
+
+  /** Elige, entre candidatas, la categoría de un marketplace que mejor le va a un producto. */
+  public async elegirCategoria(marketplace: string, nombre: string, descripcion: string, candidatas: MarketplaceCategory[]): Promise<string | null> {
+    if (!candidatas.length) return null;
+    try {
+      const prompt = this.buildCategorizationPrompt(nombre, descripcion, [marketplace], { [marketplace.toLowerCase()]: candidatas });
+      const r = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
+          { role: 'user', content: prompt },
+        ],
+      });
+      const id = JSON.parse(r.choices[0]?.message?.content || '{}')[`${marketplace.toLowerCase()}_category_id`];
+      return id && candidatas.some(c => c.categoryId === String(id)) ? String(id) : null;
+    } catch (error) {
+      console.warn('[AiService] No se pudo elegir la categoría:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Completa de una vez los datos obligatorios de una categoría. Devuelve los valores y cuáles son estimados
+   * (los que no se podían deducir y se eligió el más probable).
+   */
+  public async completarAtributos(nombre: string, descripcion: string, atributos: CategoryAttribute[], conocidos: Record<string, any> = {}) {
+    if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[] };
+    try {
+      const lista = atributos.map(a => `- "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ''}`).join('\n');
+      const r = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Completa los datos obligatorios de este producto para publicarlo.
+Producto: ${nombre}
+Descripción: ${descripcion}
+Datos ya conocidos: ${JSON.stringify(conocidos)}
+
+Datos a completar:
+${lista}
+
+Si un dato no se puede deducir, ESTIMA el valor más probable (con lista de opciones, la más cercana; si no, un valor genérico típico) y añade su nombre a "_estimated".
+Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...] }`,
+          },
+        ],
+      });
+      const json = JSON.parse(r.choices[0]?.message?.content || '{}');
+      const estimated: string[] = Array.isArray(json._estimated) ? json._estimated.map(String) : [];
+      const values: Record<string, string> = {};
+      for (const a of atributos) {
+        const v = json[a.name];
+        if (v !== null && v !== undefined && String(v).trim() !== '') values[a.name] = String(v);
+      }
+      return { values, estimated };
+    } catch (error) {
+      console.warn('[AiService] No se pudieron completar los atributos:', error);
+      return { values: {} as Record<string, string>, estimated: [] as string[] };
     }
   }
 
