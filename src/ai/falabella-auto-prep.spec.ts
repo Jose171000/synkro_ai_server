@@ -19,6 +19,7 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
     const ai: any = {
         elegirCategoria: jest.fn(async () => (opts.categoriaElegida === undefined ? '2804' : opts.categoriaElegida)),
         estimarPaquete: jest.fn(async () => ({ width: 30, length: 40, height: 20, weight: 3, fromClient: false })),
+        generarDescripcionHtml: jest.fn(async () => '<div>ficha</div>'),
         completarAtributos: jest.fn(async () => ({ values: { material: 'Madera' }, estimated: ['material'] })),
     };
     const canales: any = {
@@ -46,13 +47,15 @@ describe('dejar un producto listo para Falabella con un paso', () => {
         expect(r.brand).toEqual({ value: 'GENERICO', replaced: true, original: 'Marca Inventada' });
         expect(r.measures).toMatchObject({ width: 30, weight: 3, estimated: true });
         expect(r.estimatedAttributes).toEqual(['material']);
+        expect(r.descriptionGenerated).toBe(true);
+        expect(guardados[0].aiAttributes.descriptionHtml).toBe('<div>ficha</div>');
         expect(r.listo).toBe(true);
         expect(guardados[0].aiAttributes).toMatchObject({ brand: 'GENERICO', material: 'Madera', estimated: { measures: true } });
         expect(guardados[0].marketplaceIds.falabella_category_id).toBe('2804');
     });
 
     it('respeta una marca del catálogo (con su escritura) y lo que el producto ya tiene', async () => {
-        const p: any = { ...producto(), aiAttributes: { brand: 'fisher-price', material: 'Plástico' }, packageWidth: 10, packageLength: 10, packageHeight: 10, packageWeight: 1, marketplaceIds: { falabella_category_id: '999' } };
+        const p: any = { ...producto(), aiAttributes: { brand: 'fisher-price', material: 'Plástico', descriptionHtml: '<div>ya</div>' }, packageWidth: 10, packageLength: 10, packageHeight: 10, packageWeight: 1, marketplaceIds: { falabella_category_id: '999' } };
         const { service, ai, canales } = construir(p);
         const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');
 
@@ -63,6 +66,7 @@ describe('dejar un producto listo para Falabella con un paso', () => {
         expect(ai.elegirCategoria).not.toHaveBeenCalled();
         expect(ai.estimarPaquete).not.toHaveBeenCalled();
         expect(ai.completarAtributos).not.toHaveBeenCalled();
+        expect(ai.generarDescripcionHtml).not.toHaveBeenCalled();
         expect(canales.requisitos).toHaveBeenCalled();
     });
 

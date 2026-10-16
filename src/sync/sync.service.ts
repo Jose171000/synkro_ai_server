@@ -1158,7 +1158,8 @@ export class SyncService implements OnModuleInit {
             return { reason: 'le faltan las medidas o el peso del paquete' };
         }
 
-        const description = product.aiDescription || product.description;
+        // La ficha HTML estándar de la agencia manda; sin ella, la descripción redactada o la original.
+        const description = String(attributes.descriptionHtml || product.aiDescription || product.description || '').slice(0, 25000);
         if (!description || description.trim().length < 6) {
             return { reason: 'la descripción es demasiado corta (Falabella pide 6 caracteres como mínimo)' };
         }

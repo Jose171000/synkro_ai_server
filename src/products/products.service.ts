@@ -364,6 +364,11 @@ export class ProductsService {
             };
         }
 
+        // Ficha HTML estándar de la agencia (Falabella, Shopify, WooCommerce).
+        if (aiContent?.htmlDescription) {
+            product.aiAttributes = { ...((product.aiAttributes as any) || {}), descriptionHtml: aiContent.htmlDescription };
+        }
+
         // Lo que se vio en las fotos: la marca y el color quedan listos para publicar.
         const vision = aiContent?.vision;
         if (vision) {

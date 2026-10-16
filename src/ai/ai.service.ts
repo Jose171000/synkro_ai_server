@@ -6,6 +6,7 @@ import { CategorySeederService } from '../categories/category-seeder.service';
 import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/marketplace-category.entity';
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
+import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import OpenAI from 'openai';
 
@@ -41,6 +42,10 @@ export class AiService {
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
+
+    // Los enlaces de imágenes o GIFs que el cliente pegó en su descripción van a la ficha HTML, no al texto que redacta la IA.
+    const urlsDelCliente = extraerUrlsDeImagen(`${dto.name ?? ''} ${dto.description ?? ''}`);
+    dto = { ...dto, name: quitarUrls(dto.name), description: quitarUrls(dto.description) };
 
     // PHASE 0: las fotos. Todo lo que se ve (tipo, color, material, marca) deja de depender de lo que escriba el cliente.
     const vision: ProductVision | null = dto.imageUrls?.length
@@ -175,6 +180,21 @@ export class AiService {
         }
       }
 
+      // Descripción HTML estándar de la agencia para los canales que aceptan HTML.
+      const aceptaHtml = dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce'].includes(m));
+      const atributosParaFicha: Record<string, any> = { ...(vision ? this.atributosDeVision(vision) : {}) };
+      for (const listing of Object.values<any>(finalJson ?? {})) Object.assign(atributosParaFicha, listing?.attributes ?? {});
+      const htmlDescription = aceptaHtml
+        ? await this.generarDescripcionHtml({
+            nombre: enriquecido.name,
+            textoCliente: textoDelCliente,
+            vision,
+            atributos: atributosParaFicha,
+            imagenesDelProducto: dto.imageUrls ?? [],
+            urlsDelCliente,
+          })
+        : null;
+
       // Falabella calcula el envío con las medidas del paquete: se estiman si el cliente no las dio.
       const packageEstimate = dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')
         ? await this.estimarPaquete(textoDelCliente, enriquecido.name, vision)
@@ -187,6 +207,7 @@ export class AiService {
         vision,
         packageEstimate,
         estimatedAttributes,
+        htmlDescription,
         // Lo obligatorio que la IA no pudo deducir: es lo único que el cliente tiene que completar.
         missingAttributes: this.atributosFaltantes(finalJson, categoryRequirements),
       };
@@ -241,6 +262,60 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
       return normalizarPaquete(JSON.parse(respuesta.choices[0]?.message?.content || '{}'));
     } catch (error) {
       console.warn('[AiService] No se pudieron estimar las medidas del paquete:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Redacta la ficha HTML con el estándar de la agencia. La IA solo escribe los textos (en un JSON);
+   * la estructura, los estilos y las imágenes los pone el código, así que la plantilla nunca cambia.
+   * Imágenes: las que el cliente pasó (GIFs) y, si faltan, las fotos del producto.
+   */
+  public async generarDescripcionHtml(datos: {
+    nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
+    imagenesDelProducto: string[]; urlsDelCliente: string[];
+  }): Promise<string | null> {
+    try {
+      const respuesta = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Actúa como un Copywriter Senior y Experto en SEO para E-commerce, especializado en optimizar catálogos para Falabella y otros marketplaces de alto rendimiento.
+Transforma la información del producto en una ficha de ventas persuasiva. Solo redactas los textos; el diseño ya está resuelto.
+
+Reglas:
+- SEO: títulos y descripciones con palabras clave relevantes de forma natural. Que el cliente entienda rápido el valor del producto.
+- COPYWRITING: convierte las características técnicas en beneficios claros.
+- No inventes datos técnicos (medidas, materiales, certificaciones, garantías): usa solo lo que está en la información dada. Si falta un dato, no lo incluyas en "specs".
+- Sin precios, datos de contacto ni menciones a otras tiendas.
+- Español neutro, sin mayúsculas sostenidas ni signos de exclamación en exceso.
+
+Producto: ${datos.nombre}
+Información del cliente: ${datos.textoCliente || '(ninguna)'}
+Tipo de producto: ${datos.vision?.productType ?? 'no indicado'}
+Datos conocidos: ${JSON.stringify(datos.atributos ?? {})}
+
+Responde únicamente este JSON:
+{
+  "title": "título del producto optimizado para SEO",
+  "intro1": "párrafo 1: introducción persuasiva que conecta con el problema del cliente y presenta la solución",
+  "intro2": "párrafo 2: detalle sobre la experiencia de uso o el beneficio principal",
+  "benefits": [ { "subtitle": "beneficio", "text": "descripción corta e impactante", "alt": "texto alternativo SEO de la imagen" } ],
+  "why": [ { "feature": "característica", "benefit": "beneficio que aporta" } ],
+  "specs": [ { "label": "dato técnico", "value": "valor" } ]
+}
+"benefits" debe tener exactamente 4 elementos, "why" hasta 6 y "specs" hasta 8.`,
+          },
+        ],
+      });
+      const contenido = normalizarContenido(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), datos.nombre);
+      if (!contenido) return null;
+      return renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto));
+    } catch (error) {
+      console.warn('[AiService] No se pudo generar la descripción HTML:', error);
       return null;
     }
   }

@@ -10,6 +10,7 @@ import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { ProductVision } from './product-vision.service';
+import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 
 export interface FalabellaPrepReport {
     listo: boolean;
@@ -18,6 +19,8 @@ export interface FalabellaPrepReport {
     brand: { value: string; replaced: boolean; original?: string };
     measures: { width: number | null; length: number | null; height: number | null; weight: number | null; estimated: boolean };
     estimatedAttributes: string[];
+    /** Se redactó la descripción HTML estándar en este paso. */
+    descriptionGenerated: boolean;
 }
 
 const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
@@ -74,6 +77,23 @@ export class FalabellaAutoPrepService {
                 categoryId = elegida;
                 ids.falabella_category_id = elegida;
                 categoriaAuto = true;
+            }
+        }
+
+        // ── Descripción HTML estándar de la agencia ──
+        let descripcionGenerada = false;
+        if (!attrs.descriptionHtml) {
+            const html = await this.ai.generarDescripcionHtml({
+                nombre,
+                textoCliente: quitarUrls(product.description),
+                vision,
+                atributos: attrs,
+                imagenesDelProducto: (product.images ?? []).map((i) => i.url).filter(Boolean),
+                urlsDelCliente: extraerUrlsDeImagen(`${product.name} ${product.description ?? ''}`),
+            });
+            if (html) {
+                attrs.descriptionHtml = html;
+                descripcionGenerada = true;
             }
         }
 
@@ -144,6 +164,7 @@ export class FalabellaAutoPrepService {
                 estimated: estimated.measures,
             },
             estimatedAttributes: estimated.attributes.falabella ?? estimadosAhora,
+            descriptionGenerated: descripcionGenerada,
         };
     }
 }
