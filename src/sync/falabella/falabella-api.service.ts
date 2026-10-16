@@ -776,14 +776,17 @@ export class FalabellaApiService {
         const lista = [...new Set(skus.map(s => String(s).trim()).filter(Boolean))].slice(0, 100);
         if (!lista.length) return motivos;
         const body = await this.call<any>(credentials, 'GetQcStatus', { SkuSellerList: JSON.stringify(lista), Limit: 100, Offset: 0 });
-        const filas = [].concat(body?.Products?.Product ?? body?.QcStatus?.Product ?? body?.Product ?? []).filter(Boolean) as any[];
+        // Respuesta real: { Status: { State: [{ SellerSKU, Status: 'rejected', Reason }] } } (el mismo SKU puede repetirse).
+        const filas = [].concat(body?.Status?.State ?? body?.Products?.Product ?? body?.QcStatus?.Product ?? body?.Product ?? []).filter(Boolean) as any[];
         for (const f of filas) {
-            const sku = String(f?.SellerSku ?? '').trim();
+            const sku = String(f?.SellerSKU ?? f?.SellerSku ?? '').trim();
+            const estado = String(f?.Status ?? '').toLowerCase();
             const crudo = f?.Reason ?? f?.RejectReason ?? f?.RejectionReason ?? f?.QcReason ?? f?.Comment ?? f?.Comments ?? f?.Reasons;
             const texto = Array.isArray(crudo)
                 ? crudo.map((r: any) => (typeof r === 'string' ? r : r?.Reason ?? r?.Name ?? r?.Comment ?? '')).filter(Boolean).join('; ')
                 : typeof crudo === 'string' ? crudo : crudo?.Reason ?? '';
-            if (sku && texto) motivos.set(sku, String(texto).trim());
+            const limpio = String(texto).replace(/\\"/g, '"').replace(/\s+/g, ' ').trim();
+            if (sku && limpio && (!estado || estado === 'rejected') && !motivos.has(sku)) motivos.set(sku, limpio.slice(0, 700));
         }
         // Si Falabella respondió pero no se pudo sacar ningún motivo, queda la respuesta a la vista para ajustar la lectura.
         if (!motivos.size) this.logger.warn(`GetQcStatus sin motivo legible. Respuesta: ${JSON.stringify(body).slice(0, 1200)}`);
