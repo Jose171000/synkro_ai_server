@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleIni
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
+import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -30,11 +31,7 @@ import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/curren
  * Atributos obligatorios que ya se mandan como campos fijos del producto:
  * no hay que volver a pedirselos a quien carga el catalogo.
  */
-const ATRIBUTOS_YA_CUBIERTOS = new Set([
-    'name', 'brand', 'description', 'primary_category', 'seller_sku',
-    'condition_type', 'package_width', 'package_length', 'package_height',
-    'package_weight', 'variation', 'price', 'stock', 'status',
-]);
+const ATRIBUTOS_YA_CUBIERTOS = ATRIBUTOS_DE_SISTEMA;
 
 /** Por debajo de estas unidades se avisa que un producto se agota. */
 const LOW_STOCK_THRESHOLD = 5;
@@ -1292,8 +1289,11 @@ export class SyncService implements OnModuleInit {
         const faltantes: string[] = [];
         const propios: Record<string, string> = {};
 
+        const noAplican = atributosQueNoAplican(attributes);
         for (const attribute of categoryAttributes) {
             if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name)) continue;
+            // Falabella ya respondió que este no aplica a la categoría de este producto.
+            if (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name))) continue;
 
             const bruto = this.buscarAtributo(attributes, attribute.name);
             const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
@@ -1699,9 +1699,17 @@ export class SyncService implements OnModuleInit {
                 const fichas = await this.falabellaApi.getProductsBySku(credentials, [sku]).catch(() => []);
                 if (fichas.length) error = undefined;
             }
+            // «X, Y is/are not applicable to <categoría>»: se anotan para no volver a enviarlos y que el siguiente intento pase.
+            const noAplican = leerAtributosNoAplicables(error);
+            if (noAplican.length && link.product) {
+                const previos: string[] = (link.product.aiAttributes as any)?._noAplica ?? [];
+                await this.productRepository.update(link.product.id, {
+                    aiAttributes: { ...((link.product.aiAttributes as any) || {}), _noAplica: [...new Set([...previos, ...noAplican])] },
+                } as any);
+            }
             if (error) {
                 link.syncStatus = 'error';
-                link.lastError = error;
+                link.lastError = noAplican.length ? `${error} — se quitaron esos datos: vuelve a publicar.` : error;
             } else {
                 link.syncStatus = 'published';
                 link.lastError = null as any;

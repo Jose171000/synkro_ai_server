@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CategoryAttribute, MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
 import { CategorySeederService } from '../categories/category-seeder.service';
+import { ATRIBUTOS_DE_SISTEMA } from '../sync/falabella/falabella-fields';
 import { MeliApiService } from '../sync/meli/meli-api.service';
 import { FalabellaApiService, FalabellaCredentials } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
@@ -19,11 +20,7 @@ const VIGENCIA_MS = 30 * 24 * 3600 * 1000;
 const MAX_LABEL = 500;
 
 /** Datos que la plataforma ya cubre por su cuenta al publicar en Falabella. */
-const YA_CUBIERTOS_FALABELLA = new Set([
-    'name', 'brand', 'description', 'primary_category', 'seller_sku',
-    'condition_type', 'package_width', 'package_length', 'package_height',
-    'package_weight', 'variation', 'price', 'stock', 'status',
-]);
+const YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
 /** Atributos de Mercado Libre que se resuelven aparte (marca y modelo ya van en la publicación). */
 const YA_CUBIERTOS_MELI = new Set(['BRAND', 'MODEL']);

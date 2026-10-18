@@ -7,12 +7,9 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { SaveSheetDto } from './dto/save-sheet.dto';
+import { ATRIBUTOS_DE_SISTEMA } from './falabella/falabella-fields';
 
-const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = new Set([
-    'name', 'brand', 'description', 'primary_category', 'seller_sku',
-    'condition_type', 'package_width', 'package_length', 'package_height',
-    'package_weight', 'variation', 'price', 'stock', 'status',
-]);
+const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
 const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
 

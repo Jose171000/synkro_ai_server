@@ -10,6 +10,7 @@ import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { ProductVision } from './product-vision.service';
+import { ATRIBUTOS_DE_SISTEMA } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 
 export interface FalabellaPrepReport {
@@ -26,11 +27,7 @@ export interface FalabellaPrepReport {
 }
 
 /** Datos que la plataforma ya cubre por su cuenta al publicar en Falabella. */
-const CUBIERTOS = new Set([
-    'name', 'brand', 'description', 'primary_category', 'seller_sku',
-    'condition_type', 'package_width', 'package_length', 'package_height',
-    'package_weight', 'variation', 'price', 'stock', 'status',
-]);
+const CUBIERTOS = ATRIBUTOS_DE_SISTEMA;
 
 const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 

@@ -633,3 +633,32 @@ describe('enviar solo los cambios de contenido a cada canal', () => {
         expect(trabajos[0].d).toMatchObject({ productId: 'p1', connectionId: 'fa1', marketplace: 'falabella' });
     });
 });
+
+describe('campos de sistema y atributos que Falabella dijo que no aplican', () => {
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+    const base = (attrs: any) => ({
+        id: 'p1', sku: 'MK-1', name: 'Torre', price: 480, stock: 5, description: 'Torre de madera para niños',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 3,
+        marketplaceIds: { falabella_category_id: '956' }, aiAttributes: { brand: 'GENERICO', ...attrs },
+        store: { id: 't1' }, owner: { id: 'u1' }, images: [],
+    });
+    const atributo = (name: string) => ({ name, feedName: name.replace(/_(w)/g, (_m, c) => c.toUpperCase()), label: name, isMandatory: false, inputType: 'textField', options: [], description: '' });
+
+    it('ParentSku, TaxClass y ShipmentType nunca se envían, aunque el producto tenga un valor guardado', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(
+            base({ parent_sku: 'X', tax_class: 'IGV', shipment_type: 'dropshipping', garantia: '12 meses' }), 'active',
+            [atributo('parent_sku'), atributo('tax_class'), atributo('shipment_type'), atributo('garantia')],
+        );
+        expect(Object.keys(r.input.extraAttributes)).toEqual(['garantia']);
+    });
+
+    it('un atributo que Falabella ya dijo que no aplica a la categoría se deja de enviar', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(
+            base({ color: 'Azul', garantia: '12 meses', _noAplica: ['Color'] }), 'active',
+            [atributo('color'), atributo('garantia')],
+        );
+        expect(r.input.extraAttributes).toEqual({ garantia: '12 meses' });
+    });
+});
