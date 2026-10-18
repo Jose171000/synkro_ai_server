@@ -25,6 +25,13 @@ export interface FalabellaPrepReport {
     attributes: { filled: number; total: number };
 }
 
+/** Datos que la plataforma ya cubre por su cuenta al publicar en Falabella. */
+const CUBIERTOS = new Set([
+    'name', 'brand', 'description', 'primary_category', 'seller_sku',
+    'condition_type', 'package_width', 'package_length', 'package_height',
+    'package_weight', 'variation', 'price', 'stock', 'status',
+]);
+
 const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
 /**
@@ -143,7 +150,7 @@ export class FalabellaAutoPrepService {
                 return v === null || v === undefined || String(v).trim() === '';
             });
             if (faltantes.length) {
-                const r = await this.ai.completarAtributos(nombre, descripcion, faltantes, { marca: attrs.brand, color: attrs.color });
+                const r = await this.ai.completarAtributos(nombre, descripcion, faltantes, { marca: attrs.brand, color: attrs.color }, this.contextoDe(product, attrs, vision));
                 attrs = { ...attrs, ...r.values };
                 estimadosAhora = r.estimated;
                 estimated.attributes.falabella = [...new Set([...(estimated.attributes.falabella ?? []), ...r.estimated])];
@@ -179,6 +186,53 @@ export class FalabellaAutoPrepService {
             descriptionGenerated: descripcionGenerada,
             attributes: { filled: llenos, total: totalAtributos },
         };
+    }
+
+    /** Todo lo que se sabe del producto, para que la IA llene los atributos con la mayor información posible. */
+    private contextoDe(product: any, attrs: Record<string, any>, vision: any) {
+        const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
+            ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
+            : undefined;
+        return { textoCliente: quitarUrls(product.description), vision, medidas, sku: product.sku };
+    }
+
+    /**
+     * Valores sugeridos para TODOS los atributos de una categoría de Falabella, sin guardar nada. Sirve al elegir
+     * o cambiar la categoría: los campos aparecen ya llenos con lo que se pudo sacar del producto.
+     */
+    async sugerirAtributos(scope: SyncScope, productId: string, categoryId: string, connectionId?: string) {
+        const product = await this.sync.findScopedProduct(scope, productId);
+        const connection = await this.sync.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const creds = this.sync.credentialsOf(connection);
+        const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        const vision = (attrs.vision as ProductVision | undefined) ?? null;
+
+        const definiciones = (await this.falabella.getCategoryAttributes(creds, categoryId)).filter((a) => !CUBIERTOS.has(a.name));
+        const actuales: Record<string, string> = {};
+        const faltantes = [] as { name: string; description: string; example: string; isRequired: boolean; options?: string[] }[];
+        for (const a of definiciones) {
+            const v = this.sync.buscarAtributo(attrs, a.name);
+            if (v !== null && v !== undefined && String(v).trim() !== '') {
+                actuales[a.name] = String(v);
+                continue;
+            }
+            faltantes.push({
+                name: a.name,
+                description: [a.label || a.name, a.description].filter(Boolean).join(' — '),
+                example: a.options?.[0] ?? '',
+                isRequired: a.isMandatory,
+                ...(a.options?.length ? { options: a.options } : {}),
+            });
+        }
+
+        const r = await this.ai.completarAtributos(
+            product.aiTitle || product.name,
+            product.aiDescription || product.description || product.name,
+            faltantes.slice(0, 80),
+            { marca: attrs.brand, color: attrs.color },
+            this.contextoDe(product, attrs, vision),
+        );
+        return { values: { ...actuales, ...r.values }, estimated: r.estimated, filled: Object.keys(r.values).length, total: definiciones.length };
     }
 
     /**

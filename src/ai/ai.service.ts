@@ -347,7 +347,14 @@ Responde únicamente este JSON:
    * Completa de una vez los datos obligatorios de una categoría. Devuelve los valores y cuáles son estimados
    * (los que no se podían deducir y se eligió el más probable).
    */
-  public async completarAtributos(nombre: string, descripcion: string, atributos: CategoryAttribute[], conocidos: Record<string, any> = {}) {
+  public async completarAtributos(
+    nombre: string,
+    descripcion: string,
+    atributos: CategoryAttribute[],
+    conocidos: Record<string, any> = {},
+    /** Todo lo que se sabe del producto: lo que escribió el cliente, lo que se ve en las fotos, las medidas y el SKU. */
+    contexto: { textoCliente?: string; vision?: any; medidas?: string; sku?: string } = {},
+  ) {
     // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
     if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[] };
     try {
@@ -359,16 +366,25 @@ Responde únicamente este JSON:
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
           {
             role: 'user',
-            content: `Completa los datos obligatorios de este producto para publicarlo.
-Producto: ${nombre}
-Descripción: ${descripcion}
+            content: `Completa los datos de la ficha de este producto para publicarlo en un marketplace. Usa TODA la información disponible.
+Título: ${nombre}
+Texto que escribió el cliente: ${contexto.textoCliente || '(ninguno)'}
+Descripción redactada: ${descripcion}
+Lo que se ve en las fotos: ${contexto.vision ? JSON.stringify(contexto.vision) : '(sin fotos analizadas)'}
+Medidas y peso del paquete: ${contexto.medidas || 'no indicados'}
+SKU: ${contexto.sku || '-'}
 Datos ya conocidos: ${JSON.stringify(conocidos)}
 
 Datos a completar:
 ${lista}
 
+Reglas:
+- Completa TODO dato que se pueda sacar o deducir razonablemente de la información de arriba: material, color, grupo de edad, contenido del empaque, cantidad de piezas, peso o medidas del producto, tipo, uso, país de origen si se menciona, etc. No te quedes corto: un dato que se puede deducir y queda vacío baja la calidad de la ficha.
+- Los campos de nombre en otro idioma (inglés, chino…) se llenan traduciendo el título del producto.
+- «Detalle de la condición»: si el producto es nuevo, "Producto nuevo".
+- Garantías (meses o condiciones), certificaciones, números de serie, códigos EAN/UPC y datos legales: solo si el cliente los escribió; si no, null.
 - OBLIGATORIO que no se puede deducir: ESTIMA el valor más probable (con lista de opciones, la más cercana; si no, un valor genérico típico) y añade su nombre a "_estimated".
-- Opcional que no se puede deducir con seguridad del producto: devuelve null. No inventes.
+- Opcional que de verdad no se puede deducir: null. No inventes datos que cambian lo que compra el cliente (garantías, certificaciones).
 - Si el dato lleva unidad de medida (peso, capacidad, garantía), escríbela junto al número (ej. "9 kg", "12 meses"), tal como indique su descripción.
 - Si hay lista de opciones, el valor debe ser idéntico a una de ellas.
 Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...] }`,

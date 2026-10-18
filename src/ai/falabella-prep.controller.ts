@@ -17,6 +17,15 @@ class PrepareAutoDto {
     regenerar?: boolean;
 }
 
+class SuggestDto {
+    @IsString()
+    categoryId: string;
+
+    @IsOptional()
+    @IsString()
+    connectionId?: string;
+}
+
 class LaunchDto {
     @IsArray()
     @ArrayNotEmpty()
@@ -46,6 +55,19 @@ export class FalabellaPrepController {
     })
     prepare(@Param('id') id: string, @Body() dto: PrepareAutoDto, @Req() req) {
         return this.prep.preparar({ userId: req.user.id, storeId: req.store.storeId }, id, dto?.connectionId, { regenerar: dto?.regenerar });
+    }
+
+    @Post('products/:id/suggest-falabella-attributes')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Valores sugeridos para todos los atributos de una categoría de Falabella',
+        description: 'No guarda nada: sirve para que, al elegir la categoría, los campos aparezcan llenos con lo que se pudo sacar del producto.',
+    })
+    suggest(@Param('id') id: string, @Body() dto: SuggestDto, @Req() req) {
+        return this.prep.sugerirAtributos({ userId: req.user.id, storeId: req.store.storeId }, id, dto.categoryId, dto.connectionId);
     }
 
     @Post('products/:id/launch')

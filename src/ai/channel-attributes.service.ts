@@ -166,7 +166,7 @@ export class ChannelAttributesService {
         // Falabella rechaza el lote si falta un obligatorio; los opcionales suben la calidad del contenido (hasta 40).
         if (marketplace === 'falabella') {
             return todos
-                ? [...atributos.filter((a) => a.isRequired), ...atributos.filter((a) => !a.isRequired).slice(0, 40)]
+                ? [...atributos.filter((a) => a.isRequired), ...atributos.filter((a) => !a.isRequired).slice(0, 80)]
                 : atributos.filter((a) => a.isRequired);
         }
         return paraLaIa(atributos);
