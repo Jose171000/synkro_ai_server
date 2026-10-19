@@ -87,7 +87,7 @@ async function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?
         set: jest.fn(async (k: string) => { if (aplicadas.has(k)) return null; aplicadas.add(k); return 'OK'; }),
         get: jest.fn(), setex: jest.fn(), del: jest.fn(),
     };
-    const cola = { add: jest.fn(async (n: string, d: any) => { trabajos.push({ n, d }); }), upsertJobScheduler: jest.fn().mockResolvedValue(undefined) };
+    const cola = { add: jest.fn(async (n: string, d: any, o?: any) => { trabajos.push({ n, d, o }); }), upsertJobScheduler: jest.fn().mockResolvedValue(undefined) };
 
     const modulo = await Test.createTestingModule({
         providers: [
@@ -741,5 +741,36 @@ describe('si falla la comprobación de un envío a Falabella', () => {
         expect(r2.status).toBe('timeout');
         expect(trabajos).toHaveLength(1);
         expect(avisos[0]).toMatchObject({ type: 'publish-error', title: expect.stringContaining('No se pudo comprobar') });
+    });
+});
+
+describe('varias publicaciones a la vez en Falabella', () => {
+    const prod = { id: 'p1', sku: 'MK-1', price: 480, stock: 5, store: { id: 't1' }, owner: { id: 'u1' } };
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+
+    it('el envío a Falabella se reintenta (5 veces, con espera creciente) y el de Mercado Libre no', async () => {
+        const { service, trabajos } = await construir({ conexiones: [fal(), cuenta()], productos: [prod] });
+        await service.enqueuePublish(SCOPE, 'p1', ['falabella'], { falabella: 'fa1' });
+        await service.enqueuePublish(SCOPE, 'p1', ['mercadolibre'], { mercadolibre: 'ml1' });
+
+        expect(trabajos[0].o).toEqual({ attempts: 5, backoff: { type: 'exponential', delay: 120_000 } });
+        expect(trabajos[1].o).toBeUndefined();
+    });
+
+    it('un envío que no pudo salir queda con error y su motivo, y avisa; no desaparece sin rastro', async () => {
+        const { service, enlaces, avisos } = await construir({ conexiones: [fal()], productos: [prod] });
+        await service.marcarPublicacionFallida('p1', 'fa1', 'u1', 'Falabella rechazó la petición ProductCreate: E429 Too many requests');
+
+        expect(enlaces[0]).toMatchObject({ marketplace: 'falabella', syncStatus: 'error', lastError: expect.stringContaining('Too many requests') });
+        expect(avisos[0]).toMatchObject({ type: 'publish-error', title: expect.stringContaining('MK-1') });
+    });
+
+    it('si el producto ya estaba publicado, un envío repetido que falla no lo pone en error', async () => {
+        const { service, enlaces } = await construir({
+            conexiones: [fal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'published', product: prod, connection: { id: 'fa1' } }],
+        });
+        await service.marcarPublicacionFallida('p1', 'fa1', 'u1', 'lo que sea');
+        expect(enlaces[0].syncStatus).toBe('published');
     });
 });

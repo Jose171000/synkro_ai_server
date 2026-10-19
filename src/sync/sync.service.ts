@@ -853,7 +853,10 @@ export class SyncService implements OnModuleInit {
                 storeId: scope.storeId,
                 marketplace,
                 connectionId: connection.id,
-            });
+            }, marketplace === 'falabella'
+                // Falabella limita las llamadas de envío (50 seguidas y luego 2 minutos): si se pasa, se reintenta más tarde.
+                ? { attempts: 5, backoff: { type: 'exponential', delay: 120_000 } }
+                : undefined);
         }
 
         if (!encoladas.length) {
@@ -968,6 +971,31 @@ export class SyncService implements OnModuleInit {
      * Maps an internal product (+ its AI-generated content) to the payload
      * Mercado Libre expects.
      */
+    /**
+     * Una publicación en Falabella que no pudo enviarse (límite de llamadas agotado tras varios intentos, error de
+     * Falabella, requisitos sin cumplir) queda a la vista con su motivo, en vez de desaparecer sin avisar.
+     */
+    async marcarPublicacionFallida(productId: string, connectionId: string, userId: string, motivo: string): Promise<void> {
+        const product = await this.productRepository.findOne({ where: { id: productId } });
+        if (!product) return;
+        let link = await this.listingLinkRepository.findOne({ where: { product: { id: productId }, connection: { id: connectionId } } });
+        if (!link) {
+            link = this.listingLinkRepository.create({ marketplace: 'falabella', externalId: product.sku, product, connection: { id: connectionId } as any });
+        }
+        if (link.syncStatus === 'published') return; // ya está en vivo: un envío repetido que falla no lo cambia
+        link.syncStatus = 'error';
+        link.lastError = motivo.slice(0, 500);
+        await this.listingLinkRepository.save(link);
+        await this.notifications.notify(userId, {
+            type: 'publish-error',
+            severity: 'error',
+            title: `No se pudo publicar ${product.sku} en Falabella`,
+            body: motivo.slice(0, 300),
+            marketplace: 'falabella',
+            meta: { productId, connectionId },
+        });
+    }
+
     /** Guarda un producto tal como está (lo usan los flujos que lo completan con IA). */
     async saveProduct(product: Product): Promise<Product> {
         return this.productRepository.save(product);

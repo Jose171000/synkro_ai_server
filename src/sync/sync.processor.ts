@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
+import { Job, UnrecoverableError } from 'bullmq';
 import { SyncService } from './sync.service';
 import { ChangeRequestsService } from './change-requests.service';
 
@@ -35,15 +35,23 @@ export class SyncProcessor extends WorkerHost {
                     // Publicar de a uno pasa por el mismo camino que el lote:
                     // así hay una sola forma de hablar con Falabella, y un
                     // producto suelto es simplemente un lote de uno.
-                    const resultado = await this.syncService.publishBatchToFalabella({ userId, storeId }, connectionId, [productId]);
-                    // Si ya estaba en Falabella (publicado o vinculado) no es un fallo: no hay nada más que enviar.
-                    if (resultado.enviados === 0 && /^ya (est[aá] publicado|exist[ií]a)/.test(resultado.rechazados[0]?.motivo ?? "")) {
-                        return { status: "ya-publicado" };
+                    try {
+                        const resultado = await this.syncService.publishBatchToFalabella({ userId, storeId }, connectionId, [productId]);
+                        // Si ya estaba en Falabella (publicado o vinculado) no es un fallo: no hay nada más que enviar.
+                        if (resultado.enviados === 0 && /^ya (est[aá] publicado|exist[ií]a)/.test(resultado.rechazados[0]?.motivo ?? "")) {
+                            return { status: "ya-publicado" };
+                        }
+                        if (resultado.enviados === 0) {
+                            // No cumple lo que pide Falabella: reintentar no cambiaría nada.
+                            throw new UnrecoverableError(resultado.rechazados[0]?.motivo || 'El producto no cumple los requisitos de Falabella.');
+                        }
+                        return { status: 'enviado', feed: resultado.lotes[0]?.feedId };
+                    } catch (error: any) {
+                        // Con el último intento (o un fallo sin remedio) el motivo queda en el producto y se avisa; antes se perdía.
+                        const ultimo = error instanceof UnrecoverableError || job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+                        if (ultimo) await this.syncService.marcarPublicacionFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
+                        throw error;
                     }
-                    if (resultado.enviados === 0) {
-                        throw new Error(resultado.rechazados[0]?.motivo || 'El producto no cumple los requisitos de Falabella.');
-                    }
-                    return { status: 'enviado', feed: resultado.lotes[0]?.feedId };
                 }
                 throw new Error(`Marketplace no soportado aún: ${marketplace}`);
             }
