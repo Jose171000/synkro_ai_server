@@ -262,6 +262,25 @@ export class SyncController {
         return this.sheets.syncNow(scopeOf(req), id);
     }
 
+    @Post('products/:id/falabella-html-probe')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: qué etiquetas HTML conserva Falabella al enviar la descripción por API' })
+    probeFalabellaHtml(@Param('id') id: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.iniciarSondaHtml(scopeOf(req), id, connectionId);
+    }
+
+    @Get('products/:id/falabella-html-probe')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: resultado de la última prueba de etiquetas HTML' })
+    readProbeFalabellaHtml() {
+        return this.syncService.leerSondaHtml();
+    }
+
     @Get('falabella/brands')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
