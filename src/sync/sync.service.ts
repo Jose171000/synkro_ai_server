@@ -1080,7 +1080,7 @@ export class SyncService implements OnModuleInit {
             throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
         }
 
-        const feedId = await this.falabellaApi.updateProductContent(credentials, [resultado.input]);
+        const feedId = await this.falabellaApi.updateProductContent(credentials, [resultado.input], this.falabellaOperatorCode);
         const feed = await this.feedRepository.save(this.feedRepository.create({
             marketplace: 'falabella',
             externalFeedId: feedId,
@@ -1124,12 +1124,17 @@ export class SyncService implements OnModuleInit {
         ].join('');
         const etiquetas = ['h2', 'h3', 'h4', 'div', 'p', 'b', 'strong', 'i', 'em', 'u', 'br', 'span', 'table', 'thead', 'th', 'tbody', 'tr', 'td', 'ul', 'ol', 'li', 'img', 'a'];
 
+        const categoria = this.categoriaFalabella(product);
+        const atributos = categoria ? await this.falabellaApi.getCategoryAttributes(credentials, categoria).catch(() => []) : [];
+        const base = this.toFalabellaInput(product, 'active', atributos);
+        if ('reason' in base) throw new BadRequestException(`No se puede probar: todavía ${base.reason}.`);
+        const precio = base.input.price;
         const tiene = (texto: string, t: string) => new RegExp(`<${t}(?=[\\s/>])`, 'i').test(texto);
         this.sondaHtml = { estado: 'en curso', pasos: [] };
         void (async () => {
             try {
                 for (const modo of ['cdata', 'escapado'] as const) {
-                    const feedId = await this.falabellaApi.probarDescripcion(credentials, product.sku, prueba, modo);
+                    const feedId = await this.falabellaApi.probarDescripcion(credentials, product.sku, prueba, modo, precio, this.falabellaOperatorCode);
                     let estadoFeed = 'pending';
                     for (let i = 0; i < 40 && !/finished|canceled|error/i.test(estadoFeed); i++) {
                         await new Promise(r => setTimeout(r, 15_000));

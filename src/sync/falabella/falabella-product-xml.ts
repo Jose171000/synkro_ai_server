@@ -192,7 +192,7 @@ export function buildImageFeedXml(items: { sellerSku: string; urls: string[] }[]
  * XML para cambiar el contenido de fichas ya publicadas (ProductUpdate): nombre, descripción, marca y
  * los atributos de la categoría. No toca precio, stock ni categoría.
  */
-export function buildContentUpdateXml(products: FalabellaProductInput[]): string {
+export function buildContentUpdateXml(products: FalabellaProductInput[], options: BuildOptions = { operatorCode: 'fape' }): string {
     const cuerpo = products
         .map(p => {
             const extras = Object.entries(p.extraAttributes ?? {}).map(([name, value]) => tag(name, value)).join('');
@@ -210,6 +210,8 @@ export function buildContentUpdateXml(products: FalabellaProductInput[]): string
                 tag('Name', p.name),
                 `<Description>${cdata(p.description)}</Description>`,
                 tag('Brand', p.brand),
+                // Falabella rechaza el ProductUpdate sin unidad de negocio («BusinessUnits is missing»); basta con operador y precio.
+                `<BusinessUnits><BusinessUnit>${tag('OperatorCode', options.operatorCode)}${tag('Price', p.price.toFixed(2))}</BusinessUnit></BusinessUnits>`,
                 `<ProductData>${productData}</ProductData>`,
                 '</Product>',
             ].join('');

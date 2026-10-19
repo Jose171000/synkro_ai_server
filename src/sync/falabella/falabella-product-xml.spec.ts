@@ -191,7 +191,7 @@ describe('actualizar el contenido de una ficha publicada (ProductUpdate)', () =>
         expect(xml).toContain('<Brand>GENERICO</Brand>');
         expect(xml).toContain('<Material>Madera</Material>');
         expect(xml).toContain('<GrupoDeEdad>2 - 3 años</GrupoDeEdad>');
-        expect(xml).not.toContain('<Price>');
+        expect(xml).toContain('<BusinessUnits><BusinessUnit><OperatorCode>fape</OperatorCode><Price>480.00</Price></BusinessUnit></BusinessUnits>');
         expect(xml).not.toContain('<Stock>');
         expect(xml).not.toContain('PrimaryCategory');
     });

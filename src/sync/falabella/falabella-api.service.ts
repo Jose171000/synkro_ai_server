@@ -765,17 +765,17 @@ export class FalabellaApiService {
     }
 
     /** Cambia nombre, descripción, marca y atributos de fichas ya publicadas. Devuelve el identificador del feed. */
-    async updateProductContent(credentials: FalabellaCredentials, products: FalabellaProductInput[]): Promise<string> {
+    async updateProductContent(credentials: FalabellaCredentials, products: FalabellaProductInput[], operatorCode: string = DEFAULT_OPERATOR): Promise<string> {
         if (!products.length) throw new BadRequestException('No hay fichas que actualizar en Falabella.');
-        const feedId = await this.postFeed(credentials, 'ProductUpdate', buildContentUpdateXml(products));
+        const feedId = await this.postFeed(credentials, 'ProductUpdate', buildContentUpdateXml(products, { operatorCode }));
         this.logger.log(`Contenido de ${products.length} ficha(s) enviado a Falabella. Feed ${feedId}.`);
         return feedId;
     }
 
     /** DIAGNÓSTICO: envía solo la descripción de una ficha, en CDATA o con las etiquetas escapadas. */
-    async probarDescripcion(credentials: FalabellaCredentials, sellerSku: string, html: string, modo: 'cdata' | 'escapado'): Promise<string> {
+    async probarDescripcion(credentials: FalabellaCredentials, sellerSku: string, html: string, modo: 'cdata' | 'escapado', price: number, operatorCode: string): Promise<string> {
         const cuerpo = modo === 'cdata' ? cdata(html) : escapeXml(html);
-        const xml = `<?xml version="1.0" encoding="UTF-8"?><Request><Product><SellerSku>${escapeXml(sellerSku)}</SellerSku><Description>${cuerpo}</Description></Product></Request>`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><Request><Product><SellerSku>${escapeXml(sellerSku)}</SellerSku><Description>${cuerpo}</Description><BusinessUnits><BusinessUnit><OperatorCode>${escapeXml(operatorCode)}</OperatorCode><Price>${price.toFixed(2)}</Price></BusinessUnit></BusinessUnits></Product></Request>`;
         return this.postFeed(credentials, 'ProductUpdate', xml);
     }
 
