@@ -109,6 +109,12 @@ export class SyncProcessor extends WorkerHost {
                 return this.syncService.refreshAllListings();
             }
 
+            case 'falabella-qc': {
+                // Falabella avisó de un cambio de calidad: se leen los estados y se actualizan las fichas.
+                const { connectionId, skus } = job.data;
+                return this.syncService.refreshFalabellaQc(connectionId, skus ?? []);
+            }
+
             case 'falabella-order': {
                 // Se consultan los pedidos recientes: el aviso solo dice que
                 // algo pasó, los datos buenos vienen de la API.

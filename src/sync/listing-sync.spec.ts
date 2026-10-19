@@ -774,3 +774,61 @@ describe('varias publicaciones a la vez en Falabella', () => {
         expect(enlaces[0].syncStatus).toBe('published');
     });
 });
+
+describe('avisos de Falabella: envíos terminados y cambios de calidad', () => {
+    const prod = { id: 'p1', sku: 'MK-1', stock: 5, price: 480 };
+    const cuentaFal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } });
+
+    async function preparar(enlaceEstado = 'pending') {
+        const t = await construir({
+            conexiones: [cuentaFal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: enlaceEstado, product: prod, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        return t;
+    }
+
+    it('un aviso de envío terminado programa la comprobación de ese envío al instante', async () => {
+        const { service, trabajos } = await preparar();
+        (service as any).feedRepository = { findOne: jest.fn(async () => ({ id: 'f1', externalFeedId: 'ext-9' })) };
+        await service.handleFalabellaNotification('tok-1', { event: 'onFeedCompleted', payload: { FeedId: 'ext-9' } });
+        expect(trabajos[0]).toMatchObject({ n: 'falabella-feed', d: { feedRecordId: 'f1', intento: 0 } });
+    });
+
+    it('un aviso de calidad programa la lectura del estado de ese SKU; uno de ventas sigue yendo a los pedidos', async () => {
+        const { service, trabajos } = await preparar();
+        await service.handleFalabellaNotification('tok-1', { event: 'onProductQcStatusChanged', payload: { SellerSku: 'MK-1' } });
+        await service.handleFalabellaNotification('tok-1', { event: 'onOrderCreated', payload: { OrderId: '55' } });
+        expect(trabajos[0]).toMatchObject({ n: 'falabella-qc', d: { connectionId: 'fa1', skus: ['MK-1'] } });
+        expect(trabajos[1]).toMatchObject({ n: 'falabella-order' });
+    });
+
+    it('un testigo desconocido se ignora sin encolar nada', async () => {
+        const { service, trabajos } = await preparar();
+        await service.handleFalabellaNotification('otro', { event: 'onFeedCompleted', payload: { FeedId: 'x' } });
+        expect(trabajos).toHaveLength(0);
+    });
+
+    it('calidad aprobada → publicada y avisa; rechazada → error con el motivo de Falabella', async () => {
+        const aprobada = await preparar('pending');
+        aprobada.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'approved', reason: '' }]);
+        const r1 = await aprobada.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(r1).toEqual({ aprobadas: 1, rechazadas: 0 });
+        expect(aprobada.enlaces[0]).toMatchObject({ syncStatus: 'published', lastError: null });
+        expect(aprobada.avisos[0]).toMatchObject({ type: 'publish', title: expect.stringContaining('aprobó') });
+
+        const rechazada = await preparar('published');
+        rechazada.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        const r2 = await rechazada.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(r2).toEqual({ aprobadas: 0, rechazadas: 1 });
+        expect(rechazada.enlaces[0]).toMatchObject({ syncStatus: 'error', lastError: expect.stringContaining('Images Missing') });
+        expect(rechazada.avisos[0]).toMatchObject({ type: 'publish-error' });
+    });
+
+    it('sin SKU en el aviso revisa las fichas que esperan o fallaron, y no toca las ya publicadas', async () => {
+        const { service, falabella } = await preparar('published');
+        falabella.getQcStates = jest.fn(async () => []);
+        const r = await service.refreshFalabellaQc('fa1', []);
+        expect(r).toEqual({ aprobadas: 0, rechazadas: 0 });
+        expect(falabella.getQcStates).not.toHaveBeenCalled();
+    });
+});

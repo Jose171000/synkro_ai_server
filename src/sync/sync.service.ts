@@ -1330,7 +1330,7 @@ export class SyncService implements OnModuleInit {
 
         const noAplican = atributosQueNoAplican(attributes);
         for (const attribute of categoryAttributes) {
-            if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name)) continue;
+            if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name) || ATRIBUTOS_YA_CUBIERTOS.has(attribute.feedName)) continue;
             // Falabella ya respondió que este no aplica a la categoría de este producto.
             if (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name))) continue;
 
@@ -2102,7 +2102,7 @@ export class SyncService implements OnModuleInit {
     // ─────────────────────────────────────────────────────────────
 
     /** Eventos que nos interesan: una venta nueva y los cambios de estado. */
-    private readonly FALABELLA_EVENTS = ['onOrderCreated', 'onOrderItemsStatusChanged'];
+    private readonly FALABELLA_EVENTS = ['onOrderCreated', 'onOrderItemsStatusChanged', 'onFeedCompleted', 'onProductQcStatusChanged'];
 
     /** URL pública de este servidor, a la que Falabella enviará los avisos. */
     private get publicApiUrl(): string {
@@ -2131,6 +2131,11 @@ export class SyncService implements OnModuleInit {
         }
 
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        return this.registrarAvisosDeFalabella(connection);
+    }
+
+    /** Da de alta (o pone al día) el webhook de una cuenta de Falabella. */
+    private async registrarAvisosDeFalabella(connection: MarketplaceConnection) {
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
 
         // El testigo se conserva entre llamadas: si ya había uno, se reutiliza
@@ -2143,8 +2148,13 @@ export class SyncService implements OnModuleInit {
         const ajenos = existentes.filter(w => w.CallbackUrl !== callbackUrl);
         const yaEsta = existentes.find(w => w.CallbackUrl === callbackUrl);
 
-        let webhookId = yaEsta?.WebhookId;
-        if (!yaEsta) {
+        // Un aviso registrado antes de que se añadieran más eventos (envíos terminados, calidad) se vuelve a crear con todos.
+        const eventosDelAviso = JSON.stringify(yaEsta?.Events ?? '');
+        const completo = !!yaEsta && this.FALABELLA_EVENTS.every(e => eventosDelAviso.includes(e));
+        if (yaEsta && !completo) await this.falabellaApi.deleteWebhook(credentials, yaEsta.WebhookId);
+
+        let webhookId = completo ? yaEsta?.WebhookId : undefined;
+        if (!completo) {
             webhookId = await this.falabellaApi.createWebhook(
                 credentials,
                 callbackUrl,
@@ -2156,12 +2166,79 @@ export class SyncService implements OnModuleInit {
         await this.connectionRepository.save(connection);
 
         return {
-            message: yaEsta
-                ? 'El aviso de ventas ya estaba configurado.'
-                : 'Falabella avisará a Synkro de cada venta nueva.',
+            message: completo
+                ? 'Los avisos de Falabella ya estaban configurados.'
+                : 'Falabella avisará a Synkro de cada venta nueva, de cada envío terminado y de cada cambio de calidad de las fichas.',
             callbackUrl,
             otrosWebhooks: ajenos.map(w => w.CallbackUrl),
         };
+    }
+
+    /**
+     * Al arrancar, las cuentas de Falabella sin aviso (o con uno antiguo) lo reciben. Es una consulta por cuenta y
+     * no hace nada si ya está completo. Sin PUBLIC_API_URL no se puede registrar: Falabella no sabría dónde avisar.
+     */
+    async asegurarAvisosDeFalabella(): Promise<void> {
+        if (!this.publicApiUrl) {
+            console.warn('[Sync] PUBLIC_API_URL no está definida: Falabella no puede avisar de ventas, envíos terminados ni cambios de calidad (se sigue consultando cada pocos minutos).');
+            return;
+        }
+        try {
+            const cuentas = await this.connectionRepository.find({ where: { marketplace: 'falabella', status: 'active' }, relations: { owner: true, store: true } });
+            for (const cuenta of cuentas) {
+                try {
+                    await this.registrarAvisosDeFalabella(await this.getValidConnectionById(cuenta.id));
+                } catch (error: any) {
+                    console.warn(`[Sync] No se pudo dejar al día el aviso de Falabella de ${cuenta.externalUserId}: ${error?.message}`);
+                }
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] Avisos de Falabella: ${error?.message}`);
+        }
+    }
+
+    /**
+     * Pone al día el estado de calidad de fichas concretas (o de las que esperan, si no se dice cuáles). Lo dispara
+     * el aviso «cambió la calidad de un producto»: aprobada → publicada; rechazada → error con su motivo.
+     */
+    async refreshFalabellaQc(connectionId: string, skus: string[] = []): Promise<{ aprobadas: number; rechazadas: number }> {
+        const conexion = await this.getValidConnectionById(connectionId);
+        const credenciales = this.credentialsOf(conexion);
+        const enlaces = await this.listingLinkRepository.find({
+            where: { connection: { id: connectionId }, marketplace: 'falabella' },
+            relations: { product: true, connection: { owner: true } },
+        });
+        const lista = skus.length
+            ? enlaces.filter(e => skus.map(x => x.trim().toLowerCase()).includes(e.product.sku.trim().toLowerCase()))
+            : enlaces.filter(e => e.syncStatus === 'pending' || e.syncStatus === 'error');
+        if (!lista.length) return { aprobadas: 0, rechazadas: 0 };
+
+        const estados = await this.falabellaApi.getQcStates(credenciales, lista.map(e => e.product.sku));
+        const porSku = new Map(estados.map(e => [e.sku.toLowerCase(), e]));
+        let aprobadas = 0;
+        let rechazadas = 0;
+        for (const enlace of lista) {
+            const estado = porSku.get(enlace.product.sku.trim().toLowerCase());
+            if (!estado) continue;
+            const userId = enlace.connection?.owner?.id;
+            if (estado.status === 'approved' && enlace.syncStatus !== 'published') {
+                enlace.syncStatus = 'published';
+                enlace.lastError = null as any;
+                enlace.lastSyncedAt = new Date();
+                await this.listingLinkRepository.save(enlace);
+                aprobadas++;
+                if (userId) await this.notifications.notify(userId, { type: 'publish', severity: 'success', title: `Falabella aprobó ${enlace.product.sku}`, body: 'La ficha pasó el control de calidad y ya está a la venta.', marketplace: 'falabella', meta: { productId: enlace.product.id } });
+            } else if (estado.status === 'rejected') {
+                const motivo = estado.reason ? `Falabella rechazó la ficha: ${estado.reason}` : 'Falabella rechazó la ficha en su control de calidad.';
+                const cambio = enlace.syncStatus !== 'error' || enlace.lastError !== motivo;
+                enlace.syncStatus = 'error';
+                enlace.lastError = motivo;
+                await this.listingLinkRepository.save(enlace);
+                rechazadas++;
+                if (cambio && userId) await this.notifications.notify(userId, { type: 'publish-error', severity: 'error', title: `Falabella rechazó ${enlace.product.sku}`, body: motivo.slice(0, 300), marketplace: 'falabella', meta: { productId: enlace.product.id } });
+            }
+        }
+        return { aprobadas, rechazadas };
     }
 
     /**
@@ -2179,6 +2256,28 @@ export class SyncService implements OnModuleInit {
         const connection = await this.findConnectionByWebhookToken(token);
         if (!connection) {
             console.warn('[Sync] Aviso de Falabella con un testigo desconocido. Se ignora.');
+            return { received: true };
+        }
+
+        const evento = String(body?.event ?? body?.Event ?? body?.eventName ?? body?.type ?? '');
+        const carga = body?.payload ?? body?.Payload ?? body ?? {};
+
+        // Envío terminado: se comprueba al instante, sin esperar la próxima consulta periódica.
+        if (/feed/i.test(evento)) {
+            console.log(`[Sync] Aviso de Falabella «${evento}»: ${JSON.stringify(body).slice(0, 400)}`);
+            const externalFeedId = String(carga?.FeedId ?? carga?.FeedID ?? carga?.feedId ?? carga?.Feed ?? '');
+            const feed = externalFeedId ? await this.feedRepository.findOne({ where: { externalFeedId } }) : null;
+            if (feed) {
+                await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId: connection.owner.id, intento: 0 }, { delay: 3_000 });
+            }
+            return { received: true };
+        }
+
+        // Cambió la calidad de una ficha: aprobada o rechazada (con motivo).
+        if (/qc|product/i.test(evento)) {
+            console.log(`[Sync] Aviso de Falabella «${evento}»: ${JSON.stringify(body).slice(0, 400)}`);
+            const sku = String(carga?.SellerSku ?? carga?.SellerSKU ?? carga?.sellerSku ?? carga?.Sku ?? '').trim();
+            await this.syncQueue.add('falabella-qc', { connectionId: connection.id, skus: sku ? [sku] : [] }, { delay: 3_000 });
             return { received: true };
         }
 
@@ -2716,6 +2815,7 @@ export class SyncService implements OnModuleInit {
      * ORDER_POLL_MINUTES=0 la desactiva.
      */
     async onModuleInit() {
+        void this.asegurarAvisosDeFalabella();
         const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
         if (!(minutos > 0)) return;
         try {

@@ -4,7 +4,7 @@
  * impuestos, tipo de envío, variantes). Enviarlos puede hacer que Falabella rechace la ficha con
  * «… is/are not applicable to <categoría>».
  */
-export const ATRIBUTOS_DE_SISTEMA = new Set([
+const LISTA_DE_SISTEMA = [
     // Los cubre la plataforma al publicar
     'name', 'brand', 'description', 'primary_category', 'seller_sku',
     'condition_type', 'package_width', 'package_length', 'package_height',
@@ -12,10 +12,24 @@ export const ATRIBUTOS_DE_SISTEMA = new Set([
     // De sistema: no aplican a todas las categorías y no son datos del producto
     'parent_sku', 'tax_class', 'shipment_type', 'product_id', 'shop_sku',
     'sale_price', 'sale_start_date', 'sale_end_date', 'quantity', 'product_group', 'operator_code',
-]);
+];
 
 /** Nombre normalizado de un atributo, para compararlo sin importar mayúsculas, guiones o guiones bajos. */
 export const claveDeAtributo = (nombre: string) => String(nombre ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const CLAVES_DE_SISTEMA = new Set(LISTA_DE_SISTEMA.map(claveDeAtributo));
+
+/**
+ * Los nombres de los atributos llegan escritos de varias formas según la categoría («tax_class», «TaxClass»,
+ * «taxclass»…): la comparación ignora mayúsculas, guiones y guiones bajos.
+ */
+class ConjuntoDeSistema extends Set<string> {
+    has(nombre: string): boolean {
+        return CLAVES_DE_SISTEMA.has(claveDeAtributo(nombre));
+    }
+}
+
+export const ATRIBUTOS_DE_SISTEMA: Set<string> = new ConjuntoDeSistema(LISTA_DE_SISTEMA);
 
 /**
  * Atributos que Falabella respondió que «no aplican» a la categoría de este producto. Se guardan en el

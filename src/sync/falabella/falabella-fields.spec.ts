@@ -5,6 +5,14 @@ describe('campos de sistema de Falabella', () => {
         for (const n of ['parent_sku', 'tax_class', 'shipment_type', 'product_id']) expect(ATRIBUTOS_DE_SISTEMA.has(n)).toBe(true);
     });
 
+    it('los reconoce escritos de cualquier forma: TaxClass, taxclass, tax-class, Shipment_Type…', () => {
+        for (const n of ['TaxClass', 'taxclass', 'tax-class', 'Tax_Class', 'ShipmentType', 'shipment-type', 'ParentSku', 'PARENT_SKU']) {
+            expect(ATRIBUTOS_DE_SISTEMA.has(n)).toBe(true);
+        }
+        expect(ATRIBUTOS_DE_SISTEMA.has('Material')).toBe(false);
+        expect(ATRIBUTOS_DE_SISTEMA.has('color')).toBe(false);
+    });
+
     it('lee del mensaje de Falabella qué atributos no aplican a la categoría', () => {
         expect(leerAtributosNoAplicables('0: ParentSku, TaxClass, ShipmentType is/are not applicable to Bebés'))
             .toEqual(['ParentSku', 'TaxClass', 'ShipmentType']);

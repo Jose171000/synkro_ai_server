@@ -805,6 +805,25 @@ export class FalabellaApiService {
         return motivos;
     }
 
+    /** Estado de calidad de cada ficha: aprobada, rechazada (con su motivo) o pendiente. */
+    async getQcStates(credentials: FalabellaCredentials, skus: string[]): Promise<{ sku: string; status: string; reason: string }[]> {
+        const lista = [...new Set(skus.map(s => String(s).trim()).filter(Boolean))].slice(0, 100);
+        if (!lista.length) return [];
+        const body = await this.call<any>(credentials, 'GetQcStatus', { SkuSellerList: JSON.stringify(lista), Limit: 100, Offset: 0 });
+        const filas = [].concat(body?.Status?.State ?? body?.Products?.Product ?? []).filter(Boolean) as any[];
+        const salida = new Map<string, { sku: string; status: string; reason: string }>();
+        for (const f of filas) {
+            const sku = String(f?.SellerSKU ?? f?.SellerSku ?? '').trim();
+            if (!sku) continue;
+            const status = String(f?.Status ?? '').toLowerCase();
+            const reason = String(typeof f?.Reason === 'string' ? f.Reason : '').replace(/\\"/g, '"').replace(/\s+/g, ' ').trim().slice(0, 700);
+            const previo = salida.get(sku);
+            // El mismo SKU puede venir repetido: manda lo último, salvo que el rechazo traiga motivo.
+            if (!previo || (status === 'rejected' && reason) || status !== 'rejected') salida.set(sku, { sku, status, reason: reason || previo?.reason || '' });
+        }
+        return [...salida.values()];
+    }
+
     /** Las fichas del vendedor que ya existen en Falabella con esos SKUs (de a 100 como máximo). */
     async getProductsBySku(credentials: FalabellaCredentials, skus: string[]): Promise<FalabellaProduct[]> {
         const lista = [...new Set(skus.map(s => String(s).trim()).filter(Boolean))].slice(0, 100);
