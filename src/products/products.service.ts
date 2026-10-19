@@ -172,8 +172,11 @@ export class ProductsService {
         const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
 
         // El cliente puede dar solo fotos, SKU y precio: el nombre y la descripción los completa la IA.
-        const nombreDelCliente = (dto.name ?? '').trim();
         const descripcionDelCliente = (dto.description ?? '').trim();
+        // El formulario manda el mismo texto como nombre y como descripción: si es igual a la descripción o es demasiado
+        // largo para ser un nombre, no es un nombre y lo arma la IA.
+        const nombreDado = (dto.name ?? '').trim();
+        const nombreDelCliente = nombreDado && nombreDado !== descripcionDelCliente && nombreDado.length <= 150 ? nombreDado : '';
         const product = this.productRepository.create({
             ...productDetails,
             name: nombreDelCliente || dto.sku,
@@ -200,7 +203,7 @@ export class ProductsService {
         this.applyAiContent(savedProduct, aiContent);
 
         savedProduct.status = 'synced';
-        if (!nombreDelCliente && aiContent.vision?.suggestedName) savedProduct.name = aiContent.vision.suggestedName;
+        if (!nombreDelCliente) savedProduct.name = (savedProduct.aiTitle || aiContent.vision?.suggestedName || savedProduct.name || dto.sku).slice(0, 255);
         if (!descripcionDelCliente) savedProduct.description = savedProduct.aiDescription || aiContent.vision?.description || '';
 
         // Step 4: Return the fully enriched product, con lo que la IA vio y lo que aún falta
