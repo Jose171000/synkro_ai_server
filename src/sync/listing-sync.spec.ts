@@ -662,3 +662,35 @@ describe('campos de sistema y atributos que Falabella dijo que no aplican', () =
         expect(r.input.extraAttributes).toEqual({ garantia: '12 meses' });
     });
 });
+
+describe('un segundo clic en Publicar mientras el canal todavía procesa', () => {
+    const prod = { id: 'p1', sku: 'MK-1', price: 480, stock: 5, store: { id: 't1' }, owner: { id: 'u1' } };
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+
+    it('no encola otro envío si el anterior sigue pendiente, y avisa', async () => {
+        const { service, trabajos } = await construir({
+            conexiones: [fal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', updatedAt: new Date(), product: prod, connection: { id: 'fa1' } }],
+        });
+        await expect(service.enqueuePublish(SCOPE, 'p1', ['falabella'], { falabella: 'fa1' })).rejects.toThrow(/ya se está publicando/);
+        expect(trabajos).toHaveLength(0);
+    });
+
+    it('si lleva demasiado tiempo pendiente (más de 15 minutos) sí deja reintentar', async () => {
+        const { service, trabajos } = await construir({
+            conexiones: [fal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', updatedAt: new Date(Date.now() - 20 * 60_000), product: prod, connection: { id: 'fa1' } }],
+        });
+        await service.enqueuePublish(SCOPE, 'p1', ['falabella'], { falabella: 'fa1' });
+        expect(trabajos.map((t: any) => t.n)).toEqual(['publish']);
+    });
+
+    it('un enlace con error o sin publicar se puede volver a enviar', async () => {
+        const { service, trabajos } = await construir({
+            conexiones: [fal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'error', updatedAt: new Date(), product: prod, connection: { id: 'fa1' } }],
+        });
+        await service.enqueuePublish(SCOPE, 'p1', ['falabella'], { falabella: 'fa1' });
+        expect(trabajos).toHaveLength(1);
+    });
+});

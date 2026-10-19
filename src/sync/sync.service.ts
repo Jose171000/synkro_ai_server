@@ -828,14 +828,21 @@ export class SyncService implements OnModuleInit {
         }
 
         const encoladas: string[] = [];
+        const enviando: string[] = [];
         for (const marketplace of marketplaces) {
             // Validate the connection now so the user gets an immediate error
             const connection = await this.resolveConnection(scope.storeId, marketplace, connectionIds[marketplace]);
-            const yaPublicado = await this.listingLinkRepository.findOne({
-                where: { product: { id: productId }, connection: { id: connection.id }, syncStatus: 'published' },
-                select: { id: true },
+            const enlaceActual = await this.listingLinkRepository.findOne({
+                where: { product: { id: productId }, connection: { id: connection.id } },
+                select: { id: true, syncStatus: true, updatedAt: true },
             });
-            if (yaPublicado) continue; // ya está en vivo: lo que cambia después va por el inventario
+            if (enlaceActual?.syncStatus === 'published') continue; // ya está en vivo: lo que cambia después va por el inventario
+            // Un segundo clic mientras el canal todavía procesa el primero: no se manda otro envío (gastaría llamadas
+            // de Falabella y Falabella lo rechazaría por SKU repetido). Si lleva mucho «pendiente» se deja reintentar.
+            if (enlaceActual?.syncStatus === 'pending' && Date.now() - new Date(enlaceActual.updatedAt).getTime() < 15 * 60_000) {
+                enviando.push(marketplace);
+                continue;
+            }
             encoladas.push(marketplace);
             await this.syncQueue.add('publish', {
                 productId,
@@ -847,6 +854,7 @@ export class SyncService implements OnModuleInit {
         }
 
         if (!encoladas.length) {
+            if (enviando.length) throw new BadRequestException(`Este producto ya se está publicando en ${enviando.map(nombreCanal).join(', ')}: espera a que termine.`);
             throw new BadRequestException(`Este producto ya está publicado en ${marketplaces.map(nombreCanal).join(', ')}.`);
         }
         return {

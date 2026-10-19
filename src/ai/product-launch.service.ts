@@ -86,7 +86,7 @@ export class ProductLaunchService {
             reporte.channels.push(
                 encoladas
                     ? { marketplace: canal, accounts: encoladas, status: 'encolado', message: `Publicando en ${NOMBRE[canal]}.` }
-                    : { marketplace: canal, accounts: 0, status: /ya está publicado/i.test(ultimoError) ? 'omitido' : 'error', message: ultimoError },
+                    : { marketplace: canal, accounts: 0, status: /ya está publicado|ya se está publicando/i.test(ultimoError) ? 'omitido' : 'error', message: ultimoError },
             );
         }
         return reporte;

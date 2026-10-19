@@ -10,7 +10,7 @@ import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { ProductVision } from './product-vision.service';
-import { ATRIBUTOS_DE_SISTEMA } from '../sync/falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 
 export interface FalabellaPrepReport {
@@ -28,6 +28,9 @@ export interface FalabellaPrepReport {
 
 /** Datos que la plataforma ya cubre por su cuenta al publicar en Falabella. */
 const CUBIERTOS = ATRIBUTOS_DE_SISTEMA;
+
+/** Campos de sistema (ya no se envían) con su nombre normalizado, para no mostrarlos como «estimados». */
+const sistema = new Set([...ATRIBUTOS_DE_SISTEMA].map(claveDeAtributo));
 
 const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
@@ -179,7 +182,7 @@ export class FalabellaAutoPrepService {
                 width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight,
                 estimated: estimated.measures,
             },
-            estimatedAttributes: estimated.attributes.falabella ?? estimadosAhora,
+            estimatedAttributes: (estimated.attributes.falabella ?? estimadosAhora).filter((n) => !sistema.has(claveDeAtributo(n))),
             descriptionGenerated: descripcionGenerada,
             attributes: { filled: llenos, total: totalAtributos },
         };
