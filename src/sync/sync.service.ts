@@ -33,6 +33,9 @@ import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/curren
  */
 const ATRIBUTOS_YA_CUBIERTOS = ATRIBUTOS_DE_SISTEMA;
 
+/** Cuántas veces se pregunta por un envío de Falabella antes de darlo por perdido (~3 horas con el espaciado de retrasoDeFeed). */
+const FEED_MAX_INTENTOS = 30;
+
 /** Por debajo de estas unidades se avisa que un producto se agota. */
 const LOW_STOCK_THRESHOLD = 5;
 
@@ -1640,7 +1643,17 @@ export class SyncService implements OnModuleInit {
      * Consulta el estado de un lote y aplica el resultado a cada producto.
      * Si Falabella sigue procesando, se vuelve a preguntar más tarde.
      */
-    async checkFalabellaFeed(feedRecordId: string, userId: string): Promise<{ status: string }> {
+    /**
+     * Cada cuánto se vuelve a preguntar por un envío que Falabella todavía procesa: al principio cada minuto,
+     * luego cada 3 y al final cada 10. Después de ~3 horas se da por perdido (ver FEED_MAX_INTENTOS).
+     */
+    private retrasoDeFeed(intento: number): number {
+        if (intento < 5) return 60_000;
+        if (intento < 15) return 180_000;
+        return 600_000;
+    }
+
+    async checkFalabellaFeed(feedRecordId: string, userId: string, intento = 0): Promise<{ status: string }> {
         const feed = await this.feedRepository.findOne({
             where: { id: feedRecordId },
             relations: { connection: true },
@@ -1662,8 +1675,31 @@ export class SyncService implements OnModuleInit {
 
         const terminado = /finished|canceled|error/i.test(estado.status);
         if (!terminado) {
-            // Sigue en cola dentro de Falabella: se vuelve a mirar en un minuto.
-            await this.syncQueue.add('falabella-feed', { feedRecordId, userId }, { delay: 60_000 });
+            // Falabella no termina nunca: se deja de preguntar y se avisa, en vez de consultar sin fin.
+            if (intento >= FEED_MAX_INTENTOS) {
+                feed.status = 'timeout';
+                await this.feedRepository.save(feed);
+                if (feed.action === 'ProductCreate') {
+                    for (const sku of feed.skus || []) {
+                        const link = await this.listingLinkRepository.findOne({ where: { connection: { id: feedConnectionId }, product: { sku }, syncStatus: 'pending' } });
+                        if (!link) continue;
+                        link.syncStatus = 'error';
+                        link.lastError = 'Falabella no terminó de procesar el envío en varias horas. Revisa el Seller Center y vuelve a pulsar Publicar.';
+                        await this.listingLinkRepository.save(link);
+                    }
+                    await this.notifications.notify(userId, {
+                        type: 'publish-error',
+                        severity: 'error',
+                        title: 'Falabella no respondió al envío',
+                        body: 'Lleva varias horas sin terminar de procesar el lote. Revisa el Seller Center y vuelve a publicar si hace falta.',
+                        marketplace: 'falabella',
+                        meta: { feedId: feed.externalFeedId },
+                    });
+                }
+                return { status: 'timeout' };
+            }
+            // Sigue en cola dentro de Falabella: se vuelve a mirar, cada vez con más calma.
+            await this.syncQueue.add('falabella-feed', { feedRecordId, userId, intento: intento + 1 }, { delay: this.retrasoDeFeed(intento) });
             return { status: estado.status };
         }
 

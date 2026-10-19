@@ -694,3 +694,36 @@ describe('un segundo clic en Publicar mientras el canal todavía procesa', () =>
         expect(trabajos).toHaveLength(1);
     });
 });
+
+describe('preguntar a Falabella por un envío que sigue procesando', () => {
+    const prod = { id: 'p1', sku: 'MK-1', stock: 5, price: 480 };
+    async function preparar(estado: string) {
+        const t = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' })],
+            productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', product: prod, connection: { id: 'fa1' } }],
+        });
+        const feed: any = { id: 'f1', externalFeedId: 'ext', action: 'ProductCreate', skus: ['MK-1'], connection: { id: 'fa1' }, status: 'pending' };
+        (t.service as any).feedRepository = { findOne: jest.fn(async () => feed), save: jest.fn(async (x: any) => x) };
+        t.falabella.getFeedStatus = jest.fn(async () => ({ feedId: 'ext', status: estado, action: 'ProductCreate', totalRecords: 1, processedRecords: 0, failedRecords: 0, errors: [] }));
+        return { ...t, feed };
+    }
+
+    it('con cada intento espera más: 1 minuto al principio, 3 después y 10 al final', async () => {
+        const { service, trabajos } = await preparar('Processing');
+        await service.checkFalabellaFeed('f1', 'u1', 0);
+        await service.checkFalabellaFeed('f1', 'u1', 6);
+        await service.checkFalabellaFeed('f1', 'u1', 20);
+        expect(trabajos.map((t: any) => t.d.intento)).toEqual([1, 7, 21]);
+    });
+
+    it('al llegar al máximo deja de preguntar, marca el producto con error y avisa', async () => {
+        const { service, trabajos, enlaces, feed } = await preparar('Processing');
+        const r = await service.checkFalabellaFeed('f1', 'u1', 30);
+
+        expect(r.status).toBe('timeout');
+        expect(trabajos).toHaveLength(0);
+        expect(feed.status).toBe('timeout');
+        expect(enlaces[0]).toMatchObject({ syncStatus: 'error', lastError: expect.stringContaining('no terminó de procesar') });
+    });
+});

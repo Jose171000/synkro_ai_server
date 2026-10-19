@@ -75,8 +75,8 @@ export class SyncProcessor extends WorkerHost {
             case 'falabella-feed': {
                 // Falabella procesa los lotes en segundo plano: esto pregunta
                 // cómo fue y, si aún no terminó, se reprograma solo.
-                const { feedRecordId, userId } = job.data;
-                return this.syncService.checkFalabellaFeed(feedRecordId, userId);
+                const { feedRecordId, userId, intento = 0 } = job.data;
+                return this.syncService.checkFalabellaFeed(feedRecordId, userId, intento);
             }
 
             case 'content-update': {
