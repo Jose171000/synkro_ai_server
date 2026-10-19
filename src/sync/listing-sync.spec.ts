@@ -832,3 +832,36 @@ describe('avisos de Falabella: envíos terminados y cambios de calidad', () => {
         expect(falabella.getQcStates).not.toHaveBeenCalled();
     });
 });
+
+describe('formato real de los avisos de Falabella y envío procesado una sola vez', () => {
+    const prod = { id: 'p1', sku: 'MK-1', stock: 5, price: 480, images: [{ url: 'https://i/1.jpg' }] };
+
+    it('el aviso de calidad trae una lista de SKUs (SellerSkus)', async () => {
+        const { service, trabajos } = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } })],
+        });
+        await service.handleFalabellaNotification('tok-1', { event: 'onProductQcStatusChanged', payload: { SellerSkus: ['MK-TOR-004', 'MK-TOR-005'] } });
+        expect(trabajos[0]).toMatchObject({ n: 'falabella-qc', d: { connectionId: 'fa1', skus: ['MK-TOR-004', 'MK-TOR-005'] } });
+    });
+
+    it('el aviso de envío terminado trae {Feed} y la consulta periódica llegando a la vez no manda las fotos dos veces', async () => {
+        const t = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } })],
+            productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', product: prod, connection: { id: 'fa1' } }],
+        });
+        const feed: any = { id: 'f1', externalFeedId: 'ext-1', action: 'ProductCreate', skus: ['MK-1'], connection: { id: 'fa1' }, status: 'pending' };
+        (t.service as any).feedRepository = { findOne: jest.fn(async () => feed), save: jest.fn(async (x: any) => ({ ...x, id: x.id ?? 'img-1' })), create: (x: any) => x };
+        t.falabella.getFeedStatus = jest.fn(async () => ({ feedId: 'ext-1', status: 'Finished', action: 'ProductCreate', totalRecords: 1, processedRecords: 1, failedRecords: 0, errors: [] }));
+        t.falabella.setImages = jest.fn(async () => 'feed-fotos');
+
+        await t.service.handleFalabellaNotification('tok-1', { event: 'onFeedCompleted', payload: { Feed: 'ext-1' } });
+        expect(t.trabajos[0]).toMatchObject({ n: 'falabella-feed', d: { feedRecordId: 'f1', intento: 0 } });
+
+        // la consulta periódica y el aviso revisan el mismo envío casi al mismo tiempo
+        await Promise.all([t.service.checkFalabellaFeed('f1', 'u1', 0), t.service.checkFalabellaFeed('f1', 'u1', 0)]);
+
+        expect(t.falabella.setImages).toHaveBeenCalledTimes(1);
+        expect(t.enlaces[0].syncStatus).toBe('published');
+    });
+});

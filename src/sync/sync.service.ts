@@ -1757,6 +1757,11 @@ export class SyncService implements OnModuleInit {
             return { status: estado.status };
         }
 
+        // El aviso de Falabella y la consulta periódica pueden llegar casi a la vez: solo el primero procesa el resultado
+        // (si no, las fotos se mandarían dos veces).
+        const primero = await this.redis.set(`feed-procesado:${feed.id}`, '1', 'EX', 86_400, 'NX');
+        if (!primero) return { status: estado.status };
+
         const erroresPorSku = new Map<string, string>();
         for (const error of estado.errors) {
             if (error.sku) erroresPorSku.set(error.sku, error.message);
@@ -2276,8 +2281,9 @@ export class SyncService implements OnModuleInit {
         // Cambió la calidad de una ficha: aprobada o rechazada (con motivo).
         if (/qc|product/i.test(evento)) {
             console.log(`[Sync] Aviso de Falabella «${evento}»: ${JSON.stringify(body).slice(0, 400)}`);
-            const sku = String(carga?.SellerSku ?? carga?.SellerSKU ?? carga?.sellerSku ?? carga?.Sku ?? '').trim();
-            await this.syncQueue.add('falabella-qc', { connectionId: connection.id, skus: sku ? [sku] : [] }, { delay: 3_000 });
+            const lista = [].concat(carga?.SellerSkus ?? carga?.SellerSku ?? carga?.SellerSKU ?? carga?.sellerSku ?? carga?.Sku ?? []) as unknown[];
+            const skus = lista.map(x => String(x ?? '').trim()).filter(Boolean);
+            await this.syncQueue.add('falabella-qc', { connectionId: connection.id, skus }, { delay: 3_000 });
             return { received: true };
         }
 
