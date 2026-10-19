@@ -76,7 +76,12 @@ export class SyncProcessor extends WorkerHost {
                 // Falabella procesa los lotes en segundo plano: esto pregunta
                 // cómo fue y, si aún no terminó, se reprograma solo.
                 const { feedRecordId, userId, intento = 0 } = job.data;
-                return this.syncService.checkFalabellaFeed(feedRecordId, userId, intento);
+                try {
+                    return await this.syncService.checkFalabellaFeed(feedRecordId, userId, intento);
+                } catch (error: any) {
+                    // Un fallo al comprobar no debe dejar el producto en «Publicando…»: se vuelve a intentar.
+                    return this.syncService.reintentarRevisionDeFeed(feedRecordId, userId, intento, error?.message ?? 'error desconocido');
+                }
             }
 
             case 'content-update': {

@@ -1653,6 +1653,31 @@ export class SyncService implements OnModuleInit {
         return 600_000;
     }
 
+    /**
+     * Si la consulta del estado de un envío falla (red, límite de Falabella, un error propio), se vuelve a
+     * intentar más tarde en vez de dejar el producto en «Publicando…» para siempre. Tras el máximo de intentos se rinde.
+     */
+    async reintentarRevisionDeFeed(feedRecordId: string, userId: string, intento: number, motivo: string): Promise<{ status: string }> {
+        console.warn(`[Sync] Revisión del feed ${feedRecordId} falló (intento ${intento}): ${motivo}`);
+        if (intento >= FEED_MAX_INTENTOS) {
+            const feed = await this.feedRepository.findOne({ where: { id: feedRecordId } });
+            if (feed) {
+                feed.status = 'timeout';
+                await this.feedRepository.save(feed);
+            }
+            await this.notifications.notify(userId, {
+                type: 'publish-error',
+                severity: 'error',
+                title: 'No se pudo comprobar un envío a Falabella',
+                body: `Revisa el Seller Center. Último error: ${motivo}`,
+                marketplace: 'falabella',
+            });
+            return { status: 'timeout' };
+        }
+        await this.syncQueue.add('falabella-feed', { feedRecordId, userId, intento: intento + 1 }, { delay: this.retrasoDeFeed(intento) });
+        return { status: 'reintento' };
+    }
+
     async checkFalabellaFeed(feedRecordId: string, userId: string, intento = 0): Promise<{ status: string }> {
         const feed = await this.feedRepository.findOne({
             where: { id: feedRecordId },

@@ -727,3 +727,19 @@ describe('preguntar a Falabella por un envío que sigue procesando', () => {
         expect(enlaces[0]).toMatchObject({ syncStatus: 'error', lastError: expect.stringContaining('no terminó de procesar') });
     });
 });
+
+describe('si falla la comprobación de un envío a Falabella', () => {
+    it('se reprograma en vez de dejar el producto en «Publicando…», y tras el máximo se rinde avisando', async () => {
+        const { service, trabajos, avisos } = await construir({});
+        (service as any).feedRepository = { findOne: jest.fn(async () => ({ id: 'f1', status: 'pending' })), save: jest.fn(async (x: any) => x) };
+
+        const r1 = await service.reintentarRevisionDeFeed('f1', 'u1', 2, 'timeout de red');
+        expect(r1.status).toBe('reintento');
+        expect(trabajos[0]).toMatchObject({ n: 'falabella-feed', d: { feedRecordId: 'f1', intento: 3 } });
+
+        const r2 = await service.reintentarRevisionDeFeed('f1', 'u1', 30, 'timeout de red');
+        expect(r2.status).toBe('timeout');
+        expect(trabajos).toHaveLength(1);
+        expect(avisos[0]).toMatchObject({ type: 'publish-error', title: expect.stringContaining('No se pudo comprobar') });
+    });
+});
