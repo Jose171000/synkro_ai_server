@@ -3205,7 +3205,23 @@ export class SyncService implements OnModuleInit {
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
-        return this.refreshConnections(cuentas);
+        const resultado = await this.refreshConnections(cuentas);
+        await this.conciliarCalidadFalabella(cuentas);
+        return resultado;
+    }
+
+    /**
+     * Las fichas de Falabella que siguen «en proceso» se ponen al día con su estado de calidad real: si ya fueron
+     * aprobadas pasan a publicadas, y si fueron rechazadas muestran el motivo. Cubre avisos que no llegaron.
+     */
+    private async conciliarCalidadFalabella(cuentas: MarketplaceConnection[]) {
+        for (const c of cuentas.filter(x => x.marketplace === 'falabella')) {
+            try {
+                await this.refreshFalabellaQc(c.id);
+            } catch (error: any) {
+                console.warn(`[Sync] No se pudo revisar la calidad de las fichas de Falabella (${c.externalUserId}): ${error?.message}`);
+            }
+        }
     }
 
     /** «Actualizar publicaciones ahora»: lo mismo, solo para las cuentas de una tienda. */
@@ -3215,7 +3231,10 @@ export class SyncService implements OnModuleInit {
             relations: { owner: true, store: true },
             order: { createdAt: 'ASC' },
         });
-        return this.refreshConnections(cuentas.filter(c => this.canalesDeVentas().includes(c.marketplace)));
+        const deVentas = cuentas.filter(c => this.canalesDeVentas().includes(c.marketplace));
+        const resultado = await this.refreshConnections(deVentas);
+        await this.conciliarCalidadFalabella(deVentas);
+        return resultado;
     }
 
     // ─────────────────────────────────────────────────────────────
