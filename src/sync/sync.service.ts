@@ -2280,6 +2280,9 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /** Tiempo tras crear la ficha en que un rechazo por falta de fotos se considera pasajero (las fotos van en otro envío). */
+    private static readonly VENTANA_FOTOS_MS = 40 * 60_000;
+
     /**
      * Pone al día el estado de calidad de fichas concretas (o de las que esperan, si no se dice cuáles). Lo dispara
      * el aviso «cambió la calidad de un producto»: aprobada → publicada; rechazada → error con su motivo.
@@ -2311,6 +2314,15 @@ export class SyncService implements OnModuleInit {
                 await this.listingLinkRepository.save(enlace);
                 aprobadas++;
                 if (userId) await this.notifications.notify(userId, { type: 'publish', severity: 'success', title: `Falabella aprobó ${enlace.product.sku}`, body: 'La ficha pasó el control de calidad y ya está a la venta.', marketplace: 'falabella', meta: { productId: enlace.product.id } });
+            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && enlace.lastSyncedAt && Date.now() - new Date(enlace.lastSyncedAt).getTime() < SyncService.VENTANA_FOTOS_MS) {
+                // Falabella revisa la ficha apenas se crea y la rechaza por «Images Missing» antes de recibir las fotos, que
+                // van en un envío aparte. Es pasajero: se deja en proceso y se vuelve a mirar cuando las fotos ya hayan entrado.
+                if (enlace.syncStatus !== 'pending') {
+                    enlace.syncStatus = 'pending';
+                    enlace.lastError = null as any;
+                    await this.listingLinkRepository.save(enlace);
+                }
+                await this.syncQueue.add('falabella-qc', { connectionId, skus: [enlace.product.sku] }, { delay: 4 * 60_000 });
             } else if (estado.status === 'rejected') {
                 const motivo = estado.reason ? `Falabella rechazó la ficha: ${estado.reason}` : 'Falabella rechazó la ficha en su control de calidad.';
                 const cambio = enlace.syncStatus !== 'error' || enlace.lastError !== motivo;
