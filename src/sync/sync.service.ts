@@ -1724,6 +1724,7 @@ export class SyncService implements OnModuleInit {
                 return { status: 'timeout' };
             }
             // Sigue en cola dentro de Falabella: se vuelve a mirar, cada vez con más calma.
+            console.log(`[Sync] Feed Falabella ${feed.externalFeedId} (${feed.action}) sigue «${estado.status}»: ${estado.processedRecords}/${estado.totalRecords} procesados, intento ${intento}.`);
             await this.syncQueue.add('falabella-feed', { feedRecordId, userId, intento: intento + 1 }, { delay: this.retrasoDeFeed(intento) });
             return { status: estado.status };
         }
