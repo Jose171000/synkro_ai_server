@@ -1095,6 +1095,13 @@ export class SyncService implements OnModuleInit {
         return { message: 'Actualización enviada a Falabella. Se procesa en segundo plano y la calidad de la ficha puede tardar en reflejarse.', feedId };
     }
 
+    /** DIAGNÓSTICO (temporal): la ficha tal como la guarda Falabella ahora mismo. */
+    async leerFichaFalabella(scope: SyncScope, sku: string, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const [ficha] = await this.falabellaApi.getProductsBySku(this.credentialsOf(connection), [sku]);
+        return ficha ?? null;
+    }
+
     /** DIAGNÓSTICO (temporal): resultado de la última prueba de etiquetas HTML en Falabella. */
     private sondaHtml: { estado: string; pasos: any[] } = { estado: 'sin ejecutar', pasos: [] };
 

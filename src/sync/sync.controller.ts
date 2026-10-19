@@ -281,6 +281,15 @@ export class SyncController {
         return this.syncService.leerSondaHtml();
     }
 
+    @Get('falabella/raw-product')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: la ficha de un SKU tal como la guarda Falabella' })
+    rawFalabellaProduct(@Query('sku') sku: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.leerFichaFalabella(scopeOf(req), sku, connectionId);
+    }
+
     @Get('falabella/brands')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
