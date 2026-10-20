@@ -22,6 +22,8 @@ import { UploadService } from '../upload/upload.service';
 import { StoreAccessGuard } from '../stores/store-access.guard';
 import { SyncService } from '../sync/sync.service';
 import { ProductsService } from '../products/products.service';
+import { StoresService } from '../stores/stores.service';
+import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
 /** Canales donde la carga masiva puede publicar sola. */
 const CANALES_PUBLICABLES = ['mercadolibre', 'falabella'];
@@ -40,6 +42,7 @@ export class BulkUploadController {
         private readonly uploadService: UploadService,
         private readonly syncService: SyncService,
         private readonly productsService: ProductsService,
+        private readonly stores: StoresService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -92,16 +95,19 @@ export class BulkUploadController {
     // GET /bulk-upload/products/template — plantilla de Excel
     // ─────────────────────────────────────────────────────────────
     @Get('products/template')
-    @ApiOperation({ summary: 'Descarga la plantilla de Excel para crear productos en lote' })
-    async downloadTemplate(@Res() res: Response) {
-        const buffer = await escribirHoja([
-            { sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: '' },
-            { sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto del producto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: 'falabella,mercadolibre' },
-        ], 'Productos');
+    @UseGuards(StoreAccessGuard)
+    @ApiOperation({ summary: 'Descarga la plantilla de Excel de la tienda activa: la lista de canales solo muestra los conectados' })
+    async downloadTemplate(@Req() req, @Res() res: Response) {
+        const storeId: string = req.store.storeId;
+        const tienda = (await this.stores.listMine(req.user.id)).stores.find((t: any) => t.id === storeId)?.name ?? '';
+        const canales = [...new Set((await this.syncService.getConnections(storeId))
+            .filter((c: any) => c.status === 'active' && CANALES_PUBLICABLES.includes(c.marketplace))
+            .map((c: any) => c.marketplace as string))];
+        const buffer = await plantillaDeProductos(tienda, canales);
         // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
         res.set({
             'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Content-Disposition': 'attachment; filename="plantilla-productos.xlsx"',
+            'Content-Disposition': `attachment; filename="${nombreDeArchivo(tienda)}"`,
         });
         return res.send(buffer);
     }
