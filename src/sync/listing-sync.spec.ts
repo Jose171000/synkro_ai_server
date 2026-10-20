@@ -824,6 +824,25 @@ describe('avisos de Falabella: envíos terminados y cambios de calidad', () => {
         expect(rechazada.avisos[0]).toMatchObject({ type: 'publish-error' });
     });
 
+    it('«Images Missing» justo tras crear la ficha (aún sin fecha de envío terminado) es pasajero: sigue en proceso y se vuelve a mirar', async () => {
+        const reciente = await construir({
+            conexiones: [cuentaFal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', lastSyncedAt: null, updatedAt: new Date(), product: prod, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        reciente.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        await reciente.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(reciente.enlaces[0].syncStatus).toBe('pending');
+        expect(reciente.trabajos.find((x: any) => x.n === 'falabella-qc')).toBeTruthy();
+
+        const vieja = await construir({
+            conexiones: [cuentaFal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'error', lastSyncedAt: null, updatedAt: new Date(Date.now() - 3 * 3600_000), product: prod, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        vieja.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        await vieja.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(vieja.enlaces[0].syncStatus).toBe('error');
+    });
+
     it('un rechazo por reglas de otra categoría descarta la categoría y no se vuelve a proponer', async () => {
         const conCategoria: any = { ...prod, marketplaceIds: { falabella_category_id: '77' }, aiAttributes: { brand: 'GENERICO', _categoriaVerificada: '77' } };
         const t = await construir({

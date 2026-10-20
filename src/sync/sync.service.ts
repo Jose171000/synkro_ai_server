@@ -2290,6 +2290,12 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /** ¿El enlace se creó o cambió hace poco? Cuenta lo último entre el último envío terminado y el último cambio (un envío en curso aún no tiene fecha de término). */
+    private esReciente(enlace: ListingLink, ventanaMs: number): boolean {
+        const marcas = [enlace.lastSyncedAt, enlace.updatedAt].map(f => (f ? new Date(f).getTime() : 0));
+        return Date.now() - Math.max(...marcas) < ventanaMs;
+    }
+
     /** Tiempo tras crear la ficha en que un rechazo por falta de fotos se considera pasajero (las fotos van en otro envío). */
     private static readonly VENTANA_FOTOS_MS = 40 * 60_000;
 
@@ -2325,7 +2331,7 @@ export class SyncService implements OnModuleInit {
                 await this.listingLinkRepository.save(enlace);
                 aprobadas++;
                 if (userId) await this.notifications.notify(userId, { type: 'publish', severity: 'success', title: `Falabella aprobó ${enlace.product.sku}`, body: 'La ficha pasó el control de calidad y ya está a la venta.', marketplace: 'falabella', meta: { productId: enlace.product.id } });
-            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && enlace.lastSyncedAt && Date.now() - new Date(enlace.lastSyncedAt).getTime() < SyncService.VENTANA_FOTOS_MS) {
+            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && this.esReciente(enlace, SyncService.VENTANA_FOTOS_MS)) {
                 // Falabella revisa la ficha apenas se crea y la rechaza por «Images Missing» antes de recibir las fotos, que
                 // van en un envío aparte. Es pasajero: se deja en proceso y se vuelve a mirar cuando las fotos ya hayan entrado.
                 if (enlace.syncStatus !== 'pending') {

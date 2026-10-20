@@ -427,9 +427,12 @@ ${this.descripcionParaCategoria(nombre, descripcion, vision)}
 
 Categoría propuesta: ${ruta}
 
-¿Un comprador esperaría encontrar EXACTAMENTE este producto en esa categoría? Rechaza categorías de otro tipo de producto,
-aunque compartan alguna palabra (por ejemplo, una máquina de cocina pequeña no va en electrodomésticos de gran tamaño).
-Responde solo JSON: {"ok": true|false, "motivo": "una frase corta"}`);
+Razona en tres pasos antes de decidir:
+1. ¿Qué ES exactamente el producto (tipo de artículo y para qué sirve)?
+2. ¿Qué tipo de artículos se venden en la última categoría de la ruta propuesta?
+3. ¿Son el MISMO tipo de artículo? No basta con que ambos sean de cocina, del hogar o eléctricos: debe ser el mismo tipo de artículo
+   (una máquina para hacer donas NO va en secaplatos, ni en compactadores de basura, ni en vajilla).
+Responde solo JSON: {"producto_es": "...", "categoria_vende": "...", "ok": true|false, "motivo": "una frase corta"}`);
     if (!r || typeof r.ok !== 'boolean') return { ok: true, motivo: 'no se pudo verificar', incierta: true };
     return { ok: r.ok, motivo: String(r.motivo ?? '').slice(0, 200) };
   }
