@@ -6,7 +6,6 @@ import {
     buildProductFeedXml,
     buildImageFeedXml,
     buildContentUpdateXml,
-    cdata,
     buildStockUpdateXml,
     escapeXml,
     FalabellaProductInput,
@@ -770,13 +769,6 @@ export class FalabellaApiService {
         const feedId = await this.postFeed(credentials, 'ProductUpdate', buildContentUpdateXml(products, { operatorCode }));
         this.logger.log(`Contenido de ${products.length} ficha(s) enviado a Falabella. Feed ${feedId}.`);
         return feedId;
-    }
-
-    /** DIAGNÓSTICO: envía solo la descripción de una ficha, en CDATA o con las etiquetas escapadas. */
-    async probarDescripcion(credentials: FalabellaCredentials, sellerSku: string, html: string, modo: 'cdata' | 'escapado', price: number, operatorCode: string): Promise<string> {
-        const cuerpo = modo === 'cdata' ? cdata(html) : escapeXml(html);
-        const xml = `<?xml version="1.0" encoding="UTF-8"?><Request><Product><SellerSku>${escapeXml(sellerSku)}</SellerSku><Description>${cuerpo}</Description><BusinessUnits><BusinessUnit><OperatorCode>${escapeXml(operatorCode)}</OperatorCode><Price>${price.toFixed(2)}</Price></BusinessUnit></BusinessUnits></Product></Request>`;
-        return this.postFeed(credentials, 'ProductUpdate', xml);
     }
 
     /** Asigna las fotos de fichas ya creadas. Devuelve el identificador del feed. */

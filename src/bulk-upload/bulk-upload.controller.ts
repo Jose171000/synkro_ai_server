@@ -254,6 +254,10 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                     imageUrls: urls,
                     batchId,
                     batchTotal,
+                }, {
+                    // Un fallo pasajero de la IA (límite de llamadas, red) se reintenta antes de dar el producto por fallido.
+                    attempts: 3,
+                    backoff: { type: 'exponential', delay: 15_000 },
                 });
             }
 

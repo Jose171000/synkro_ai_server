@@ -60,6 +60,16 @@ export class ProductsService {
         return new Set(filas.map((f) => f.sku));
     }
 
+    /** El producto de un dueño por su SKU (sin importar mayúsculas ni espacios); null si no existe. */
+    async findBySku(userId: string, sku: string): Promise<Product | null> {
+        return this.productRepository
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.images', 'image')
+            .where('p."ownerId" = :userId', { userId })
+            .andWhere('LOWER(TRIM(p.sku)) = LOWER(TRIM(:sku))', { sku })
+            .getOne();
+    }
+
     async findAll(userId: string, query: QueryProductsDto) {
         const {
             page = 1, limit = 20,

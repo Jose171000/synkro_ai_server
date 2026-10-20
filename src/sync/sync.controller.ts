@@ -263,34 +263,6 @@ export class SyncController {
         return this.sheets.syncNow(scopeOf(req), id);
     }
 
-    @Post('products/:id/falabella-html-probe')
-    @HttpCode(HttpStatus.OK)
-    @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
-    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: qué etiquetas HTML conserva Falabella al enviar la descripción por API' })
-    probeFalabellaHtml(@Param('id') id: string, @Req() req, @Query('connectionId') connectionId?: string) {
-        return this.syncService.iniciarSondaHtml(scopeOf(req), id, connectionId);
-    }
-
-    @Get('products/:id/falabella-html-probe')
-    @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
-    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: resultado de la última prueba de etiquetas HTML' })
-    readProbeFalabellaHtml() {
-        return this.syncService.leerSondaHtml();
-    }
-
-    @Get('falabella/raw-product')
-    @ApiBearerAuth()
-    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
-    @ApiOperation({ summary: 'DIAGNÓSTICO temporal: la ficha de un SKU tal como la guarda Falabella' })
-    rawFalabellaProduct(@Query('sku') sku: string, @Req() req, @Query('connectionId') connectionId?: string) {
-        return this.syncService.leerFichaFalabella(scopeOf(req), sku, connectionId);
-    }
-
     @Get('falabella/brands')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

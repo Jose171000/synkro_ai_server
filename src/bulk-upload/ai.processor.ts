@@ -34,9 +34,13 @@ export class AiProcessor extends WorkerHost {
             jobType:    'Creación masiva de productos',
         } : undefined;
 
+        // Con reintentos, solo el último intento cuenta como fallo del lote; antes se vuelve a intentar sin contarlo.
+        const ultimoIntento = job.attemptsMade + 1 >= (job.opts?.attempts ?? 1);
+
         try {
-            // 1. Create the product with the resolved image URL (if any)
-            const product = await this.productsService.create({
+            // 1. Create the product with the resolved image URL (if any). En un reintento ya existe: se retoma sin duplicar.
+            const existente = job.attemptsMade > 0 ? await this.productsService.findBySku(userId, sku) : null;
+            const product = existente ?? await this.productsService.create({
                 name: productName || sku,
                 description: description || '',
                 sku,
@@ -81,7 +85,8 @@ export class AiProcessor extends WorkerHost {
 
             return { status: 'completed', productId: updatedProduct.id };
         } catch (error) {
-            console.error(`[AiProcessor] Job ${job.id} failed:`, error);
+            console.error(`[AiProcessor] Job ${job.id} failed (intento ${job.attemptsMade + 1}):`, error);
+            if (!ultimoIntento) throw new InternalServerErrorException('Error processing AI background job');
 
             // Track failed job too — batch must still complete
             if (batchMeta) {
