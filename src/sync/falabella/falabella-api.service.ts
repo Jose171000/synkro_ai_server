@@ -416,8 +416,9 @@ export class FalabellaApiService {
             throw new BadRequestException('No hay productos que enviar a Falabella.');
         }
 
-        // Experimento controlado: con FALABELLA_IMAGES_IN_CREATE=1 las fotos viajan dentro del alta.
-        const includeImages = process.env.FALABELLA_IMAGES_IN_CREATE === '1';
+        // Las fotos viajan dentro del alta (comprobado: así Falabella no rechaza la ficha por «Images Missing»).
+        // FALABELLA_IMAGES_IN_CREATE=0 lo apaga. El envío de fotos aparte se mantiene como respaldo.
+        const includeImages = process.env.FALABELLA_IMAGES_IN_CREATE !== '0';
         const xml = buildProductFeedXml(products, { operatorCode, includeImages });
         if (includeImages) this.logger.log(`Alta con fotos incluidas (${products.filter(p => p.images?.length).length} de ${products.length} productos).`);
         const feedId = await this.postFeed(credentials, 'ProductCreate', xml);
