@@ -22,7 +22,9 @@ export class AiProcessor extends WorkerHost {
     async process(job: Job<any, any, string>): Promise<any> {
         console.log(`[AiProcessor] Processing job ${job.id} for product: ${job.data.productName}`);
 
-        const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId } = job.data;
+        const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId, price, stock } = job.data;
+        // Varias fotos por producto; los trabajos anteriores traían una sola.
+        const imagenes: string[] = job.data.imageUrls ?? (imageUrl ? [imageUrl] : []);
         const publishTo: string[] = job.data.publishTo ?? [];
 
         const batchMeta: BatchMeta | undefined = job.data.batchId ? {
@@ -35,20 +37,22 @@ export class AiProcessor extends WorkerHost {
         try {
             // 1. Create the product with the resolved image URL (if any)
             const product = await this.productsService.create({
-                name: productName,
-                description,
+                name: productName || sku,
+                description: description || '',
                 sku,
+                price,
+                stock,
                 targetMarketplaces,
-                images: imageUrl ? [imageUrl] : [],
-            }, userId);
+                images: imagenes,
+            } as any, userId);
 
             // 2. Generate AI content. En masivo se estima todo lo que falte (datos obligatorios y
             // medidas del paquete) para que se pueda publicar sin pasar por revisión.
             const aiContent = await this.aiService.generateProductContent({
-                name: productName,
-                description,
+                name: productName || '',
+                description: description || '',
                 targetMarketplaces,
-                imageUrls: imageUrl ? [imageUrl] : [],
+                imageUrls: imagenes,
                 userId,
                 estimar: true,
             });
@@ -56,6 +60,9 @@ export class AiProcessor extends WorkerHost {
             // 3. Misma lógica que la creación individual: atributos por canal, medidas y lo visto en las fotos.
             this.productsService.applyAiContent(product, aiContent);
             product.status = 'synced';
+            // Sin nombre o descripción en el Excel, los arma la IA a partir de las fotos.
+            if (!productName) product.name = (product.aiTitle || aiContent.vision?.suggestedName || sku).slice(0, 255);
+            if (!description) product.description = product.aiDescription || aiContent.vision?.description || '';
             const updatedProduct = await this.productsService.save(product);
 
             console.log(`[AiProcessor] ✓ Job ${job.id} done -> Product ${updatedProduct.id}`);

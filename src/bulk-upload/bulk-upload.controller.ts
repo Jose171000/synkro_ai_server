@@ -1,6 +1,6 @@
 import {
     Controller, Post, Get,
-    UseInterceptors, UploadedFile, UploadedFiles,
+    UseInterceptors, UploadedFile, UploadedFiles, Res, StreamableFile,
     BadRequestException,
     HttpCode, HttpStatus, UseGuards, Req,
 } from '@nestjs/common';
@@ -8,7 +8,9 @@ import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { leerPrimeraHoja } from '../common/excel/excel';
+import type { Response } from 'express';
+import { leerPrimeraHoja, escribirHoja } from '../common/excel/excel';
+import { COLUMNAS, MAX_FOTOS, claveDeRuta, esJpg, esUrl, fotosDeCarpeta, leerPrecio, leerStock, partirLista } from './bulk-products';
 import * as AdmZip from 'adm-zip';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -53,30 +55,54 @@ export class BulkUploadController {
     }
 
     /**
-     * Resolves an image field value to a final URL:
-     * - If it's an external URL (http/https): validate JPEG + dimensions, return as-is
-     * - Otherwise: treat as a ZIP path, extract buffer, upload to Cloudinary
+     * Sube a Cloudinary las fotos de un producto y devuelve sus direcciones (la primera es la principal).
+     * Cada foto es una dirección web o una ruta dentro del ZIP; si la fila no las lista, se buscan en el ZIP por SKU.
+     * Solo JPG.
      */
-    private async resolveImageUrl(
-        value: string | undefined,
+    private async resolverFotos(
+        sku: string,
+        valor: string | undefined,
         zipEntries: Map<string, Buffer>,
-    ): Promise<string | undefined> {
-        if (!value) throw new Error('El campo image es obligatorio.');
-
-        if (value.startsWith('http://') || value.startsWith('https://')) {
-            // Will throw BadRequestException if not JPEG or exceeds 2000x2000px
-            return await this.uploadService.validateExternalUrl(value);
+        otrosSkus: Set<string>,
+    ): Promise<string[]> {
+        const indicadas = partirLista(valor);
+        const lista = indicadas.length ? indicadas : fotosDeCarpeta(sku, [...zipEntries.keys()], otrosSkus);
+        if (!lista.length) {
+            throw new Error('no tiene fotos: escribe sus rutas en la columna fotos o ponlas en el ZIP con el SKU en el nombre (MK-001.jpg, MK-001-2.jpg) o en una carpeta con el SKU');
         }
+        if (lista.length > MAX_FOTOS) lista.length = MAX_FOTOS;
 
-        // Treat as ZIP path — throw if not found or upload fails
-        const normalizedPath = value.replace(/\\/g, '/').toLowerCase();
-        const entry = zipEntries.get(normalizedPath);
-        if (!entry) {
-            throw new Error(`Ruta de imagen no encontrada en el ZIP: "${value}"`);
+        const urls: string[] = [];
+        for (const ruta of lista) {
+            if (!esJpg(ruta)) throw new Error(`la foto "${ruta}" no es JPG: solo se aceptan .jpg o .jpeg`);
+            if (esUrl(ruta)) {
+                urls.push(await this.uploadService.validateExternalUrl(ruta.trim()));
+                continue;
+            }
+            const entrada = zipEntries.get(claveDeRuta(ruta));
+            if (!entrada) {
+                throw new Error(`no se encontró la foto "${ruta}" en el ZIP (¿subiste el ZIP junto al Excel?)`);
+            }
+            urls.push((await this.uploadService.uploadBuffer(entrada, ruta, 'products')).secureUrl);
         }
+        return urls;
+    }
 
-        const result = await this.uploadService.uploadBuffer(entry, value, 'products');
-        return result.secureUrl;
+    // ─────────────────────────────────────────────────────────────
+    // GET /bulk-upload/products/template — plantilla de Excel
+    // ─────────────────────────────────────────────────────────────
+    @Get('products/template')
+    @ApiOperation({ summary: 'Descarga la plantilla de Excel para crear productos en lote' })
+    async downloadTemplate(@Res({ passthrough: true }) res: Response) {
+        const buffer = await escribirHoja([
+            { sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: '' },
+            { sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto del producto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: 'falabella,mercadolibre' },
+        ], 'Productos');
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="plantilla-productos.xlsx"',
+        });
+        return new StreamableFile(buffer);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -86,9 +112,9 @@ export class BulkUploadController {
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiOperation({
         summary: 'Carga un archivo Excel para crear productos en lote mediante IA',
-        description: `Archivos: excel (obligatorio) + zip (opcional, con imágenes JPG/JPEG).
-Columnas Excel: sku | productName | description | targetMarketplaces | image
-El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro del ZIP (ej: fotos/SKU-001.jpg).`,
+        description: `Archivos: excel (obligatorio) + zip (opcional, con las fotos JPG).
+Columnas: sku | precio | stock | fotos | nombre (opcional) | descripcion (opcional) | canales (opcional).
+fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía, se buscan en el ZIP las fotos cuyo nombre empieza por el SKU o que están en una carpeta con el SKU.`,
     })
     @ApiConsumes('multipart/form-data')
     @ApiBody({
@@ -96,7 +122,7 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
             type: 'object',
             properties: {
                 excel: { type: 'string', format: 'binary', description: 'Archivo Excel de productos' },
-                zip:   { type: 'string', format: 'binary', description: 'ZIP con imágenes (opcional)' },
+                zip:   { type: 'string', format: 'binary', description: 'ZIP con las fotos JPG (opcional)' },
             },
             required: ['excel'],
         },
@@ -115,9 +141,8 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
             try {
                 const zip = new AdmZip(zipFile.buffer);
                 for (const entry of zip.getEntries()) {
-                    if (!entry.isDirectory) {
-                        const key = entry.entryName.replace(/\\/g, '/').toLowerCase();
-                        zipEntries.set(key, entry.getData());
+                    if (!entry.isDirectory && !entry.entryName.includes('__MACOSX')) {
+                        zipEntries.set(claveDeRuta(entry.entryName), entry.getData());
                     }
                 }
                 console.log(`[BulkUpload] ZIP cargado con ${zipEntries.size} archivos.`);
@@ -131,18 +156,8 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
             if (rows.length === 0) throw new BadRequestException('El Excel esta vacio.');
             console.log('[BulkUpload] Columnas detectadas:', Object.keys(rows[0] as object));
 
-            // Resolve all images in parallel before enqueueing (may upload to Cloudinary)
-            const resolvedImages = await Promise.allSettled(
-                rows.map((row: any) => this.resolveImageUrl(
-                    this.getVal(row, ['image', 'imagen', 'img', 'photo', 'foto']),
-                    zipEntries,
-                ))
-            );
-
-            let totalQueued = 0;
-            let totalSkipped = 0;
-            const rejectedImages: string[] = [];
-            const batchId = randomUUID(); // unique ID for this bulk-upload batch
+            const rechazos: string[] = [];
+            const rechazar = (i: number, motivo: string) => { rechazos.push(`Fila ${i + 2}: ${motivo}`); };
 
             // Canales de la tienda donde se puede publicar sola. Solo el dueño publica;
             // el resto de los roles crea los productos y los deja listos.
@@ -153,90 +168,78 @@ El campo image puede ser una URL externa (JPG, máx 2000x2000) o una ruta dentro
                     .map((c: any) => c.marketplace as string))]
                 : [];
 
-            // Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
-            const skuRechazado = new Map<number, string>();
-            const existentes = await this.productsService.skusExistentes(
-                req.user.id,
-                rows.map((row: any) => this.getVal(row, ['sku']) ?? ''),
-            );
+            // 1) Datos de cada fila. Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
+            const skusDelExcel = rows.map((row: any) => this.getVal(row, COLUMNAS.sku) ?? '');
+            const existentes = await this.productsService.skusExistentes(req.user.id, skusDelExcel);
+            const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
+            type Fila = { i: number; sku: string; precio: number; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
+            const validas: Fila[] = [];
             rows.forEach((row: any, i: number) => {
-                const sku = (this.getVal(row, ['sku']) ?? '').trim();
-                if (!sku) return;
+                const sku = (this.getVal(row, COLUMNAS.sku) ?? '').trim();
+                if (!sku) return rechazar(i, 'falta el SKU');
                 const clave = sku.toLowerCase();
-                if (existentes.has(clave)) skuRechazado.set(i, `el SKU ${sku} ya existe en tus productos`);
-                else if (vistos.has(clave)) skuRechazado.set(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
-                else vistos.set(clave, i);
-            });
+                if (existentes.has(clave)) return rechazar(i, `el SKU ${sku} ya existe en tus productos`);
+                if (vistos.has(clave)) return rechazar(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
+                vistos.set(clave, i);
 
-            // Pre-count valid rows so each job knows the correct batchTotal
-            const validRows = rows.filter((_row: any, i: number) => {
-                const row: any = rows[i];
-                if (skuRechazado.has(i)) return false;
-                const sku         = this.getVal(row, ['sku']);
-                const productName = this.getVal(row, ['productname', 'nombre', 'name', 'producto']);
-                const description = this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']);
-                const settled     = resolvedImages[i];
-                return sku && productName && description && settled.status === 'fulfilled';
-            });
-            const batchTotal = validRows.length;
+                const precio = leerPrecio(this.getVal(row, COLUMNAS.precio));
+                if (precio === null) return rechazar(i, `${sku}: falta el precio o no es válido`);
+                const stock = leerStock(this.getVal(row, COLUMNAS.stock));
+                if (stock === null) return rechazar(i, `${sku}: el stock debe ser un número entero`);
 
-            for (let i = 0; i < rows.length; i++) {
-                const row: any = rows[i];
-                const sku         = this.getVal(row, ['sku']);
-                const productName = this.getVal(row, ['productname', 'nombre', 'name', 'producto']);
-                const description = this.getVal(row, ['description', 'descripcion', 'descripcion', 'detalle']);
-
-                if (!sku || !productName || !description) {
-                    console.log(`[BulkUpload] Fila ${i+1} descartada -> SKU: ${sku}, Nombre: ${productName}`);
-                    totalSkipped++;
-                    continue;
-                }
-
-                if (skuRechazado.has(i)) {
-                    rejectedImages.push(`Fila ${i + 2}: ${skuRechazado.get(i)}`);
-                    totalSkipped++;
-                    continue;
-                }
-
-                const settled = resolvedImages[i];
-                if (settled.status === 'rejected') {
-                    const reason = settled.reason?.message ?? 'imagen inválida';
-                    console.warn(`[BulkUpload] Fila ${i+1} (SKU: ${sku}) rechazada -> ${reason}`);
-                    rejectedImages.push(`SKU ${sku}: ${reason}`);
-                    totalSkipped++;
-                    continue;
-                }
-
-                const imageUrl = (settled as PromiseFulfilledResult<string | undefined>).value;
                 // Sin columna de canales se usan todos los que la tienda tiene conectados.
-                const indicados = (this.getVal(row, ['targetmarketplaces', 'marketplaces']) || '')
-                    .split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
-                const targets = indicados.length ? indicados : (conectados.length ? conectados : ['mercadolibre']);
+                const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
+                validas.push({
+                    i, sku, precio, stock,
+                    nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
+                    descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
+                    fotos: this.getVal(row, COLUMNAS.fotos),
+                    canales: indicados.length ? indicados : (conectados.length ? conectados : ['mercadolibre']),
+                });
+            });
 
+            // 2) Fotos de las filas que pasaron: se suben antes de encolar (puede tardar).
+            const fotos = await Promise.allSettled(validas.map(f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus)));
+            const listas: { fila: Fila; urls: string[] }[] = [];
+            fotos.forEach((r, k) => {
+                const fila = validas[k];
+                if (r.status === 'rejected') {
+                    console.warn(`[BulkUpload] Fila ${fila.i + 2} (SKU: ${fila.sku}) rechazada -> ${r.reason?.message}`);
+                    rechazar(fila.i, `${fila.sku}: ${r.reason?.message ?? 'foto inválida'}`);
+                } else {
+                    listas.push({ fila, urls: r.value });
+                }
+            });
+
+            // 3) A la cola. El total del lote se calcula antes: todos los trabajos conocen el mismo valor.
+            const batchId = randomUUID();
+            const batchTotal = listas.length;
+            for (const { fila, urls } of listas) {
                 await this.listingsQueue.add('process-product', {
-                    sku,
-                    productName,
-                    description,
-                    targetMarketplaces: targets,
+                    sku: fila.sku,
+                    productName: fila.nombre,
+                    description: fila.descripcion,
+                    price: fila.precio,
+                    stock: fila.stock,
+                    targetMarketplaces: fila.canales,
                     // Se publica solo donde la tienda tiene cuenta conectada.
-                    publishTo: targets.filter((t: string) => conectados.includes(t)),
+                    publishTo: fila.canales.filter(t => conectados.includes(t)),
                     storeId,
                     userId:     req.user.id,
                     userEmail:  req.user.email,
-                    imageUrl,
+                    imageUrls: urls,
                     batchId,
-                    batchTotal, // Pre-computed before the loop: always the same correct value for all jobs
+                    batchTotal,
                 });
-                totalQueued++;
             }
 
             return {
-                message: `${totalQueued} productos encolados. ${totalSkipped} filas rechazadas.`,
-                totalQueued,
-                totalSkipped,
+                message: `${batchTotal} productos encolados. ${rows.length - batchTotal} filas rechazadas.`,
+                totalQueued: batchTotal,
+                totalSkipped: rows.length - batchTotal,
                 zipImagesLoaded: zipEntries.size,
-                ...(rejectedImages.length && { rejectedDetails: rejectedImages }),
+                ...(rechazos.length && { rejectedDetails: rechazos }),
             };
         } catch (error) {
             if (error instanceof BadRequestException) throw error;
