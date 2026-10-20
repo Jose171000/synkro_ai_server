@@ -80,7 +80,7 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         '       Si la dejas vacía, la plataforma busca en el ZIP las fotos cuyo nombre empieza por el SKU (MK-001.jpg, MK-001-2.jpg) o que están en una carpeta con el SKU.',
         '       La primera foto es la principal. Máximo 8 por producto.',
         'nombre y descripcion: opcionales. Si faltan, la IA los arma a partir de las fotos.',
-        'canales: elige de la lista. Si la dejas vacía se publica en todos los canales conectados.',
+        'canales: elige de la lista. Si la dejas vacía se usan los canales marcados en pantalla al subir el archivo (o todos los conectados, si no marcaste ninguno).',
         'precio_descuento: opcional. Debe ser menor que el precio. Se envía a Falabella como precio con descuento.',
         'descuento_desde / descuento_hasta: opcionales, fechas AAAA-MM-DD (por ejemplo 2026-11-30). Sin fechas, el descuento queda sin vigencia definida.',
     ];

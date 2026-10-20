@@ -175,6 +175,9 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                     .map((c: any) => c.marketplace as string))]
                 : [];
 
+            // Canales marcados en pantalla: valen para las filas que no traen su propia columna `canales`.
+            const marcados = partirLista(String(req.body?.canales ?? '')).map(t => t.toLowerCase()).filter(t => CANALES_PUBLICABLES.includes(t));
+
             // 1) Datos de cada fila. Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
             const skusDelExcel = rows.map((row: any) => this.getVal(row, COLUMNAS.sku) ?? '');
             const existentes = await this.productsService.skusExistentes(req.user.id, skusDelExcel);
@@ -205,14 +208,14 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 if (desde === undefined || hasta === undefined) return rechazar(i, `${sku}: las fechas del descuento no se entienden (usa AAAA-MM-DD, por ejemplo 2026-11-30)`);
                 if (desde && hasta && hasta < desde) return rechazar(i, `${sku}: la fecha de fin del descuento es anterior a la de inicio`);
 
-                // Sin columna de canales se usan todos los que la tienda tiene conectados.
+                // Sin columna de canales se usan los marcados en pantalla o, si no hay, todos los conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
                 validas.push({
                     i, sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
                     nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
                     descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
                     fotos: this.getVal(row, COLUMNAS.fotos),
-                    canales: indicados.length ? indicados : (conectados.length ? conectados : ['mercadolibre']),
+                    canales: indicados.length ? indicados : (marcados.length ? marcados : (conectados.length ? conectados : ['mercadolibre'])),
                 });
             });
 
