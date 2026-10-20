@@ -1,6 +1,6 @@
 import {
     Controller, Post, Get,
-    UseInterceptors, UploadedFile, UploadedFiles, Res, StreamableFile,
+    UseInterceptors, UploadedFile, UploadedFiles, Res,
     BadRequestException,
     HttpCode, HttpStatus, UseGuards, Req,
 } from '@nestjs/common';
@@ -93,16 +93,17 @@ export class BulkUploadController {
     // ─────────────────────────────────────────────────────────────
     @Get('products/template')
     @ApiOperation({ summary: 'Descarga la plantilla de Excel para crear productos en lote' })
-    async downloadTemplate(@Res({ passthrough: true }) res: Response) {
+    async downloadTemplate(@Res() res: Response) {
         const buffer = await escribirHoja([
             { sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: '' },
             { sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto del producto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: 'falabella,mercadolibre' },
         ], 'Productos');
+        // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
         res.set({
             'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'Content-Disposition': 'attachment; filename="plantilla-productos.xlsx"',
         });
-        return new StreamableFile(buffer);
+        return res.send(buffer);
     }
 
     // ─────────────────────────────────────────────────────────────
