@@ -43,6 +43,8 @@ export class AiService {
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
+    // Resultado de verificar la categoría elegida en cada canal (hoy solo Falabella).
+    const categoryChecks: Record<string, { id: string | null; confianza: string; motivo?: string; ruta?: string }> = {};
 
     // Los enlaces de imágenes o GIFs que el cliente pegó en su descripción van a la ficha HTML, no al texto que redacta la IA.
     const urlsDelCliente = extraerUrlsDeImagen(`${dto.name ?? ''} ${dto.description ?? ''}`);
@@ -113,6 +115,20 @@ export class AiService {
       });
 
       catJson = JSON.parse(catResponse.choices[0].message.content || '{}');
+
+      // Falabella: la categoría se verifica con una segunda consulta; si ninguna encaja no se asigna ninguna
+      // (publicar en la categoría equivocada es peor que pedir una revisión).
+      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')) {
+        const creds = dto.userId ? await this.channelAttributes.credencialesDe(dto.userId).catch(() => null) : null;
+        const r = await this.elegirCategoriaVerificada('falabella', enriquecido.name, enriquecido.description, categoriesPerMarketplace['falabella'] ?? [], {
+          vision,
+          preferida: catJson['falabella_category_id'] ? String(catJson['falabella_category_id']) : null,
+          buscarMas: creds ? (palabras) => this.channelAttributes.candidatasFalabella(creds, palabras) : undefined,
+        });
+        categoryChecks['falabella'] = r;
+        if (r.id) catJson['falabella_category_id'] = r.id;
+        else delete catJson['falabella_category_id'];
+      }
 
       // Step 4: Extract requiredAttributes from the matched category objects (already in memory)
       dto.targetMarketplaces.forEach(marketplace => {
@@ -205,6 +221,7 @@ export class AiService {
       // Bundle the results from Phase A (Categorization) and Phase B (Generation) together
       return {
         categorizedAs: catJson,
+        categoryChecks,
         generatedListings: finalJson,
         vision,
         packageEstimate,
@@ -341,6 +358,181 @@ Responde únicamente este JSON:
       console.warn('[AiService] No se pudo elegir la categoría:', error);
       return null;
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Categoría: elegir, verificar y detectar las dudosas
+  // ─────────────────────────────────────────────────────────────
+
+  private static readonly CONECTORES = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'y', 'e', 'o', 'u', 'para', 'con', 'sin', 'en', 'por', 'un', 'una', 'a', 'al', 'and', 'the', 'of', 'for', 'with']);
+
+  /** Palabras con significado de un texto: sin tildes, sin conectores y sin plurales simples. */
+  private palabrasClave(texto: string): Set<string> {
+    const limpio = String(texto ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^a-z0-9ñ\s]/g, ' ');
+    const palabras = limpio.split(/\s+/).filter(p => p.length > 2 && !AiService.CONECTORES.has(p));
+    return new Set(palabras.map(p => (p.length > 4 ? p.replace(/(es|s)$/, '') : p)));
+  }
+
+  /** ¿La ruta de la categoría comparte alguna palabra con el producto? Sin ninguna, la elección es sospechosa. */
+  public coincidenciaDeCategoria(ruta: string, textos: (string | undefined | null)[]): boolean {
+    const deLaRuta = this.palabrasClave(ruta);
+    const delProducto = this.palabrasClave(textos.filter(Boolean).join(' '));
+    for (const p of deLaRuta) {
+      if (delProducto.has(p)) return true;
+      for (const q of delProducto) if (p.length > 4 && q.length > 4 && (p.startsWith(q.slice(0, 5)) || q.startsWith(p.slice(0, 5)))) return true;
+    }
+    return false;
+  }
+
+  private async jsonDeIa(prompt: string): Promise<any | null> {
+    try {
+      const r = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          { role: 'user', content: prompt },
+        ],
+      });
+      return JSON.parse(r.choices[0]?.message?.content || '{}');
+    } catch (error: any) {
+      console.warn('[AiService] Consulta de categoría no disponible:', error?.message);
+      return null;
+    }
+  }
+
+  private descripcionParaCategoria(nombre: string, descripcion: string, vision?: ProductVision | null): string {
+    return [
+      `Nombre: ${nombre}`,
+      descripcion ? `Descripción: ${String(descripcion).slice(0, 500)}` : '',
+      vision?.productType ? `Tipo de producto visto en las fotos: ${vision.productType}` : '',
+      vision?.keywords?.length ? `Palabras clave: ${vision.keywords.slice(0, 8).join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Segunda opinión sobre una categoría: ¿un comprador esperaría encontrar este producto ahí?
+   * Si la consulta falla no se bloquea (ok con `incierta`), pero la confianza bajará.
+   */
+  public async verificarCategoria(
+    nombre: string,
+    descripcion: string,
+    vision: ProductVision | null | undefined,
+    ruta: string,
+  ): Promise<{ ok: boolean; motivo: string; incierta?: boolean }> {
+    const r = await this.jsonDeIa(`Eres un revisor estricto de catálogo de un marketplace.
+Producto:
+${this.descripcionParaCategoria(nombre, descripcion, vision)}
+
+Categoría propuesta: ${ruta}
+
+¿Un comprador esperaría encontrar EXACTAMENTE este producto en esa categoría? Rechaza categorías de otro tipo de producto,
+aunque compartan alguna palabra (por ejemplo, una máquina de cocina pequeña no va en electrodomésticos de gran tamaño).
+Responde solo JSON: {"ok": true|false, "motivo": "una frase corta"}`);
+    if (!r || typeof r.ok !== 'boolean') return { ok: true, motivo: 'no se pudo verificar', incierta: true };
+    return { ok: r.ok, motivo: String(r.motivo ?? '').slice(0, 200) };
+  }
+
+  private async pedirCategoria(
+    nombre: string,
+    descripcion: string,
+    vision: ProductVision | null | undefined,
+    candidatas: MarketplaceCategory[],
+  ): Promise<{ id: string | null; confianza: number; palabras: string[] }> {
+    const lista = candidatas.map(c => `ID: "${c.categoryId}" -> ${c.name}`).join('\n');
+    const r = await this.jsonDeIa(`Eres un experto clasificador de catálogo e-commerce.
+Producto:
+${this.descripcionParaCategoria(nombre, descripcion, vision)}
+
+Categorías candidatas:
+${lista}
+
+Elige la categoría MÁS ESPECÍFICA donde este producto concreto se vendería. Si NINGUNA encaja de verdad, devuelve null:
+es preferible no elegir a elegir una categoría de otro tipo de producto.
+Responde solo JSON: {"category_id": "<ID de la lista o null>", "confidence": <número entre 0 y 1>,
+"search_words": ["3 a 5 palabras en español que usarías para buscar la categoría correcta en el árbol del marketplace"]}`);
+    const id = r?.category_id != null ? String(r.category_id) : null;
+    return {
+      id: id && candidatas.some(c => c.categoryId === id) ? id : null,
+      confianza: Math.max(0, Math.min(1, Number(r?.confidence ?? 0.5))),
+      palabras: Array.isArray(r?.search_words) ? r.search_words.map(String).slice(0, 5) : [],
+    };
+  }
+
+  /**
+   * Elige la categoría y la verifica con una segunda consulta. Si la verificación la rechaza, esa categoría se descarta y se
+   * prueba otra; si ninguna candidata encaja, busca con otras palabras en el árbol del canal. Devuelve id nulo si nada convence:
+   * es mejor no publicar que publicar en la categoría equivocada.
+   */
+  public async elegirCategoriaVerificada(
+    marketplace: string,
+    nombre: string,
+    descripcion: string,
+    candidatas: MarketplaceCategory[],
+    opciones: {
+      vision?: ProductVision | null;
+      /** Categorías que ya se sabe que no sirven para este producto. */
+      excluir?: string[];
+      /** Una elección previa que solo hay que verificar. */
+      preferida?: string | null;
+      /** Búsqueda ampliada en el árbol del canal, con palabras nuevas. */
+      buscarMas?: (palabras: string[]) => Promise<MarketplaceCategory[]>;
+    } = {},
+  ): Promise<{ id: string | null; confianza: 'alta' | 'baja' | 'ninguna'; motivo?: string; ruta?: string }> {
+    const excluidas = new Set((opciones.excluir ?? []).map(String));
+    const unicas = new Map<string, MarketplaceCategory>();
+    for (const c of candidatas ?? []) if (c?.categoryId && !excluidas.has(String(c.categoryId))) unicas.set(String(c.categoryId), c);
+    let pool = [...unicas.values()];
+    let preferida = opciones.preferida && unicas.has(String(opciones.preferida)) ? String(opciones.preferida) : null;
+    let ampliado = false;
+    let ultimoMotivo = '';
+    const textos = [nombre, descripcion.slice(0, 200), opciones.vision?.productType, ...(opciones.vision?.keywords ?? [])];
+
+    for (let ronda = 0; ronda < 5; ronda++) {
+      let elegida: MarketplaceCategory | undefined;
+      let confianza = 0.8;
+      let alternativas: string[] = [];
+      if (preferida) {
+        elegida = pool.find(c => String(c.categoryId) === preferida);
+        preferida = null;
+      } else if (pool.length) {
+        const r = await this.pedirCategoria(nombre, descripcion, opciones.vision, pool);
+        elegida = r.id ? pool.find(c => String(c.categoryId) === r.id) : undefined;
+        confianza = r.confianza;
+        alternativas = r.palabras;
+      }
+
+      if (!elegida) {
+        if (!ampliado && opciones.buscarMas) {
+          ampliado = true;
+          const palabras = [...alternativas, opciones.vision?.productType ?? '', ...(opciones.vision?.keywords ?? []).slice(0, 4)].filter(Boolean);
+          const mas = (await opciones.buscarMas(palabras).catch(() => [] as MarketplaceCategory[]))
+            .filter(c => c?.categoryId && !excluidas.has(String(c.categoryId)) && !pool.some(p => String(p.categoryId) === String(c.categoryId)));
+          if (mas.length) {
+            pool = [...pool, ...mas];
+            continue;
+          }
+        }
+        return { id: null, confianza: 'ninguna', motivo: ultimoMotivo || 'ninguna categoría candidata encaja con el producto' };
+      }
+
+      const veredicto = await this.verificarCategoria(nombre, descripcion, opciones.vision, elegida.name);
+      if (veredicto.ok) {
+        const coincide = this.coincidenciaDeCategoria(elegida.name, textos);
+        const alta = confianza >= 0.7 && coincide && !veredicto.incierta;
+        return {
+          id: String(elegida.categoryId),
+          confianza: alta ? 'alta' : 'baja',
+          ruta: elegida.name,
+          ...(alta ? {} : { motivo: veredicto.incierta ? 'no se pudo verificar la categoría' : !coincide ? 'la categoría no comparte palabras con el producto: revisa que sea la correcta' : 'la IA no está segura de esta categoría' }),
+        };
+      }
+      excluidas.add(String(elegida.categoryId));
+      pool = pool.filter(c => String(c.categoryId) !== String(elegida!.categoryId));
+      ultimoMotivo = veredicto.motivo || `«${elegida.name}» no corresponde al producto`;
+    }
+    return { id: null, confianza: 'ninguna', motivo: ultimoMotivo || 'ninguna categoría candidata encaja con el producto' };
   }
 
   /**

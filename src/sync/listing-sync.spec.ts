@@ -824,6 +824,35 @@ describe('avisos de Falabella: envíos terminados y cambios de calidad', () => {
         expect(rechazada.avisos[0]).toMatchObject({ type: 'publish-error' });
     });
 
+    it('un rechazo por reglas de otra categoría descarta la categoría y no se vuelve a proponer', async () => {
+        const conCategoria: any = { ...prod, marketplaceIds: { falabella_category_id: '77' }, aiAttributes: { brand: 'GENERICO', _categoriaVerificada: '77' } };
+        const t = await construir({
+            conexiones: [cuentaFal()], productos: [conCategoria],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', product: conCategoria, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        t.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'El Peso (kg) debe estar entre 9 kg y 27 kg para esta categoría' }]);
+        await t.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(conCategoria.marketplaceIds.falabella_category_id).toBeUndefined();
+        expect(conCategoria.aiAttributes._categoriasMalas.falabella).toEqual(['77']);
+        expect(conCategoria.aiAttributes._categoriaDudosa).toBeTruthy();
+        expect(t.enlaces[0].lastError).toMatch(/Seller Center/);
+    });
+
+    it('una ficha aprobada confirma su categoría una sola vez y quita la duda', async () => {
+        const conCategoria: any = { ...prod, marketplaceIds: { falabella_category_id: '77' }, aiAttributes: { _categoriaDudosa: { id: '77', motivo: 'revisa' } } };
+        const t = await construir({
+            conexiones: [cuentaFal()], productos: [conCategoria],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', product: conCategoria, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        const aprende = jest.fn(async () => undefined);
+        (t.service as any).alAprobarseUnaFicha = aprende;
+        t.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'approved', reason: '' }]);
+        await t.service.refreshFalabellaQc('fa1', ['MK-1']);
+        await t.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(aprende).toHaveBeenCalledTimes(1);
+        expect(conCategoria.aiAttributes._categoriaDudosa).toBeUndefined();
+    });
+
     it('sin SKU en el aviso revisa las fichas que esperan o fallaron, y no toca las ya publicadas', async () => {
         const { service, falabella } = await preparar('published');
         falabella.getQcStates = jest.fn(async () => []);

@@ -19,7 +19,11 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
         getCategories: jest.fn(async () => [{ id: '2804', path: 'Juguetes › Didácticos' }]),
     };
     const ai: any = {
-        elegirCategoria: jest.fn(async () => (opts.categoriaElegida === undefined ? '2804' : opts.categoriaElegida)),
+        elegirCategoriaVerificada: jest.fn(async () => {
+            const id = opts.categoriaElegida === undefined ? '2804' : opts.categoriaElegida;
+            return id ? { id, confianza: 'alta', ruta: 'Juguetes › Didácticos' } : { id: null, confianza: 'ninguna', motivo: 'ninguna encaja' };
+        }),
+        verificarCategoria: jest.fn(async () => ({ ok: true, motivo: '' })),
         estimarPaquete: jest.fn(async () => ({ width: 30, length: 40, height: 20, weight: 3, fromClient: false })),
         generarDescripcionHtml: jest.fn(async () => ({ html: '<div>ficha</div>', title: 'Torre de aprendizaje Montessori de madera 4 en 1' })),
         completarAtributos: jest.fn(async () => ({ values: { material: 'Madera' }, estimated: ['material'] })),
@@ -59,7 +63,7 @@ describe('dejar un producto listo para Falabella con un paso', () => {
         const { service, guardados, ai, canales } = construir(producto());
         const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');
 
-        expect(r.category).toEqual({ id: '2804', path: 'Juguetes › Didácticos', auto: true });
+        expect(r.category).toEqual({ id: '2804', path: 'Juguetes › Didácticos', auto: true, confidence: 'alta' });
         expect(r.brand).toEqual({ value: 'GENERICO', replaced: true, original: 'Marca Inventada' });
         expect(r.measures).toMatchObject({ width: 30, weight: 3, estimated: true });
         expect(r.estimatedAttributes).toEqual(['material']);
@@ -82,7 +86,7 @@ describe('dejar un producto listo para Falabella con un paso', () => {
         expect(r.category!.id).toBe('999');
         expect(r.category!.auto).toBe(false);
         expect(r.measures.estimated).toBe(false);
-        expect(ai.elegirCategoria).not.toHaveBeenCalled();
+        expect(ai.elegirCategoriaVerificada).not.toHaveBeenCalled();
         expect(ai.estimarPaquete).not.toHaveBeenCalled();
         expect(ai.completarAtributos).not.toHaveBeenCalled();
         expect(ai.generarDescripcionHtml).not.toHaveBeenCalled();

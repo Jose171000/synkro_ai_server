@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
@@ -14,9 +14,12 @@ import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo } from '../sync/falabella/falabel
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 
 export interface FalabellaPrepReport {
+    sku?: string;
     listo: boolean;
     motivo?: string;
-    category: { id: string; path: string; auto: boolean } | null;
+    category: { id: string; path: string; auto: boolean; /** alta: verificada; baja: conviene revisarla; manual: la eligió una persona */ confidence?: 'alta' | 'baja' | 'manual' } | null;
+    /** Por qué la categoría necesita revisión, si la necesita. */
+    categoryNote?: string;
     brand: { value: string; replaced: boolean; original?: string };
     measures: { width: number | null; length: number | null; height: number | null; weight: number | null; estimated: boolean };
     estimatedAttributes: string[];
@@ -40,7 +43,7 @@ const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacriti
  * Todo lo que no vino del cliente queda marcado para que se pueda revisar.
  */
 @Injectable()
-export class FalabellaAutoPrepService {
+export class FalabellaAutoPrepService implements OnModuleInit {
     private readonly logger = new Logger(FalabellaAutoPrepService.name);
 
     constructor(
@@ -67,8 +70,28 @@ export class FalabellaAutoPrepService {
         const estimated = { measures: !!attrs.estimated?.measures, attributes: { ...(attrs.estimated?.attributes ?? {}) } as Record<string, string[]> };
 
         // ── Categoría ──
+        // Las que Falabella ya rechazó para este producto no se vuelven a proponer.
+        const descartadas: string[] = (attrs._categoriasMalas?.falabella ?? []).map(String);
         let categoryId = this.sync.categoriaFalabella(product);
         let categoriaAuto = false;
+        let confianza: 'alta' | 'baja' | 'manual' | null = categoryId && String(attrs._categoriaManual) === String(categoryId) ? 'manual' : null;
+
+        // Una categoría que aún nadie verificó (la puso la IA antes de esta comprobación) se revisa una vez.
+        if (categoryId && confianza !== 'manual' && String(attrs._categoriaVerificada) !== String(categoryId)) {
+            const ruta = (await this.falabella.getCategories(creds).catch((): { id: string; path: string }[] => [])).find((c) => c.id === String(categoryId))?.path;
+            if (ruta) {
+                const v = await this.ai.verificarCategoria(nombre, descripcion, vision, ruta);
+                if (v.ok) attrs._categoriaVerificada = String(categoryId);
+                else {
+                    descartadas.push(String(categoryId));
+                    delete ids.falabella_category_id;
+                    delete attrs.falabella_category_id;
+                    categoryId = undefined;
+                }
+            }
+        }
+        if (categoryId && confianza !== 'manual') confianza = attrs._categoriaDudosa ? 'baja' : 'alta';
+
         if (!categoryId) {
             let candidatas: MarketplaceCategory[] = [];
             try {
@@ -81,13 +104,25 @@ export class FalabellaAutoPrepService {
                 const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...nombre.split(/\s+/)].filter(Boolean);
                 candidatas = [...candidatas, ...(await this.canales.candidatasFalabella(creds, palabras))].slice(0, 25);
             }
-            const elegida = await this.ai.elegirCategoria('falabella', nombre, descripcion, candidatas);
-            if (elegida) {
-                categoryId = elegida;
-                ids.falabella_category_id = elegida;
+            const r = await this.ai.elegirCategoriaVerificada('falabella', nombre, descripcion, candidatas, {
+                vision,
+                excluir: descartadas,
+                buscarMas: (palabras) => this.canales.candidatasFalabella(creds, palabras),
+            });
+            if (r.id) {
+                categoryId = r.id;
+                ids.falabella_category_id = r.id;
                 categoriaAuto = true;
+                attrs._categoriaVerificada = r.id;
+                confianza = r.confianza === 'alta' ? 'alta' : 'baja';
+                if (confianza === 'alta') delete attrs._categoriaDudosa;
+                else attrs._categoriaDudosa = { id: r.id, motivo: r.motivo ?? 'revisa que la categoría sea la correcta' };
+            } else {
+                // Mejor no publicar que publicar en la categoría equivocada.
+                attrs._categoriaDudosa = { id: null, motivo: r.motivo ?? 'ninguna categoría encaja con el producto' };
             }
         }
+        if (!categoryId) delete attrs.falabella_category_id;
 
         // ── Descripción HTML estándar de la agencia ──
         let descripcionGenerada = false;
@@ -173,10 +208,15 @@ export class FalabellaAutoPrepService {
             ? (await this.falabella.getCategories(creds).catch((): { id: string; path: string }[] => [])).find((c) => c.id === String(categoryId))?.path ?? `Categoría ${categoryId}`
             : null;
 
+        const sinCategoria = !categoryId;
         return {
+            sku: product.sku,
             listo: !('reason' in validacion),
-            motivo: 'reason' in validacion ? validacion.reason : undefined,
-            category: categoryId ? { id: String(categoryId), path: path!, auto: categoriaAuto } : null,
+            motivo: sinCategoria
+                ? `no se encontró una categoría de Falabella que encaje con este producto (${attrs._categoriaDudosa?.motivo ?? 'sin candidatas'}). Elígela en la Ficha`
+                : 'reason' in validacion ? validacion.reason : undefined,
+            category: categoryId ? { id: String(categoryId), path: path!, auto: categoriaAuto, confidence: confianza ?? 'alta' } : null,
+            ...(attrs._categoriaDudosa ? { categoryNote: String(attrs._categoriaDudosa.motivo) } : {}),
             brand: { value: attrs.brand, replaced: reemplazada, ...(reemplazada ? { original } : {}) },
             measures: {
                 width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight,
@@ -185,6 +225,18 @@ export class FalabellaAutoPrepService {
             estimatedAttributes: (estimated.attributes.falabella ?? estimadosAhora).filter((n) => !sistema.has(claveDeAtributo(n))),
             descriptionGenerated: descripcionGenerada,
             attributes: { filled: llenos, total: totalAtributos },
+        };
+    }
+
+    onModuleInit() {
+        this.sync.alAprobarseUnaFicha = async (product) => {
+            const categoria = this.sync.categoriaFalabella(product);
+            if (!categoria) return;
+            const vision = ((product.aiAttributes as any)?.vision as ProductVision | undefined) ?? null;
+            await this.canales.confirmarCategoria('falabella', String(categoria), {
+                titulo: product.aiTitle || product.name,
+                palabras: [vision?.productType ?? '', ...(vision?.keywords ?? [])].filter(Boolean),
+            });
         };
     }
 

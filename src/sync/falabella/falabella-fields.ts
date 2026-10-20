@@ -96,3 +96,14 @@ export function recortarTexto(texto: string, max: number): string {
     }
     return t.slice(0, max);
 }
+
+/**
+ * ¿El rechazo de Falabella significa que la categoría no corresponde al producto? Lo delatan las reglas propias de una
+ * categoría que el producto incumple por mucho («el peso debe estar entre 9 kg y 27 kg para esta categoría»).
+ */
+export function esCategoriaEquivocada(mensaje: string | null | undefined): boolean {
+    const m = String(mensaje ?? '');
+    if (!/categor/i.test(m)) return false;
+    return /(entre|between)\s+[\d.,]+\s*(kg|g|cm|mm|m|l)\b/i.test(m)
+        || /(no (corresponde|pertenece|es v[aá]lid[oa])|does not belong|not allowed|no permitid)/i.test(m);
+}

@@ -400,6 +400,16 @@ export class ProductsService {
                 ...aiContent.categorizedAs,
             };
         }
+
+        // Resultado de verificar la categoría de Falabella: queda anotado para que la Ficha avise si hay que revisarla.
+        const chequeo = aiContent?.categoryChecks?.falabella;
+        if (chequeo) {
+            const atributos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+            if (chequeo.id) atributos._categoriaVerificada = chequeo.id;
+            if (chequeo.id && chequeo.confianza === 'alta') delete atributos._categoriaDudosa;
+            else atributos._categoriaDudosa = { id: chequeo.id ?? null, motivo: chequeo.motivo ?? 'revisa que la categoría sea la correcta' };
+            product.aiAttributes = atributos as any;
+        }
     }
 
 }

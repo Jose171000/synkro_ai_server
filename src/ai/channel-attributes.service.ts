@@ -109,6 +109,16 @@ export class ChannelAttributesService {
         return [...vistas.values()].slice(0, 25);
     }
 
+    /** Falabella aprobó una ficha: la categoría aprende las palabras del producto y la próxima vez llegará antes a ella. */
+    async confirmarCategoria(marketplace: string, categoryId: string, contexto: ContextoDeProducto): Promise<void> {
+        try {
+            const guardada = await this.categories.findOne({ where: { marketplace, categoryId }, select: { id: true, labelText: true } });
+            if (guardada) await this.aprenderPalabras(guardada, contexto);
+        } catch (error: any) {
+            this.logger.warn(`No se pudo confirmar la categoría ${marketplace}/${categoryId}: ${error?.message}`);
+        }
+    }
+
     /** Categoría real de Mercado Libre para un título (el predictor oficial). */
     async predecirCategoriaMeli(titulo: string): Promise<string | null> {
         try {
@@ -145,14 +155,17 @@ export class ChannelAttributesService {
         const vigente = !!guardada && !!aprendidos && Date.now() - new Date(guardada.updatedAt).getTime() < VIGENCIA_MS;
         // Lo aprendido antes de guardar las listas completas de Falabella tiene las opciones cortadas en 40: se vuelve a pedir.
         const recortada = marketplace === 'falabella' && !!aprendidos?.some((x) => x.options?.length === MAX_OPCIONES);
+        // En Falabella las palabras del producto se aprenden solo cuando la ficha es aprobada (confirmarCategoria):
+        // si no, una categoría equivocada también aprendería las palabras y repetiría el error.
+        const contextoParaAprender = marketplace === 'falabella' ? undefined : contexto;
         if (aprendidos && vigente && !recortada) {
-            await this.aprenderPalabras(guardada!, contexto);
+            await this.aprenderPalabras(guardada!, contextoParaAprender);
             return this.paraElCanal(marketplace, aprendidos, opciones.todos);
         }
 
         const completos = await this.consultarAlCanal(marketplace, categoryId, userId, credenciales);
         if (completos) {
-            await this.recordar(marketplace, categoryId, completos, guardada, contexto);
+            await this.recordar(marketplace, categoryId, completos, guardada, contextoParaAprender);
             return this.paraElCanal(marketplace, completos, opciones.todos);
         }
         // El canal no respondió: mejor lo aprendido aunque esté viejo que nada.

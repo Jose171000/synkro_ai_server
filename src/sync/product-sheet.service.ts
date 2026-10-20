@@ -109,6 +109,8 @@ export class ProductSheetService {
                 brand: attrs.brand || 'GENERICO',
                 categoryId: categoria ? String(categoria) : null,
                 categoryPath: ruta ?? null,
+                // La categoría necesita que alguien la revise (la IA no estaba segura o Falabella rechazó la anterior).
+                categoryReview: attrs._categoriaDudosa ? String(attrs._categoriaDudosa.motivo ?? 'revisa que la categoría sea la correcta') : null,
                 measures: { width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight },
                 attributes: definiciones
                     .filter((a) => !ATRIBUTOS_YA_CUBIERTOS_FALABELLA.has(a.name))

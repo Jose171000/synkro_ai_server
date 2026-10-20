@@ -136,14 +136,17 @@ export class AiProcessor extends WorkerHost {
             // Cada producto se deja listo para Falabella (marca contra su catálogo, atributos, medidas, descripción HTML)
             // antes de enviar el lote; si uno falla se envía igual y el motivo queda en su ficha.
             // De a 4 a la vez: son varias llamadas a la IA por producto y un lote grande tardaría demasiado de a uno.
+            const porRevisar: { sku: string; motivo: string }[] = [];
             for (let i = 0; i < ids.length; i += 4) {
                 const resultados = await Promise.allSettled(
                     ids.slice(i, i + 4).map((id) => this.falabellaPrep.preparar({ userId: scope.userId, storeId: scope.storeId! }, id, cuentas[0])),
                 );
                 resultados.forEach((r, j) => {
                     if (r.status === 'rejected') console.warn(`[AiProcessor] No se pudo preparar ${ids[i + j]} para Falabella: ${(r.reason as any)?.message}`);
+                    else if (!r.value.category) porRevisar.push({ sku: r.value.sku ?? ids[i + j], motivo: r.value.categoryNote ?? 'sin categoría segura' });
                 });
             }
+            if (porRevisar.length) await this.syncService.avisarProductosPorRevisar(scope.userId, porRevisar).catch(() => undefined);
             for (const connectionId of cuentas) {
                 const r = await this.syncService.publishBatchToFalabella({ userId: scope.userId, storeId: scope.storeId }, connectionId, ids);
                 console.log(`[AiProcessor] Lote ${batchId} → Falabella: ${r.enviados} enviados, ${r.rechazados?.length ?? 0} rechazados.`);

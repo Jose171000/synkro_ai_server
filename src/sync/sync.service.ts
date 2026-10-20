@@ -2,7 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleIni
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1230,7 +1230,10 @@ export class SyncService implements OnModuleInit {
         product.aiAttributes = {
             ...((product.aiAttributes as any) || {}),
             ...(datos.attributes || {}),
+            // Una persona eligió esta categoría: se respeta y deja de marcarse como dudosa.
+            _categoriaManual: String(datos.categoryId),
         };
+        delete (product.aiAttributes as any)._categoriaDudosa;
         // Quien guarda las medidas las está revisando: dejan de estar marcadas como estimadas.
         const previo = (product.aiAttributes as any).estimated;
         if (previo) (product.aiAttributes as any).estimated = { ...previo, measures: false };
@@ -1271,6 +1274,61 @@ export class SyncService implements OnModuleInit {
         const marketplaceIds = (product.marketplaceIds as any) || {};
         const attributes = (product.aiAttributes as any) || {};
         return marketplaceIds.falabella_category_id ?? attributes.falabella_category_id;
+    }
+
+    /**
+     * Se llama cuando Falabella aprueba una ficha: la categoría aprende las palabras del producto. Lo registra el
+     * servicio de preparación de Falabella (vive en el módulo de IA, que depende de este).
+     */
+    alAprobarseUnaFicha?: (product: Product) => Promise<void>;
+
+    /** Falabella aprobó la ficha: la duda sobre su categoría se acaba y la categoría aprende (solo la primera vez). */
+    private async registrarAprobacion(product: Product): Promise<void> {
+        const categoria = this.categoriaFalabella(product);
+        if (!categoria) return;
+        const atributos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        if (String(atributos._categoriaAprobada) === String(categoria)) return;
+        atributos._categoriaAprobada = String(categoria);
+        delete atributos._categoriaDudosa;
+        await this.productRepository.update(product.id, { aiAttributes: atributos } as any);
+        product.aiAttributes = atributos as any;
+        void this.alAprobarseUnaFicha?.(product).catch(() => undefined);
+    }
+
+    /**
+     * Falabella rechazó la ficha por reglas que solo cumple otro tipo de producto: la categoría estaba mal. Se anota como
+     * mala para este producto y se quita, así al volver a publicar se elige otra distinta.
+     */
+    private async descartarCategoria(product: Product): Promise<void> {
+        const categoria = this.categoriaFalabella(product);
+        if (!categoria) return;
+        const atributos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        const malas = new Set<string>((atributos._categoriasMalas?.falabella ?? []).map(String));
+        malas.add(String(categoria));
+        atributos._categoriasMalas = { ...(atributos._categoriasMalas ?? {}), falabella: [...malas].slice(-10) };
+        atributos._categoriaDudosa = { id: null, motivo: 'Falabella rechazó la categoría anterior porque no corresponde al producto' };
+        delete atributos.falabella_category_id;
+        delete atributos._categoriaVerificada;
+        delete atributos._categoriaManual;
+        delete atributos._categoriaAprobada;
+        const ids: Record<string, any> = { ...((product.marketplaceIds as any) || {}) };
+        delete ids.falabella_category_id;
+        await this.productRepository.update(product.id, { aiAttributes: atributos, marketplaceIds: ids } as any);
+        product.aiAttributes = atributos as any;
+        product.marketplaceIds = ids as any;
+    }
+
+    /** Avisa de los productos que se quedaron sin categoría de Falabella segura: hay que elegirla en la Ficha. */
+    async avisarProductosPorRevisar(userId: string, items: { sku: string; motivo: string }[]): Promise<void> {
+        if (!items.length) return;
+        await this.notifications.notify(userId, {
+            type: 'publish-error',
+            severity: 'warning',
+            title: `${items.length} ${items.length === 1 ? 'producto necesita' : 'productos necesitan'} que elijas su categoría de Falabella`,
+            body: items.slice(0, 5).map(i => `${i.sku}: ${i.motivo}`).join(' · ').slice(0, 300) + (items.length > 5 ? ` … y ${items.length - 5} más` : ''),
+            marketplace: 'falabella',
+            meta: { skus: items.map(i => i.sku).slice(0, 50) },
+        });
     }
 
     /** Código de operador: identifica el país. 'fape' es Perú, 'facl' Chile. */
@@ -1828,9 +1886,13 @@ export class SyncService implements OnModuleInit {
                     aiAttributes: { ...((link.product.aiAttributes as any) || {}), _noAplica: [...new Set([...previos, ...noAplican])] },
                 } as any);
             }
+            const categoriaMala = !!error && !!link.product && esCategoriaEquivocada(error);
+            if (categoriaMala) await this.descartarCategoria(link.product);
             if (error) {
                 link.syncStatus = 'error';
-                link.lastError = noAplican.length ? `${error} — se quitaron esos datos: vuelve a publicar.` : error;
+                link.lastError = noAplican.length
+                    ? `${error} — se quitaron esos datos: vuelve a publicar.`
+                    : categoriaMala ? `${error} — Synkro descartó esa categoría: al pulsar Publicar de nuevo elegirá otra.` : error;
             } else {
                 link.syncStatus = 'published';
                 link.lastError = null as any;
@@ -2255,6 +2317,7 @@ export class SyncService implements OnModuleInit {
             const estado = porSku.get(enlace.product.sku.trim().toLowerCase());
             if (!estado) continue;
             const userId = enlace.connection?.owner?.id;
+            if (estado.status === 'approved') await this.registrarAprobacion(enlace.product);
             if (estado.status === 'approved' && enlace.syncStatus !== 'published') {
                 enlace.syncStatus = 'published';
                 enlace.lastError = null as any;
@@ -2272,7 +2335,10 @@ export class SyncService implements OnModuleInit {
                 }
                 await this.syncQueue.add('falabella-qc', { connectionId, skus: [enlace.product.sku] }, { delay: 4 * 60_000 });
             } else if (estado.status === 'rejected') {
-                const motivo = estado.reason ? `Falabella rechazó la ficha: ${estado.reason}` : 'Falabella rechazó la ficha en su control de calidad.';
+                const categoriaMala = esCategoriaEquivocada(estado.reason);
+                if (categoriaMala) await this.descartarCategoria(enlace.product);
+                const motivo = (estado.reason ? `Falabella rechazó la ficha: ${estado.reason}` : 'Falabella rechazó la ficha en su control de calidad.')
+                    + (categoriaMala ? ' — Synkro descartó esa categoría. Falabella ya creó esta ficha: elimínala en el Seller Center y vuelve a publicar para que se elija otra.' : '');
                 const cambio = enlace.syncStatus !== 'error' || enlace.lastError !== motivo;
                 enlace.syncStatus = 'error';
                 enlace.lastError = motivo;
