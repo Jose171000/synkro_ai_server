@@ -1906,7 +1906,9 @@ export class SyncService implements OnModuleInit {
         }
 
         // Con la ficha creada se mandan sus fotos: es el paso que falta para pasar el control de calidad.
-        if (recienCreados.length) await this.enviarImagenesAFalabella(feedConnectionId, credentials, userId, recienCreados);
+        // Con las fotos dentro del alta no hace falta un segundo envío (gasta una de las 50 llamadas de Falabella):
+        // solo sale como respaldo si Falabella rechaza la ficha por falta de fotos (ver refreshFalabellaQc).
+        if (recienCreados.length && !this.fotosEnElAlta) await this.enviarImagenesAFalabella(feedConnectionId, credentials, userId, recienCreados);
 
         console.log(
             `[Sync] Feed Falabella ${feed.externalFeedId}: ${estado.status}, ` +
@@ -2291,6 +2293,11 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /** Las fotos viajan dentro del alta de Falabella (por defecto). FALABELLA_IMAGES_IN_CREATE=0 vuelve al envío aparte. */
+    private get fotosEnElAlta(): boolean {
+        return process.env.FALABELLA_IMAGES_IN_CREATE !== '0';
+    }
+
     /** ¿El enlace se creó o cambió hace poco? Cuenta lo último entre el último envío terminado y el último cambio (un envío en curso aún no tiene fecha de término). */
     private esReciente(enlace: ListingLink, ventanaMs: number): boolean {
         const marcas = [enlace.lastSyncedAt, enlace.updatedAt].map(f => (f ? new Date(f).getTime() : 0));
@@ -2341,6 +2348,14 @@ export class SyncService implements OnModuleInit {
                     await this.listingLinkRepository.save(enlace);
                 }
                 await this.syncQueue.add('falabella-qc', { connectionId, skus: [enlace.product.sku] }, { delay: 4 * 60_000 });
+                // Respaldo: si aun con las fotos en el alta Falabella dice que faltan, se mandan aparte, una sola vez.
+                const atributos: Record<string, any> = { ...((enlace.product.aiAttributes as any) || {}) };
+                if (!atributos._fotosReenviadas && userId) {
+                    atributos._fotosReenviadas = true;
+                    await this.productRepository.update(enlace.product.id, { aiAttributes: atributos } as any);
+                    enlace.product.aiAttributes = atributos as any;
+                    await this.enviarImagenesAFalabella(connectionId, credenciales, userId, [enlace.product]);
+                }
             } else if (estado.status === 'rejected') {
                 const categoriaMala = esCategoriaEquivocada(estado.reason);
                 if (categoriaMala) await this.descartarCategoria(enlace.product);

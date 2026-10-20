@@ -892,7 +892,8 @@ describe('formato real de los avisos de Falabella y envío procesado una sola ve
         expect(trabajos[0]).toMatchObject({ n: 'falabella-qc', d: { connectionId: 'fa1', skus: ['MK-TOR-004', 'MK-TOR-005'] } });
     });
 
-    it('el aviso de envío terminado trae {Feed} y la consulta periódica llegando a la vez no manda las fotos dos veces', async () => {
+    it('con las fotos fuera del alta (FALABELLA_IMAGES_IN_CREATE=0): el aviso trae {Feed} y la consulta periódica llegando a la vez no manda las fotos dos veces', async () => {
+        process.env.FALABELLA_IMAGES_IN_CREATE = '0';
         const t = await construir({
             conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } })],
             productos: [prod],
@@ -911,5 +912,36 @@ describe('formato real de los avisos de Falabella y envío procesado una sola ve
 
         expect(t.falabella.setImages).toHaveBeenCalledTimes(1);
         expect(t.enlaces[0].syncStatus).toBe('published');
+        delete process.env.FALABELLA_IMAGES_IN_CREATE;
+    });
+
+    it('con las fotos dentro del alta (lo normal) no sale un segundo envío de fotos', async () => {
+        const t = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } })],
+            productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', product: prod, connection: { id: 'fa1' } }],
+        });
+        const feed: any = { id: 'f1', externalFeedId: 'ext-1', action: 'ProductCreate', skus: ['MK-1'], connection: { id: 'fa1' }, status: 'pending' };
+        (t.service as any).feedRepository = { findOne: jest.fn(async () => feed), save: jest.fn(async (x: any) => ({ ...x, id: x.id ?? 'img-1' })), create: (x: any) => x };
+        t.falabella.getFeedStatus = jest.fn(async () => ({ feedId: 'ext-1', status: 'Finished', action: 'ProductCreate', totalRecords: 1, processedRecords: 1, failedRecords: 0, errors: [] }));
+        t.falabella.setImages = jest.fn(async () => 'feed-fotos');
+        await t.service.checkFalabellaFeed('f1', 'u1', 0);
+        expect(t.falabella.setImages).not.toHaveBeenCalled();
+        expect(t.enlaces[0].syncStatus).toBe('published');
+    });
+
+    it('si Falabella igual dice «Images Missing», las fotos se mandan aparte, una sola vez', async () => {
+        const conFotos: any = { ...prod, aiAttributes: {} };
+        const t = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller', secrets: { webhookToken: 'tok-1' } })],
+            productos: [conFotos],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', updatedAt: new Date(), product: conFotos, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        (t.service as any).feedRepository = { save: jest.fn(async (x: any) => ({ ...x, id: 'img-1' })), create: (x: any) => x };
+        t.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        t.falabella.setImages = jest.fn(async () => 'feed-fotos');
+        await t.service.refreshFalabellaQc('fa1', ['MK-1']);
+        await t.service.refreshFalabellaQc('fa1', ['MK-1']);
+        expect(t.falabella.setImages).toHaveBeenCalledTimes(1);
     });
 });
