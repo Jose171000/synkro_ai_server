@@ -29,3 +29,32 @@ describe('campos de sistema de Falabella', () => {
         expect(atributosQueNoAplican(null).size).toBe(0);
     });
 });
+
+import { leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella-fields';
+
+describe('límites de longitud de atributos de Falabella', () => {
+    const largo = 'Set de utensilios de cocina Kasari (espátulas, cucharas y cucharones, cuchara para espaguetis, brocha de cocina, batidor manual, pinzas para alimentos) + soporte organizador';
+
+    it('conoce el límite de «Contenido del paquete» (172)', () => {
+        expect(limiteDeLongitud({ name: 'Contenido del paquete', feedName: 'PackageContent' }, null)).toBe(172);
+        expect(limiteDeLongitud({ name: 'Color', feedName: 'Color' }, null)).toBeUndefined();
+    });
+
+    it('usa el límite aprendido de un rechazo anterior', () => {
+        expect(limiteDeLongitud({ name: 'Garantía', feedName: 'Warranty' }, { _maxLen: { [claveDeAtributo('Garantía')]: 40 } })).toBe(40);
+    });
+
+    it('lee del mensaje de Falabella el valor y su máximo', () => {
+        const r = leerLimitesDeLongitud(`0: '${largo}' is more than 172 characters long`);
+        expect(r).toEqual([{ valor: largo, max: 172 }]);
+        expect(leerLimitesDeLongitud('0: otra cosa')).toEqual([]);
+    });
+
+    it('acorta sin pasarse, sin partir palabras ni dejar paréntesis abiertos', () => {
+        const corto = recortarTexto(largo, 172);
+        expect(corto.length).toBeLessThanOrEqual(172);
+        expect((corto.match(/\(/g) ?? []).length).toBe((corto.match(/\)/g) ?? []).length);
+        expect(largo.startsWith(corto.replace(/\)+$/, ''))).toBe(true);
+        expect(recortarTexto('Texto corto', 172)).toBe('Texto corto');
+    });
+});

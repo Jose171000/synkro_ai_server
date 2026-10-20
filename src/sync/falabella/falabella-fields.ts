@@ -46,3 +46,53 @@ export function leerAtributosNoAplicables(mensaje: string | null | undefined): s
     if (!m) return [];
     return m[1].split(',').map((t) => t.trim()).filter(Boolean);
 }
+
+/**
+ * Límites de longitud de atributos de texto que Falabella rechaza al pasarse («'…' is more than 172 characters long»).
+ * Se conocen algunos de antemano y el resto se aprende del mensaje de error (ver leerLimitesDeLongitud).
+ */
+const LIMITES_CONOCIDOS: { patron: RegExp; max: number }[] = [
+    { patron: /contenidodelpaquete|packagecontent|contentofpackage|contenidopaquete/, max: 172 },
+];
+
+/** Máximo de caracteres de un atributo: el aprendido de un rechazo anterior o el conocido; undefined si no hay límite. */
+export function limiteDeLongitud(
+    atributo: { name?: string; feedName?: string; label?: string },
+    aiAttributes: Record<string, any> | null | undefined,
+): number | undefined {
+    const claves = [atributo.name, atributo.feedName, atributo.label].map(x => claveDeAtributo(x ?? '')).filter(Boolean);
+    const aprendidos = (aiAttributes as any)?._maxLen as Record<string, number> | undefined;
+    for (const c of claves) if (aprendidos && Number(aprendidos[c]) > 0) return Number(aprendidos[c]);
+    return LIMITES_CONOCIDOS.find(l => claves.some(c => l.patron.test(c)))?.max;
+}
+
+/** De «0: 'Set de…' is more than 172 characters long» → [{ valor: 'Set de…', max: 172 }]. */
+export function leerLimitesDeLongitud(mensaje: string | null | undefined): { valor: string; max: number }[] {
+    const salida: { valor: string; max: number }[] = [];
+    const re = /'([\s\S]+?)'\s+is more than\s+(\d+)\s+characters long/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(String(mensaje ?? ''))) !== null) salida.push({ valor: m[1], max: Number(m[2]) });
+    return salida;
+}
+
+/**
+ * Acorta un texto al máximo sin partir una palabra ni dejar un paréntesis abierto: corta en la última coma o espacio,
+ * quita conectores sueltos al final y cierra el paréntesis si hace falta.
+ */
+export function recortarTexto(texto: string, max: number): string {
+    let t = String(texto ?? '').trim();
+    if (t.length <= max) return t;
+    for (let tope = max; tope > 0; tope--) {
+        let c = t.slice(0, tope);
+        // Si no cortamos justo en un límite de palabra, se vuelve a la última coma o espacio.
+        if (/\S/.test(t[tope] ?? '') && /\S/.test(c[c.length - 1])) {
+            const corte = Math.max(c.lastIndexOf(','), c.lastIndexOf(' '));
+            if (corte > max * 0.4) c = c.slice(0, corte);
+        }
+        c = c.replace(/[\s,;:\-–(]+$/, '').replace(/\s+(y|e|o|u|de|del|con|para|la|el|los|las|un|una)$/i, '').replace(/[\s,;:\-–(]+$/, '');
+        const abiertos = (c.match(/\(/g) ?? []).length - (c.match(/\)/g) ?? []).length;
+        if (abiertos > 0) c += ')'.repeat(abiertos);
+        if (c.length <= max) return c;
+    }
+    return t.slice(0, max);
+}

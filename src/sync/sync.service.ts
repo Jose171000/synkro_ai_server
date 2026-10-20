@@ -2,7 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleIni
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1415,7 +1415,10 @@ export class SyncService implements OnModuleInit {
             const bruto = this.buscarAtributo(attributes, attribute.name);
             const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
             // En una lista cerrada solo vale una de sus opciones (con la escritura de Falabella).
-            const valor = hayValor ? this.valorPermitido(attribute, String(bruto)) : undefined;
+            let valor = hayValor ? this.valorPermitido(attribute, String(bruto)) : undefined;
+            // Los textos largos se acortan al máximo que acepta Falabella para ese campo (p. ej. «Contenido del paquete»: 172).
+            const maximo = valor !== undefined ? limiteDeLongitud(attribute, attributes) : undefined;
+            if (valor !== undefined && maximo && valor.length > maximo) valor = recortarTexto(valor, maximo);
 
             if (attribute.isMandatory && valor === undefined) {
                 faltantes.push(hayValor ? `${attribute.label || attribute.feedName} (valor no válido)` : (attribute.label || attribute.feedName));
@@ -1885,6 +1888,18 @@ export class SyncService implements OnModuleInit {
             }
             // «X, Y is/are not applicable to <categoría>»: se anotan para no volver a enviarlos y que el siguiente intento pase.
             const noAplican = leerAtributosNoAplicables(error);
+            // «'texto' is more than N characters long»: se anota el máximo de ese campo para acortarlo en el siguiente envío.
+            const largos = link.product ? leerLimitesDeLongitud(error) : [];
+            if (largos.length && link.product) {
+                const actuales = { ...((link.product.aiAttributes as any) || {}) };
+                const maxLen: Record<string, number> = { ...(actuales._maxLen ?? {}) };
+                for (const { valor, max } of largos) {
+                    const clave = Object.keys(actuales).find(k => !k.startsWith('_') && typeof actuales[k] === 'string' && actuales[k].trim() !== '' && (actuales[k].trim() === valor.trim() || valor.startsWith(actuales[k].trim().slice(0, 40))));
+                    if (clave) maxLen[claveDeAtributo(clave)] = max;
+                }
+                await this.productRepository.update(link.product.id, { aiAttributes: { ...actuales, _maxLen: maxLen } } as any);
+                link.product.aiAttributes = { ...actuales, _maxLen: maxLen } as any;
+            }
             if (noAplican.length && link.product) {
                 const previos: string[] = (link.product.aiAttributes as any)?._noAplica ?? [];
                 await this.productRepository.update(link.product.id, {
