@@ -416,7 +416,10 @@ export class FalabellaApiService {
             throw new BadRequestException('No hay productos que enviar a Falabella.');
         }
 
-        const xml = buildProductFeedXml(products, { operatorCode });
+        // Experimento controlado: con FALABELLA_IMAGES_IN_CREATE=1 las fotos viajan dentro del alta.
+        const includeImages = process.env.FALABELLA_IMAGES_IN_CREATE === '1';
+        const xml = buildProductFeedXml(products, { operatorCode, includeImages });
+        if (includeImages) this.logger.log(`Alta con fotos incluidas (${products.filter(p => p.images?.length).length} de ${products.length} productos).`);
         const feedId = await this.postFeed(credentials, 'ProductCreate', xml);
         this.logger.log(`Lote de ${products.length} productos enviado a Falabella. Feed ${feedId}.`);
         return feedId;

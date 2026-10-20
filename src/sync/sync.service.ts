@@ -1421,6 +1421,7 @@ export class SyncService implements OnModuleInit {
                 brand: attributes.brand || 'GENERICO',
                 primaryCategory: category,
                 price: Number(product.price),
+                images: (product.images ?? []).map(i => i.url).filter(Boolean),
                 salePrice: product.salePrice != null ? Number(product.salePrice) : null,
                 saleStart: product.saleStartDate,
                 saleEnd: product.saleEndDate,

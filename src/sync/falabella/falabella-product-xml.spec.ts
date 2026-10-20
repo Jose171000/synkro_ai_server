@@ -225,3 +225,19 @@ describe('precio con descuento y fechas en la unidad de negocio', () => {
         expect(promocionValida(400, { salePrice: 300, saleStart: '2026-11-01T05:00:00.000Z' })).toEqual({ salePrice: 300, start: '2026-11-01', end: null });
     });
 });
+
+describe('fotos dentro del alta (experimento, apagado por defecto)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildProductFeedXml } = require('./falabella-product-xml');
+    const base = { sellerSku: 'MK-1', name: 'Torre', description: 'x', brand: 'GENERICO', primaryCategory: 1, price: 400, stock: 3, packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1, images: ['https://i/1.jpg', 'ftp://malo/2.jpg', 'https://i/3.jpg?a=1&b=2'] };
+
+    it('sin la opción, el alta no lleva fotos', () => {
+        expect(buildProductFeedXml([base], { operatorCode: 'fape' })).not.toContain('<Images>');
+    });
+
+    it('con la opción lleva solo las fotos https, escapadas', () => {
+        const xml = buildProductFeedXml([base], { operatorCode: 'fape', includeImages: true });
+        expect(xml).toContain('<Images><Image>https://i/1.jpg</Image><Image>https://i/3.jpg?a=1&amp;b=2</Image></Images>');
+        expect(xml).not.toContain('ftp://');
+    });
+});

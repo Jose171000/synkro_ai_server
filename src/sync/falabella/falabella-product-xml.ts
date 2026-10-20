@@ -34,6 +34,8 @@ export interface FalabellaProductInput {
      */
     variation?: string;
     status?: 'active' | 'inactive';
+    /** Fotos (https): solo viajan en el alta si se pide con `includeImages` (experimento: evita el rechazo «Images Missing»). */
+    images?: string[];
     /** Promoción: precio con descuento y fechas «AAAA-MM-DD». Solo se envía si es menor que el precio. */
     salePrice?: number | null;
     saleStart?: string | null;
@@ -49,6 +51,8 @@ export interface BuildOptions {
      * pasarlo siempre explícito.
      */
     operatorCode: string;
+    /** Manda las fotos dentro del alta (<Images>). Apagado por defecto: hay que comprobar que Falabella lo acepte. */
+    includeImages?: boolean;
 }
 
 /** Escapa los cinco caracteres que romperían el XML. */
@@ -103,6 +107,12 @@ function preciosXml(price: number, promo: Promocion): string {
         (p ? tag('SpecialPrice', p.salePrice.toFixed(2)) + tag('SpecialFromDate', p.start) + tag('SpecialToDate', p.end) : '');
 }
 
+/** Bloque de fotos (hasta 8, solo direcciones https), igual que en la acción Image. */
+function imagenesXml(urls: string[] | undefined): string {
+    const validas = (urls ?? []).filter(u => u.startsWith('https://') || u.startsWith('http://')).slice(0, 8);
+    return validas.length ? `<Images>${validas.map(u => `<Image>${escapeXml(u)}</Image>`).join('')}</Images>` : '';
+}
+
 /** Una etiqueta simple. Las vacías se omiten: Falabella ignora las que no traen valor. */
 function tag(name: string, value: string | number | undefined | null): string {
     if (value === undefined || value === null || value === '') return '';
@@ -139,6 +149,7 @@ function buildProduct(product: FalabellaProductInput, options: BuildOptions): st
         tag('ProductId', product.productId),
         `<Description>${cdata(product.description)}</Description>`,
         tag('Brand', product.brand),
+        options.includeImages ? imagenesXml(product.images) : '',
         tag('PrimaryCategory', product.primaryCategory),
         `<BusinessUnits><BusinessUnit>${businessUnit}</BusinessUnit></BusinessUnits>`,
         `<ProductData>${productData}</ProductData>`,
