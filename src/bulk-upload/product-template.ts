@@ -36,6 +36,9 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         { header: 'nombre', key: 'nombre', width: 36 },
         { header: 'descripcion', key: 'descripcion', width: 50 },
         { header: 'canales', key: 'canales', width: 26 },
+        { header: 'precio_descuento', key: 'precio_descuento', width: 18 },
+        { header: 'descuento_desde', key: 'descuento_desde', width: 16 },
+        { header: 'descuento_hasta', key: 'descuento_hasta', width: 16 },
     ];
     hoja.getRow(1).font = { bold: true };
     hoja.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCCB34' } };
@@ -43,7 +46,7 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
 
     const combos = combinacionesDeCanales(canalesConectados);
     const ejemploCanales = combos.length ? combos[combos.length - 1] : '';
-    hoja.addRow({ sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: ejemploCanales });
+    hoja.addRow({ sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: ejemploCanales, precio_descuento: 199.9, descuento_desde: '2026-11-01', descuento_hasta: '2026-11-30' });
     hoja.addRow({ sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: '' });
 
     // Lista desplegable de canales para las primeras 1000 filas (el texto de la lista no puede pasar de 255 caracteres).
@@ -78,6 +81,8 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         '       La primera foto es la principal. Máximo 8 por producto.',
         'nombre y descripcion: opcionales. Si faltan, la IA los arma a partir de las fotos.',
         'canales: elige de la lista. Si la dejas vacía se publica en todos los canales conectados.',
+        'precio_descuento: opcional. Debe ser menor que el precio. Se envía a Falabella como precio con descuento.',
+        'descuento_desde / descuento_hasta: opcionales, fechas AAAA-MM-DD (por ejemplo 2026-11-30). Sin fechas, el descuento queda sin vigencia definida.',
     ];
     lineas.forEach(l => guia.addRow([l]));
     guia.getRow(1).font = { bold: true, size: 13 };

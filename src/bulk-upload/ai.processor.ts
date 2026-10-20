@@ -22,7 +22,7 @@ export class AiProcessor extends WorkerHost {
     async process(job: Job<any, any, string>): Promise<any> {
         console.log(`[AiProcessor] Processing job ${job.id} for product: ${job.data.productName}`);
 
-        const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId, price, stock } = job.data;
+        const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId, price, stock, salePrice, saleStartDate, saleEndDate } = job.data;
         // Varias fotos por producto; los trabajos anteriores traían una sola.
         const imagenes: string[] = job.data.imageUrls ?? (imageUrl ? [imageUrl] : []);
         const publishTo: string[] = job.data.publishTo ?? [];
@@ -42,6 +42,9 @@ export class AiProcessor extends WorkerHost {
                 sku,
                 price,
                 stock,
+                salePrice: salePrice ?? null,
+                saleStartDate: saleStartDate ?? null,
+                saleEndDate: saleEndDate ?? null,
                 targetMarketplaces,
                 images: imagenes,
             } as any, userId);

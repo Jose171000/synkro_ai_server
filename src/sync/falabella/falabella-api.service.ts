@@ -450,9 +450,9 @@ export class FalabellaApiService {
         credentials: FalabellaCredentials,
         sellerSku: string,
         price: number,
-        opts: { operatorCode?: string } = {},
+        opts: { operatorCode?: string; promo?: { salePrice?: number | null; saleStart?: string | null; saleEnd?: string | null } } = {},
     ): Promise<string> {
-        const xml = buildPriceUpdateXml([{ sellerSku, price }], { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
+        const xml = buildPriceUpdateXml([{ sellerSku, price, ...(opts.promo ?? {}) }], { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
         const feedId = await this.postFeed(credentials, 'ProductUpdate', xml);
         this.logger.log(`Precio de ${sellerSku} enviado a Falabella. Feed ${feedId}.`);
         return feedId;

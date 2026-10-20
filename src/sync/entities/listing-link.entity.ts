@@ -33,6 +33,10 @@ export class ListingLink {
     @Column('decimal', { precision: 10, scale: 2, nullable: true })
     lastPriceSynced: number;
 
+    /** Promoción enviada al canal por última vez («precio|desde|hasta»); vacío si no se envió ninguna. */
+    @Column({ type: 'varchar', length: 80, nullable: true })
+    lastPromoSynced: string | null;
+
     /**
      * Nota de calidad de la ficha, de 0 a 100, tal como la califica el canal.
      *

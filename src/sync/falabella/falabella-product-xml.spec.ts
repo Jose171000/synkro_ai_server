@@ -196,3 +196,32 @@ describe('actualizar el contenido de una ficha publicada (ProductUpdate)', () =>
         expect(xml).not.toContain('PrimaryCategory');
     });
 });
+
+describe('precio con descuento y fechas en la unidad de negocio', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildProductFeedXml, buildPriceUpdateXml, buildContentUpdateXml, promocionValida } = require('./falabella-product-xml');
+    const base = { sellerSku: 'MK-1', name: 'Torre', description: 'x', brand: 'GENERICO', primaryCategory: 1, price: 400, stock: 3, packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1 };
+
+    it('el alta lleva SpecialPrice y las fechas cuando la promoción es válida', () => {
+        const xml = buildProductFeedXml([{ ...base, salePrice: 320, saleStart: '2026-11-01', saleEnd: '2026-11-30' }], { operatorCode: 'fape' });
+        expect(xml).toContain('<Price>400.00</Price><SpecialPrice>320.00</SpecialPrice><SpecialFromDate>2026-11-01</SpecialFromDate><SpecialToDate>2026-11-30</SpecialToDate>');
+    });
+
+    it('sin promoción, o con un descuento que no es menor que el precio, no se manda nada', () => {
+        expect(buildProductFeedXml([base], { operatorCode: 'fape' })).not.toContain('SpecialPrice');
+        expect(buildProductFeedXml([{ ...base, salePrice: 400 }], { operatorCode: 'fape' })).not.toContain('SpecialPrice');
+        expect(buildProductFeedXml([{ ...base, salePrice: 500 }], { operatorCode: 'fape' })).not.toContain('SpecialPrice');
+    });
+
+    it('el cambio de precio y la actualización de contenido también llevan la promoción', () => {
+        const precio = buildPriceUpdateXml([{ sellerSku: 'MK-1', price: 400, salePrice: 300, saleStart: '2026-11-01', saleEnd: null }], { operatorCode: 'fape' });
+        expect(precio).toContain('<SpecialPrice>300.00</SpecialPrice><SpecialFromDate>2026-11-01</SpecialFromDate>');
+        expect(precio).not.toContain('SpecialToDate');
+        expect(buildContentUpdateXml([{ ...base, salePrice: 300 }])).toContain('<SpecialPrice>300.00</SpecialPrice>');
+    });
+
+    it('rechaza fechas en desorden y acepta fechas ISO completas', () => {
+        expect(promocionValida(400, { salePrice: 300, saleStart: '2026-12-01', saleEnd: '2026-11-01' })).toBeNull();
+        expect(promocionValida(400, { salePrice: 300, saleStart: '2026-11-01T05:00:00.000Z' })).toEqual({ salePrice: 300, start: '2026-11-01', end: null });
+    });
+});

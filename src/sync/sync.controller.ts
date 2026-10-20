@@ -20,6 +20,7 @@ import { ProductSheetService } from './product-sheet.service';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
+import { PromoDto } from './dto/promo.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 
@@ -356,6 +357,18 @@ export class SyncController {
         const result = await this.syncService.updateInventory(scopeOf(req), id, dto);
         if ('pending' in result) res.status(HttpStatus.ACCEPTED);
         return result;
+    }
+
+    @Patch('products/:id/promo')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
+    @ApiOperation({
+        summary: 'Fija el precio con descuento y sus fechas, y los envía a Falabella',
+        description: 'El descuento debe ser menor que el precio regular. Las fechas son opcionales (AAAA-MM-DD). No pasa por la cola de revisión.',
+    })
+    setPromo(@Param('id') id: string, @Body() dto: PromoDto, @Req() req) {
+        return this.syncService.setPromo(scopeOf(req), id, dto);
     }
 
     @Patch('products/:id/web-price')

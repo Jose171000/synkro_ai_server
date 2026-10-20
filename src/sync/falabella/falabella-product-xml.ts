@@ -34,6 +34,10 @@ export interface FalabellaProductInput {
      */
     variation?: string;
     status?: 'active' | 'inactive';
+    /** Promoción: precio con descuento y fechas «AAAA-MM-DD». Solo se envía si es menor que el precio. */
+    salePrice?: number | null;
+    saleStart?: string | null;
+    saleEnd?: string | null;
     /** Atributos propios de la categoría (Model, ProductionCountry, Material...). */
     extraAttributes?: Record<string, string | number | undefined | null>;
 }
@@ -68,6 +72,37 @@ export function cdata(value: string): string {
     return `<![CDATA[${value.replace(/\]\]>/g, ']]]]><![CDATA[>')}]]>`;
 }
 
+export interface Promocion {
+    salePrice?: number | string | null;
+    saleStart?: string | null;
+    saleEnd?: string | null;
+}
+
+/** «AAAA-MM-DD» (o una fecha ISO completa) → «AAAA-MM-DD»; cualquier otra cosa → null. */
+export function fechaDeFalabella(valor: string | Date | null | undefined): string | null {
+    if (!valor) return null;
+    const t = valor instanceof Date ? valor.toISOString() : String(valor).trim();
+    const m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+/** La promoción vigente de un producto, o null si no tiene una válida (descuento menor que el precio, fechas en orden). */
+export function promocionValida(price: number, promo: Promocion): { salePrice: number; start: string | null; end: string | null } | null {
+    const sale = Number(promo.salePrice);
+    if (!Number.isFinite(sale) || sale <= 0 || !(sale < Number(price))) return null;
+    const start = fechaDeFalabella(promo.saleStart);
+    const end = fechaDeFalabella(promo.saleEnd);
+    if (start && end && end < start) return null;
+    return { salePrice: Math.round(sale * 100) / 100, start, end };
+}
+
+/** Etiquetas de precio de la unidad de negocio: el regular y, si hay, el descuento con sus fechas. */
+function preciosXml(price: number, promo: Promocion): string {
+    const p = promocionValida(price, promo);
+    return tag('Price', Number(price).toFixed(2)) +
+        (p ? tag('SpecialPrice', p.salePrice.toFixed(2)) + tag('SpecialFromDate', p.start) + tag('SpecialToDate', p.end) : '');
+}
+
 /** Una etiqueta simple. Las vacías se omiten: Falabella ignora las que no traen valor. */
 function tag(name: string, value: string | number | undefined | null): string {
     if (value === undefined || value === null || value === '') return '';
@@ -77,7 +112,7 @@ function tag(name: string, value: string | number | undefined | null): string {
 function buildProduct(product: FalabellaProductInput, options: BuildOptions): string {
     const businessUnit = [
         tag('OperatorCode', options.operatorCode),
-        tag('Price', product.price.toFixed(2)),
+        preciosXml(product.price, { salePrice: product.salePrice, saleStart: product.saleStart, saleEnd: product.saleEnd }),
         tag('Stock', Math.max(0, Math.trunc(product.stock))),
         tag('Status', product.status ?? 'active'),
     ].join('');
@@ -135,7 +170,7 @@ export function chunkProducts<T>(items: T[], size = 500): T[][] {
  * guarda precio y stock, no en la raíz del producto.
  */
 export function buildPriceUpdateXml(
-    items: { sellerSku: string; price: number }[],
+    items: { sellerSku: string; price: number; salePrice?: number | null; saleStart?: string | null; saleEnd?: string | null }[],
     options: BuildOptions,
 ): string {
     const cuerpo = items
@@ -144,7 +179,7 @@ export function buildPriceUpdateXml(
             tag('SellerSku', item.sellerSku) +
             '<BusinessUnits><BusinessUnit>' +
             tag('OperatorCode', options.operatorCode) +
-            tag('Price', item.price.toFixed(2)) +
+            preciosXml(item.price, item) +
             '</BusinessUnit></BusinessUnits>' +
             '</Product>')
         .join('');
@@ -211,7 +246,7 @@ export function buildContentUpdateXml(products: FalabellaProductInput[], options
                 `<Description>${cdata(p.description)}</Description>`,
                 tag('Brand', p.brand),
                 // Falabella rechaza el ProductUpdate sin unidad de negocio («BusinessUnits is missing»); basta con operador y precio.
-                `<BusinessUnits><BusinessUnit>${tag('OperatorCode', options.operatorCode)}${tag('Price', p.price.toFixed(2))}</BusinessUnit></BusinessUnits>`,
+                `<BusinessUnits><BusinessUnit>${tag('OperatorCode', options.operatorCode)}${preciosXml(p.price, { salePrice: p.salePrice, saleStart: p.saleStart, saleEnd: p.saleEnd })}</BusinessUnit></BusinessUnits>`,
                 `<ProductData>${productData}</ProductData>`,
                 '</Product>',
             ].join('');

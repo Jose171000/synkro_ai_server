@@ -29,6 +29,18 @@ export class CreateProductDto {
     @IsOptional()
     stock?: number;
 
+    @IsNumber()
+    @IsOptional()
+    salePrice?: number | null;
+
+    @IsString()
+    @IsOptional()
+    saleStartDate?: string | null;
+
+    @IsString()
+    @IsOptional()
+    saleEndDate?: string | null;
+
     @IsArray()
     @IsOptional()
     images?: string[];

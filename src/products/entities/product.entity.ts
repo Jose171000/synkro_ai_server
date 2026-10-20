@@ -52,6 +52,19 @@ export class Product {
     @Column('decimal', { precision: 10, scale: 2, nullable: true })
     webPrice: number | null;
 
+    /**
+     * Promoción en los marketplaces (hoy Falabella): precio con descuento y fechas de vigencia («AAAA-MM-DD»).
+     * Distinto del precio web, que es solo de la tienda propia.
+     */
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    salePrice: number | null;
+
+    @Column('date', { nullable: true })
+    saleStartDate: string | null;
+
+    @Column('date', { nullable: true })
+    saleEndDate: string | null;
+
     // ── Datos de envío ───────────────────────────────────────────
     // Falabella los exige para publicar (alto, ancho, largo en cm y peso en
     // kg). Son nulos por defecto porque los productos antiguos no los tienen;

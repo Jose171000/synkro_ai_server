@@ -1,4 +1,4 @@
-import { esJpg, fotosDeCarpeta, leerPrecio, leerStock, partirLista } from './bulk-products';
+import { esJpg, fotosDeCarpeta, leerFecha, leerPrecio, leerStock, partirLista } from './bulk-products';
 
 describe('plantilla de carga masiva de productos', () => {
     it('lee el precio escrito de varias formas', () => {
@@ -46,5 +46,13 @@ describe('plantilla de carga masiva de productos', () => {
     it('no confunde la foto de otro SKU que empieza igual', () => {
         const zip = ['mk-001.jpg', 'mk-001-2.jpg'];
         expect(fotosDeCarpeta('MK-001', zip, new Set(['mk-001', 'mk-001-2']))).toEqual(['mk-001.jpg']);
+    });
+
+    it('lee las fechas del descuento escritas de varias formas', () => {
+        expect(leerFecha('2026-11-30')).toBe('2026-11-30');
+        expect(leerFecha('2026-1-5')).toBe('2026-01-05');
+        expect(leerFecha('30/11/2026')).toBe('2026-11-30');
+        expect(leerFecha('')).toBeNull();
+        expect(leerFecha('pronto')).toBeUndefined();
     });
 });

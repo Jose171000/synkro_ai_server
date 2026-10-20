@@ -16,7 +16,7 @@ import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
-import { chunkProducts, FalabellaProductInput } from './falabella/falabella-product-xml';
+import { chunkProducts, fechaDeFalabella, FalabellaProductInput, promocionValida } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
@@ -1438,6 +1438,9 @@ export class SyncService implements OnModuleInit {
                 brand: attributes.brand || 'GENERICO',
                 primaryCategory: category,
                 price: Number(product.price),
+                salePrice: product.salePrice != null ? Number(product.salePrice) : null,
+                saleStart: product.saleStartDate,
+                saleEnd: product.saleEndDate,
                 stock: product.stock,
                 status,
                 packageWidth: Number(width),
@@ -2070,7 +2073,11 @@ export class SyncService implements OnModuleInit {
             link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
             Number(link.lastPriceSynced) !== Number(product.price);
         const stockCambio = link.lastStockSynced !== product.stock;
-        if (!precioCambio && !stockCambio) return { status: 'sin-cambios', feeds: [] };
+        // Promoción: solo se envía cuando hay una válida y distinta de la última enviada (quitarla se hace en el Seller Center).
+        const promo = promocionValida(Number(product.price), { salePrice: product.salePrice, saleStart: product.saleStartDate, saleEnd: product.saleEndDate });
+        const firmaPromo = promo ? `${promo.salePrice}|${promo.start ?? ''}|${promo.end ?? ''}` : '';
+        const promoCambio = !!promo && (link.lastPromoSynced ?? '') !== firmaPromo;
+        if (!precioCambio && !stockCambio && !promoCambio) return { status: 'sin-cambios', feeds: [] };
 
         // El SKU del vendedor es lo que casa con la ficha de Falabella.
         const sellerSku = product.sku;
@@ -2081,10 +2088,13 @@ export class SyncService implements OnModuleInit {
             const credentials = await this.getFalabellaCredentials(link.connection.id);
             const opts = { operatorCode: this.falabellaOperatorCode };
 
-            if (precioCambio) {
+            if (precioCambio || promoCambio) {
                 feeds.push(await this.registrarFeedFalabella(
                     ownerId, link.connection.id, 'ProductUpdate', sellerSku,
-                    await this.falabellaApi.updatePrice(credentials, sellerSku, Number(product.price), opts),
+                    await this.falabellaApi.updatePrice(credentials, sellerSku, Number(product.price), {
+                        ...opts,
+                        promo: promo ? { salePrice: promo.salePrice, saleStart: promo.start, saleEnd: promo.end } : undefined,
+                    }),
                 ));
             }
             if (stockCambio) {
@@ -2100,6 +2110,7 @@ export class SyncService implements OnModuleInit {
         }
 
         if (precioCambio) link.lastPriceSynced = product.price;
+        if (promoCambio) link.lastPromoSynced = firmaPromo;
         if (stockCambio) link.lastStockSynced = product.stock;
         link.lastSyncedAt = new Date();
         link.lastError = null as any;
@@ -3380,6 +3391,7 @@ export class SyncService implements OnModuleInit {
             variation: l.variation,
             parentSku: l.parentSku,
             webPrice: l.product.webPrice,
+            promo: { price: l.product.salePrice, start: l.product.saleStartDate, end: l.product.saleEndDate },
             lastSyncedAt: l.lastSyncedAt,
             lastError: l.lastError,
         }));
@@ -3395,6 +3407,48 @@ export class SyncService implements OnModuleInit {
         product.webPrice = webPrice;
         await this.productRepository.save(product);
         return { productId, webPrice, message: webPrice === null ? 'Precio web quitado.' : 'Precio web guardado.' };
+    }
+
+    /**
+     * Fija el precio con descuento y sus fechas, y los manda a Falabella. Sin precio (null) se borran de Synkro:
+     * quitar una promoción ya enviada se hace en el Seller Center. No pasa por la cola de revisión.
+     */
+    async setPromo(scope: SyncScope, productId: string, dto: { salePrice: number | null; saleStartDate?: string | null; saleEndDate?: string | null }) {
+        const product = await this.findScopedProduct(scope, productId);
+        if (dto.salePrice === null || dto.salePrice === undefined) {
+            product.salePrice = null;
+            product.saleStartDate = null;
+            product.saleEndDate = null;
+            await this.productRepository.save(product);
+            return { productId, message: 'Descuento quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
+        }
+        const inicio = fechaDeFalabella(dto.saleStartDate);
+        const fin = fechaDeFalabella(dto.saleEndDate);
+        if (dto.saleStartDate && !inicio) throw new BadRequestException('La fecha de inicio no es válida (usa AAAA-MM-DD).');
+        if (dto.saleEndDate && !fin) throw new BadRequestException('La fecha de fin no es válida (usa AAAA-MM-DD).');
+        if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
+        if (!(Number(dto.salePrice) > 0) || !(Number(dto.salePrice) < Number(product.price))) {
+            throw new BadRequestException(`El precio con descuento debe ser mayor que 0 y menor que el precio regular (${Number(product.price).toFixed(2)}).`);
+        }
+        product.salePrice = dto.salePrice;
+        product.saleStartDate = inicio;
+        product.saleEndDate = fin;
+        await this.productRepository.save(product);
+
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { id: productId }, marketplace: 'falabella', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+            relations: { connection: true },
+        });
+        for (const enlace of enlaces) {
+            if (!enlace.connection) continue;
+            await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: 'falabella', connectionId: enlace.connection.id });
+        }
+        return {
+            productId,
+            message: enlaces.length
+                ? 'Descuento guardado y enviado a Falabella. Puede tardar unos minutos en verse.'
+                : 'Descuento guardado. Se enviará a Falabella cuando el producto esté publicado allí.',
+        };
     }
 
     async getProductSyncStatus(scope: SyncScope, productId: string) {

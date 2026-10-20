@@ -19,7 +19,7 @@ describe('plantilla de productos por tienda', () => {
         const libro = new ExcelJS.Workbook();
         await libro.xlsx.load(buffer as any);
         const hoja = libro.getWorksheet('Productos')!;
-        expect(hoja.getRow(1).values).toEqual([undefined, 'sku', 'precio', 'stock', 'fotos', 'nombre', 'descripcion', 'canales']);
+        expect(hoja.getRow(1).values).toEqual([undefined, 'sku', 'precio', 'stock', 'fotos', 'nombre', 'descripcion', 'canales', 'precio_descuento', 'descuento_desde', 'descuento_hasta']);
         expect(hoja.getCell('G5').dataValidation.formulae).toEqual(['"falabella"']);
         expect(libro.getWorksheet('Instrucciones')!.getCell('A1').value).toContain('Maba Kids');
     });

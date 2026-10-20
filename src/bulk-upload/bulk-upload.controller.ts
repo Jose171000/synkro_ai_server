@@ -10,7 +10,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import type { Response } from 'express';
 import { leerPrimeraHoja, escribirHoja } from '../common/excel/excel';
-import { COLUMNAS, MAX_FOTOS, claveDeRuta, esJpg, esUrl, fotosDeCarpeta, leerPrecio, leerStock, partirLista } from './bulk-products';
+import { COLUMNAS, MAX_FOTOS, claveDeRuta, esJpg, esUrl, fotosDeCarpeta, leerFecha, leerPrecio, leerStock, partirLista } from './bulk-products';
 import * as AdmZip from 'adm-zip';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -120,7 +120,7 @@ export class BulkUploadController {
     @ApiOperation({
         summary: 'Carga un archivo Excel para crear productos en lote mediante IA',
         description: `Archivos: excel (obligatorio) + zip (opcional, con las fotos JPG).
-Columnas: sku | precio | stock | fotos | nombre (opcional) | descripcion (opcional) | canales (opcional).
+Columnas: sku | precio | stock | fotos | nombre | descripcion | canales | precio_descuento | descuento_desde | descuento_hasta (las últimas siete son opcionales).
 fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía, se buscan en el ZIP las fotos cuyo nombre empieza por el SKU o que están en una carpeta con el SKU.`,
     })
     @ApiConsumes('multipart/form-data')
@@ -180,7 +180,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const existentes = await this.productsService.skusExistentes(req.user.id, skusDelExcel);
             const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
-            type Fila = { i: number; sku: string; precio: number; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
+            type Fila = { i: number; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
             const validas: Fila[] = [];
             rows.forEach((row: any, i: number) => {
                 const sku = (this.getVal(row, COLUMNAS.sku) ?? '').trim();
@@ -195,10 +195,20 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 const stock = leerStock(this.getVal(row, COLUMNAS.stock));
                 if (stock === null) return rechazar(i, `${sku}: el stock debe ser un número entero`);
 
+                // Descuento opcional: menor que el precio y con fechas en orden.
+                const textoDescuento = this.getVal(row, COLUMNAS.precioDescuento);
+                const precioDescuento = textoDescuento ? leerPrecio(textoDescuento) : null;
+                if (textoDescuento && precioDescuento === null) return rechazar(i, `${sku}: el precio con descuento no es válido`);
+                if (precioDescuento !== null && precioDescuento >= precio) return rechazar(i, `${sku}: el precio con descuento (${precioDescuento}) debe ser menor que el precio (${precio})`);
+                const desde = leerFecha(this.getVal(row, COLUMNAS.descuentoDesde));
+                const hasta = leerFecha(this.getVal(row, COLUMNAS.descuentoHasta));
+                if (desde === undefined || hasta === undefined) return rechazar(i, `${sku}: las fechas del descuento no se entienden (usa AAAA-MM-DD, por ejemplo 2026-11-30)`);
+                if (desde && hasta && hasta < desde) return rechazar(i, `${sku}: la fecha de fin del descuento es anterior a la de inicio`);
+
                 // Sin columna de canales se usan todos los que la tienda tiene conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
                 validas.push({
-                    i, sku, precio, stock,
+                    i, sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
                     nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
                     descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
                     fotos: this.getVal(row, COLUMNAS.fotos),
@@ -228,6 +238,9 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                     productName: fila.nombre,
                     description: fila.descripcion,
                     price: fila.precio,
+                    salePrice: fila.precioDescuento,
+                    saleStartDate: fila.desde,
+                    saleEndDate: fila.hasta,
                     stock: fila.stock,
                     targetMarketplaces: fila.canales,
                     // Se publica solo donde la tienda tiene cuenta conectada.

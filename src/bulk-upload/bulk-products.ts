@@ -14,6 +14,9 @@ export const COLUMNAS = {
     nombre: ['nombre', 'productname', 'name', 'producto'],
     descripcion: ['descripcion', 'descripción', 'description', 'detalle'],
     canales: ['canales', 'targetmarketplaces', 'marketplaces'],
+    precioDescuento: ['precio_descuento', 'precio descuento', 'descuento', 'preciodescuento', 'saleprice'],
+    descuentoDesde: ['descuento_desde', 'descuento desde', 'desde'],
+    descuentoHasta: ['descuento_hasta', 'descuento hasta', 'hasta'],
 };
 
 /** Lista separada por comas, punto y coma, barras o saltos de línea. */
@@ -72,4 +75,20 @@ export function fotosDeCarpeta(sku: string, rutas: string[], otrosSkus: Set<stri
         return archivo === s || new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s_-]*\\d+$`).test(archivo);
     });
     return coinciden.sort(porNombre).slice(0, MAX_FOTOS);
+}
+
+/**
+ * Fecha escrita en el Excel: «2026-11-30», «30/11/2026» o la fecha que Excel entrega al leer una celda de fecha.
+ * Devuelve «AAAA-MM-DD», null si está vacía y undefined si no se entiende.
+ */
+export function leerFecha(valor: string | undefined | null): string | null | undefined {
+    const t = String(valor ?? '').trim();
+    if (!t) return null;
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    m = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    const d = new Date(t);
+    if (!Number.isNaN(d.getTime()) && /\d{4}/.test(t)) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return undefined;
 }
