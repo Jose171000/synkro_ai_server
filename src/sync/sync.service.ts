@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -762,6 +762,7 @@ export class SyncService implements OnModuleInit {
             let enlace = await this.listingLinkRepository.findOne({
                 where: { product: { id: product.id }, connection: { id: connection.id } },
             });
+            if (enlace?.syncStatus === 'removed') continue; // la quitaron a propósito desde Synkro: no se vuelve a enlazar sola
             if (!enlace) {
                 enlace = this.listingLinkRepository.create({
                     marketplace: 'falabella',
@@ -1340,7 +1341,7 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Código de operador: identifica el país. 'fape' es Perú, 'facl' Chile. */
-    private get falabellaOperatorCode(): string {
+    get falabellaOperatorCode(): string {
         return process.env.FALABELLA_OPERATOR_CODE || 'fape';
     }
 
@@ -2030,6 +2031,7 @@ export class SyncService implements OnModuleInit {
             relations: { connection: true },
         });
         if (!product || !link || !link.connection) return;
+        if (link.pausedByUser) return; // pausada por el usuario: no se toca hasta que la reanude
 
         try {
             const connection = await this.getValidConnectionById(link.connection.id);
@@ -2078,6 +2080,7 @@ export class SyncService implements OnModuleInit {
             relations: { connection: { owner: true } },
         });
         if (!product || !link || !link.connection) return { status: 'omitido', feeds: [] };
+        if (link.pausedByUser) return { status: 'pausada', feeds: [] }; // pausada con stock 0: un envío normal la reactivaría
 
         const precioCambio =
             link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
@@ -2130,10 +2133,10 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Anota un feed de actualización y programa la consulta de su resultado. */
-    private async registrarFeedFalabella(
+    async registrarFeedFalabella(
         userId: string,
         connectionId: string,
-        action: 'ProductUpdate' | 'UpdateStock',
+        action: 'ProductUpdate' | 'UpdateStock' | 'ProductRemove',
         sku: string,
         externalFeedId: string,
     ): Promise<string> {
@@ -2177,6 +2180,8 @@ export class SyncService implements OnModuleInit {
             const error = erroresPorSku.get(sku) ?? (falloTotal ? `El lote ${feed.action} terminó con error.` : undefined);
             if (error) {
                 link.lastError = error;
+                // Falabella no aceptó el retiro: la ficha sigue ahí, así que vuelve a mostrarse como publicada.
+                if (feed.action === 'ProductRemove' && link.syncStatus === 'removed') link.syncStatus = 'published';
                 if (feed.action === 'UpdateStock') link.lastStockSynced = null as any;
                 if (feed.action === 'ProductUpdate') link.lastPriceSynced = null as any;
             } else {
@@ -2192,7 +2197,9 @@ export class SyncService implements OnModuleInit {
                 severity: 'error',
                 title: feed.action === 'UpdateStock'
                     ? 'Falabella no aceptó un cambio de stock'
-                    : 'Falabella no aceptó un cambio de precio',
+                    : feed.action === 'ProductRemove'
+                        ? 'Falabella no aceptó quitar un producto'
+                        : 'Falabella no aceptó un cambio de precio',
                 body: detalle || 'Revisa el detalle del lote en Marketplaces.',
                 marketplace: 'falabella',
                 meta: { feedId: feed.externalFeedId, errors: estado.errors.slice(0, 10) },
@@ -3096,6 +3103,7 @@ export class SyncService implements OnModuleInit {
         let enlace = await this.listingLinkRepository.findOne({
             where: { product: { id: product.id }, connection: { id: connection.id } },
         });
+        if (enlace?.syncStatus === 'removed') return; // la quitaron a propósito desde Synkro: no se vuelve a enlazar sola
         if (!enlace) {
             enlace = this.listingLinkRepository.create({
                 marketplace: 'mercadolibre',
@@ -3109,6 +3117,8 @@ export class SyncService implements OnModuleInit {
 
     /** Copia a un enlace lo que Mercado Libre muestra hoy de la publicación. */
     private aplicarFilaMeli(enlace: ListingLink, fila: MeliListingRow): void {
+        // Si el canal la muestra activa, alguien la reactivó directamente allí: deja de estar pausada por el usuario.
+        if (fila.status === 'published') enlace.pausedByUser = false;
         enlace.externalId = fila.externalId;
         enlace.variationId = fila.variationId;
         enlace.permalink = fila.permalink ?? enlace.permalink ?? (null as any);
@@ -3139,7 +3149,7 @@ export class SyncService implements OnModuleInit {
     async refreshMeliLinks(connectionId: string): Promise<{ revisadas: number; actualizadas: number; ausentes: number }> {
         const connection = await this.getValidConnectionById(connectionId);
         const enlaces = await this.listingLinkRepository.find({
-            where: { connection: { id: connection.id }, marketplace: 'mercadolibre' },
+            where: { connection: { id: connection.id }, marketplace: 'mercadolibre', syncStatus: Not('removed') },
             relations: { product: true },
         });
         const ids = [...new Set(enlaces.map(e => e.externalId).filter(Boolean))];
@@ -3174,7 +3184,7 @@ export class SyncService implements OnModuleInit {
     async refreshFalabellaLinks(connectionId: string): Promise<{ revisadas: number; actualizadas: number; ausentes: number }> {
         const connection = await this.getValidConnectionById(connectionId);
         const enlaces = await this.listingLinkRepository.find({
-            where: { connection: { id: connection.id }, marketplace: 'falabella' },
+            where: { connection: { id: connection.id }, marketplace: 'falabella', syncStatus: Not('removed') },
             relations: { product: true },
         });
         if (!enlaces.length) return { revisadas: 0, actualizadas: 0, ausentes: 0 };
@@ -3202,7 +3212,8 @@ export class SyncService implements OnModuleInit {
             const imagenes = imagenesDeFicha(ficha);
             const estado = this.estadoDeFicha(ficha);
 
-            enlace.syncStatus = estado;
+            // Pausada por el usuario (stock 0): la ficha sigue «activa» en Falabella pero para Synkro sigue pausada.
+            enlace.syncStatus = enlace.pausedByUser && estado === 'published' ? 'paused' : estado;
             enlace.lastStockSynced = Number(unidad.Stock ?? 0) || 0;
             enlace.lastPriceSynced = regular as any;
             enlace.regularPrice = regular;
@@ -3416,6 +3427,7 @@ export class SyncService implements OnModuleInit {
             externalId: l.externalId,
             permalink: l.permalink,
             syncStatus: l.syncStatus,
+            pausedByUser: l.pausedByUser,
             lastStockSynced: l.lastStockSynced,
             lastPriceSynced: l.lastPriceSynced,
             regularPrice: l.regularPrice,

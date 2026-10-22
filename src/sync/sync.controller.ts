@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -21,6 +21,8 @@ import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
 import { PromoDto } from './dto/promo.dto';
+import { ChannelActionDto } from './dto/channel-action.dto';
+import { ListingActionsService } from './listing-actions.service';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 
@@ -44,6 +46,7 @@ export class SyncController {
         private readonly ordersQuery: OrdersQueryService,
         private readonly ecommerce: EcommerceSyncService,
         private readonly sheets: ProductSheetService,
+        private readonly listingActions: ListingActionsService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -329,6 +332,25 @@ export class SyncController {
         const result = await this.syncService.updateInventory(scopeOf(req), id, dto);
         if ('pending' in result) res.status(HttpStatus.ACCEPTED);
         return result;
+    }
+
+    @Post('products/:id/channels/:action')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
+    @ApiOperation({
+        summary: 'Pausa, reanuda o quita el producto de uno o de todos sus canales',
+        description: 'action = pause | resume | remove. Sin linkIds actúa sobre todas las publicaciones del producto. Quitar exige confirm: true.',
+    })
+    async channelAction(@Param('id') id: string, @Param('action') action: string, @Body() dto: ChannelActionDto, @Req() req) {
+        if (action !== 'pause' && action !== 'resume' && action !== 'remove') {
+            throw new BadRequestException('La acción debe ser pause, resume o remove.');
+        }
+        if (action === 'remove' && dto.confirm !== true) {
+            throw new BadRequestException('Quitar un producto de un canal necesita confirmación expresa (confirm: true).');
+        }
+        return this.listingActions.ejecutar(scopeOf(req), id, action, dto.linkIds);
     }
 
     @Patch('products/:id/promo')

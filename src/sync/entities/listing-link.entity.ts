@@ -24,7 +24,14 @@ export class ListingLink {
     permalink: string;
 
     @Column({ default: 'pending' })
-    syncStatus: 'pending' | 'published' | 'paused' | 'error';
+    syncStatus: 'pending' | 'published' | 'paused' | 'error' | 'removed';
+
+    /**
+     * El usuario pausó esta publicación desde Synkro. Mientras esté en true no se envían stock ni precio al canal
+     * (en Falabella la pausa es stock 0 y un envío normal la desharía) y las lecturas del canal no la dan por activa.
+     */
+    @Column({ default: false })
+    pausedByUser: boolean;
 
     // Last stock/price values pushed to the marketplace
     @Column({ nullable: true })

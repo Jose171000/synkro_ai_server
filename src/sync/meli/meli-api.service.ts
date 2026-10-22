@@ -164,8 +164,8 @@ export class MeliApiService {
         await this.http.put(`/items/${itemId}/description`, { plain_text: plainText }, { headers: { Authorization: `Bearer ${accessToken}` } });
     }
 
-    /** Pauses/reactivates a listing. */
-    async setItemStatus(accessToken: string, itemId: string, status: 'paused' | 'active'): Promise<void> {
+    /** Pausa, reactiva o cierra una publicación (cerrada no se puede reactivar). */
+    async setItemStatus(accessToken: string, itemId: string, status: 'paused' | 'active' | 'closed'): Promise<void> {
         await this.http.put(
             `/items/${itemId}`,
             { status },

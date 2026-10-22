@@ -30,7 +30,7 @@ function coincide(entidad: any, donde: any): boolean {
     if (Array.isArray(donde)) return donde.some(d => coincide(entidad, d));
     return Object.entries(donde ?? {}).every(([k, v]: [string, any]) => {
         const actual = entidad?.[k];
-        if (v && typeof v === 'object' && '_type' in v) return v._type === 'isNull' ? actual == null : true;
+        if (v && typeof v === 'object' && '_type' in v) return v._type === 'isNull' ? actual == null : v._type === 'not' ? actual !== v._value : true;
         if (v && typeof v === 'object' && !(v instanceof Date)) return actual != null && coincide(actual, v);
         return actual === v;
     });
@@ -943,5 +943,66 @@ describe('formato real de los avisos de Falabella y envío procesado una sola ve
         await t.service.refreshFalabellaQc('fa1', ['MK-1']);
         await t.service.refreshFalabellaQc('fa1', ['MK-1']);
         expect(t.falabella.setImages).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('publicaciones pausadas o retiradas desde Synkro', () => {
+    it('una publicación pausada por el usuario no recibe stock ni precio (no se reactiva sola)', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', stock: 6, price: 45 };
+        const { service, meli } = await construir({
+            conexiones: [cuenta()], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'mercadolibre', externalId: 'MPE1', variationId: null, syncStatus: 'paused', pausedByUser: true, product: producto, connection: { id: 'ml1' } }],
+        });
+
+        await service.pushInventoryToMeli('p1', 'ml1');
+
+        expect(meli.updateItem).not.toHaveBeenCalled();
+    });
+
+    it('Falabella: una ficha pausada con stock 0 sigue pausada aunque el canal la muestre activa', async () => {
+        const fal = cuenta({ id: 'fal1', marketplace: 'falabella', externalUserId: 'v@x.com' });
+        const producto = { id: 'p1', sku: 'REL-01', stock: 6, price: 45 };
+        const { service, falabella, enlaces } = await construir({
+            conexiones: [fal], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', externalId: 'SHOP-1', syncStatus: 'paused', pausedByUser: true, product: producto, connection: { id: 'fal1' } }],
+        });
+        falabella.getAllProducts.mockResolvedValue({
+            productos: [{ SellerSku: 'REL-01', QCStatus: 'approved', BusinessUnits: { BusinessUnit: { Price: '45', Stock: '0', Status: 'active', IsPublished: '1' } } }],
+            incompleto: false,
+        });
+
+        await service.refreshFalabellaLinks('fal1');
+
+        expect(enlaces[0]).toMatchObject({ syncStatus: 'paused', pausedByUser: true, lastStockSynced: 0 });
+    });
+
+    it('Mercado Libre: si el canal la muestra activa, alguien la reactivó allí y deja de figurar pausada por el usuario', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', stock: 6, price: 45 };
+        const { service, meli, enlaces } = await construir({
+            conexiones: [cuenta()], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'mercadolibre', externalId: 'MPE1', variationId: null, syncStatus: 'paused', pausedByUser: true, product: producto, connection: { id: 'ml1' } }],
+        });
+        meli.getItems.mockResolvedValue({ items: [{ id: 'MPE1', title: 'x', status: 'active', price: 45, available_quantity: 6, seller_custom_field: 'REL-01', pictures: [], variations: [] }], notFound: [] });
+
+        await service.refreshMeliLinks('ml1');
+
+        expect(enlaces[0]).toMatchObject({ syncStatus: 'published', pausedByUser: false });
+    });
+
+    it('una publicación retirada a propósito no se vuelve a enlazar al importar el canal', async () => {
+        const fal = cuenta({ id: 'fal1', marketplace: 'falabella', externalUserId: 'v@x.com' });
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Rel', stock: 6, price: 45 };
+        const { service, falabella, enlaces } = await construir({
+            conexiones: [fal], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', externalId: 'SHOP-1', syncStatus: 'removed', product: producto, connection: { id: 'fal1' } }],
+        });
+        falabella.getAllProducts.mockResolvedValue({
+            productos: [{ SellerSku: 'REL-01', ShopSku: 'SHOP-1', Name: 'Rel', QCStatus: 'approved', BusinessUnits: { BusinessUnit: { Price: '45', Stock: '6', Status: 'active', IsPublished: '1' } } }],
+            incompleto: false,
+        });
+
+        await service.refreshFalabellaLinks('fal1');
+
+        expect(enlaces[0].syncStatus).toBe('removed');
     });
 });
