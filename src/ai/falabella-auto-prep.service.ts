@@ -20,6 +20,8 @@ export interface FalabellaPrepReport {
     category: { id: string; path: string; auto: boolean; /** alta: verificada; baja: conviene revisarla; manual: la eligió una persona */ confidence?: 'alta' | 'baja' | 'manual' } | null;
     /** Por qué la categoría necesita revisión, si la necesita. */
     categoryNote?: string;
+    /** Las categorías más cercanas al producto, para elegir a mano cuando ninguna encajó del todo. */
+    categoryOptions?: { id: string; path: string }[];
     brand: { value: string; replaced: boolean; original?: string };
     measures: { width: number | null; length: number | null; height: number | null; weight: number | null; estimated: boolean };
     estimatedAttributes: string[];
@@ -28,6 +30,9 @@ export interface FalabellaPrepReport {
     /** Cuántos atributos de la categoría tienen valor tras este paso, de cuántos hay. */
     attributes: { filled: number; total: number };
 }
+
+/** Cuántas categorías cercanas se ofrecen cuando ninguna encajó del todo. */
+const MAX_SUGERIDAS = 5;
 
 /** Datos que la plataforma ya cubre por su cuenta al publicar en Falabella. */
 const CUBIERTOS = ATRIBUTOS_DE_SISTEMA;
@@ -104,6 +109,11 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...nombre.split(/\s+/)].filter(Boolean);
                 candidatas = [...candidatas, ...(await this.canales.candidatasFalabella(creds, palabras))].slice(0, 25);
             }
+            // Las candidatas más cercanas al producto (por significado), sin las que Falabella ya rechazó: sirven de sugerencia.
+            const masCercanas = (excepto?: string) => candidatas
+                .filter((c) => !descartadas.includes(String(c.categoryId)) && String(c.categoryId) !== excepto)
+                .slice(0, MAX_SUGERIDAS)
+                .map((c) => ({ id: String(c.categoryId), path: c.name }));
             const r = await this.ai.elegirCategoriaVerificada('falabella', nombre, descripcion, candidatas, {
                 vision,
                 excluir: descartadas,
@@ -116,10 +126,10 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 attrs._categoriaVerificada = r.id;
                 confianza = r.confianza === 'alta' ? 'alta' : 'baja';
                 if (confianza === 'alta') delete attrs._categoriaDudosa;
-                else attrs._categoriaDudosa = { id: r.id, motivo: r.motivo ?? 'revisa que la categoría sea la correcta' };
+                else attrs._categoriaDudosa = { id: r.id, motivo: r.motivo ?? 'revisa que la categoría sea la correcta', options: masCercanas(r.id) };
             } else {
-                // Mejor no publicar que publicar en la categoría equivocada.
-                attrs._categoriaDudosa = { id: null, motivo: r.motivo ?? 'ninguna categoría encaja con el producto' };
+                // Mejor no publicar que publicar en la categoría equivocada; se muestran las más cercanas para que una persona elija.
+                attrs._categoriaDudosa = { id: null, motivo: r.motivo ?? 'ninguna categoría encaja con el producto', options: masCercanas() };
             }
         }
         if (!categoryId) delete attrs.falabella_category_id;
@@ -217,6 +227,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 : 'reason' in validacion ? validacion.reason : undefined,
             category: categoryId ? { id: String(categoryId), path: path!, auto: categoriaAuto, confidence: confianza ?? 'alta' } : null,
             ...(attrs._categoriaDudosa ? { categoryNote: String(attrs._categoriaDudosa.motivo) } : {}),
+            ...(attrs._categoriaDudosa?.options?.length ? { categoryOptions: attrs._categoriaDudosa.options as { id: string; path: string }[] } : {}),
             brand: { value: attrs.brand, replaced: reemplazada, ...(reemplazada ? { original } : {}) },
             measures: {
                 width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight,
