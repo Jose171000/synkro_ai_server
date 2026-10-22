@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { ProductsService } from '../products/products.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+import { ProductsService, SkuScope } from '../products/products.service';
+import { ListingLink } from '../sync/entities/listing-link.entity';
+import { datosQueFaltan, estadoDeCanal, nombreDeCanal } from '../products/completitud';
 import { ExportQueryDto } from './dto/export-query.dto';
 import { Product } from '../products/entities/product.entity';
 import { escribirHoja } from '../common/excel/excel';
@@ -8,17 +12,29 @@ export type ExportFormat = 'json' | 'csv' | 'xlsx';
 
 @Injectable()
 export class ExportService {
-    constructor(private readonly productsService: ProductsService) {}
+    constructor(
+        private readonly productsService: ProductsService,
+        @InjectRepository(ListingLink) private readonly listingLinkRepository: Repository<ListingLink>,
+    ) {}
 
     // ─── Data fetching ───────────────────────────────────────────────
 
-    async getProductsForExport(userId: string, filters?: ExportQueryDto): Promise<Product[]> {
-        return this.productsService.findAllForExport(userId, filters);
+    async getProductsForExport(scope: SkuScope, filters?: ExportQueryDto): Promise<Product[]> {
+        return this.productsService.findAllForExport(scope, filters);
+    }
+
+    /** Publicaciones reales de cada producto, para mostrar en qué canal y en qué estado está. */
+    async listingsDe(products: Product[]): Promise<Map<string, ListingLink[]>> {
+        const porProducto = new Map<string, ListingLink[]>();
+        if (!products.length) return porProducto;
+        const enlaces = await this.listingLinkRepository.find({ where: { product: { id: In(products.map((p) => p.id)) } }, relations: { product: true, connection: true } });
+        for (const e of enlaces) porProducto.set(e.product.id, [...(porProducto.get(e.product.id) ?? []), e]);
+        return porProducto;
     }
 
     // ─── Data mapping ────────────────────────────────────────────────
 
-    mapProductsForExport(products: Product[]): Record<string, any>[] {
+    mapProductsForExport(products: Product[], listings: Map<string, ListingLink[]> = new Map()): Record<string, any>[] {
         return products.map((p) => ({
             id: p.id,
             name: p.name,
@@ -26,6 +42,12 @@ export class ExportService {
             description: p.description,
             category: p.category ?? '',
             subCategory: p.subCategory ?? '',
+            categoryFalabellaId: (p.marketplaceIds as any)?.falabella_category_id ?? '',
+            categoryMercadoLibreId: (p.marketplaceIds as any)?.mercadolibre_category_id ?? (p.aiAttributes as any)?.mercadolibre_category_id ?? '',
+            channels: (listings.get(p.id) ?? [])
+                .map((l) => `${nombreDeCanal(l.marketplace)}${l.connection?.label ? ` (${l.connection.label})` : ''}: ${estadoDeCanal(l)}`)
+                .join(' | '),
+            missing: datosQueFaltan(p).join(', '),
             price: p.price ?? '',
             stock: p.stock ?? 0,
             status: p.status,

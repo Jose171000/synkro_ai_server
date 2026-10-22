@@ -12,6 +12,7 @@ import { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ExportService, ExportFormat } from './export.service';
+import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ExportQueryDto } from './dto/export-query.dto';
 
 const VALID_FORMATS: ExportFormat[] = ['json', 'csv', 'xlsx'];
@@ -19,7 +20,8 @@ const VALID_FORMATS: ExportFormat[] = ['json', 'csv', 'xlsx'];
 @ApiTags('export')
 @ApiBearerAuth()
 @Controller('export')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, StoreAccessGuard)
+@RequireStoreRole('viewer')
 export class ExportController {
     constructor(private readonly exportService: ExportService) {}
 
@@ -43,11 +45,8 @@ export class ExportController {
     ) {
         this.validateFormat(format);
 
-        const products = await this.exportService.getProductsForExport(
-            req.user.id,
-            filters,
-        );
-        const mapped = this.exportService.mapProductsForExport(products);
+        const products = await this.exportService.getProductsForExport({ userId: req.user.id, storeId: req.store.storeId }, filters);
+        const mapped = this.exportService.mapProductsForExport(products, await this.exportService.listingsDe(products));
 
         return this.sendFile(res, mapped, 'products', 'Products', format as ExportFormat);
     }
@@ -72,10 +71,7 @@ export class ExportController {
     ) {
         this.validateFormat(format);
 
-        const products = await this.exportService.getProductsForExport(
-            req.user.id,
-            filters,
-        );
+        const products = await this.exportService.getProductsForExport({ userId: req.user.id, storeId: req.store.storeId }, filters);
         const mapped = this.exportService.mapAiContentForExport(products);
 
         return this.sendFile(res, mapped, 'ai_content', 'AI Content', format as ExportFormat);

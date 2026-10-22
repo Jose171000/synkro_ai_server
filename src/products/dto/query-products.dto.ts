@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNumber, IsBoolean, Min, Max } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsBoolean, IsIn, Min, Max } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 
@@ -57,6 +57,11 @@ export class QueryProductsDto {
     @Transform(({ value }) => value === 'true' || value === true)
     @IsBoolean()
     inStock?: boolean;
+
+    @ApiPropertyOptional({ description: 'Situación del producto', enum: ['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'] })
+    @IsOptional()
+    @IsIn(['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'])
+    estado?: 'sin-categoria' | 'sin-publicar' | 'con-error' | 'incompletos';
 
     @ApiPropertyOptional({
         description: 'Campo por el que ordenar',

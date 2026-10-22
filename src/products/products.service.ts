@@ -103,11 +103,49 @@ export class ProductsService {
             .getOne();
     }
 
-    async findAll(userId: string, query: QueryProductsDto) {
+    /**
+     * Los productos de la tienda activa (y los antiguos que aún no tienen tienda y son del usuario). Así quien trabaja en
+     * una tienda ve sus productos aunque los haya creado otra persona del equipo, y no ve los de otras tiendas.
+     */
+    private enLaTienda(qb: any, scope: SkuScope) {
+        if (!scope.storeId) return qb.where('product.ownerId = :userId', { userId: scope.userId });
+        return qb.where('(product.storeId = :storeId OR (product.storeId IS NULL AND product.ownerId = :userId))', { storeId: scope.storeId, userId: scope.userId });
+    }
+
+    /** Condiciones de lo que falta o falla en un producto, para filtrar y contar con la misma regla. */
+    private static readonly SIN_CATEGORIA = `COALESCE(NULLIF(product."marketplaceIds"->>'falabella_category_id', ''), NULLIF(product."marketplaceIds"->>'mercadolibre_category_id', ''), NULLIF(product."aiAttributes"->>'mercadolibre_category_id', ''), NULLIF(TRIM(product.category), '')) IS NULL`;
+    private static readonly SIN_PUBLICAR = `NOT EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = product.id AND l."syncStatus" IN ('published', 'pending', 'paused'))`;
+    private static readonly CON_ERROR = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = product.id AND l."syncStatus" = 'error')`;
+    private static readonly INCOMPLETO = `(NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = product.id) OR product.price IS NULL OR COALESCE(TRIM(product.description), '') = '' OR ${ProductsService.SIN_CATEGORIA})`;
+
+    private filtroDeEstado(estado?: string): string | null {
+        switch (estado) {
+            case 'sin-categoria': return ProductsService.SIN_CATEGORIA;
+            case 'sin-publicar': return ProductsService.SIN_PUBLICAR;
+            case 'con-error': return ProductsService.CON_ERROR;
+            case 'incompletos': return ProductsService.INCOMPLETO;
+            default: return null;
+        }
+    }
+
+    /** Cuántos productos de la tienda hay en cada situación (con las mismas reglas que los filtros). */
+    async resumen(scope: SkuScope) {
+        const fila = await this.enLaTienda(this.productRepository.createQueryBuilder('product'), scope)
+            .select('COUNT(*)', 'total')
+            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.SIN_CATEGORIA})`, 'sinCategoria')
+            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.SIN_PUBLICAR})`, 'sinPublicar')
+            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.CON_ERROR})`, 'conError')
+            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.INCOMPLETO})`, 'incompletos')
+            .getRawOne();
+        const n = (v: any) => Number(v ?? 0);
+        return { total: n(fila?.total), sinCategoria: n(fila?.sinCategoria), sinPublicar: n(fila?.sinPublicar), conError: n(fila?.conError), incompletos: n(fila?.incompletos) };
+    }
+
+    async findAll(scope: SkuScope, query: QueryProductsDto) {
         const {
             page = 1, limit = 20,
             search, marketplace, category, subCategory,
-            minPrice, maxPrice, inStock,
+            minPrice, maxPrice, inStock, estado,
             sortBy = 'createdAt', order = 'desc',
         } = query;
 
@@ -121,13 +159,13 @@ export class ProductsService {
         };
         const sortColumn = allowedSortFields[sortBy] ?? 'product.createdAt';
 
-        const qb = this.productRepository
-            .createQueryBuilder('product')
-            .leftJoinAndSelect('product.images', 'image')
-            .where('product.ownerId = :userId', { userId })
+        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image'), scope)
             .orderBy(sortColumn, order.toUpperCase() as 'ASC' | 'DESC')
             .skip((page - 1) * limit)
             .take(limit);
+
+        const condicionDeEstado = this.filtroDeEstado(estado);
+        if (condicionDeEstado) qb.andWhere(condicionDeEstado);
 
         // Full-text search across name, SKU and description
         if (search) {
@@ -263,12 +301,12 @@ export class ProductsService {
         });
     }
 
-    async findAllForExport(userId: string, filters?: ExportQueryDto): Promise<Product[]> {
-        const qb = this.productRepository
-            .createQueryBuilder('product')
-            .leftJoinAndSelect('product.images', 'image')
-            .where('product.ownerId = :userId', { userId })
+    async findAllForExport(scope: SkuScope, filters?: ExportQueryDto): Promise<Product[]> {
+        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image'), scope)
             .orderBy('product.createdAt', 'DESC');
+
+        const condicionDeEstado = this.filtroDeEstado(filters?.estado);
+        if (condicionDeEstado) qb.andWhere(condicionDeEstado);
 
         if (filters?.search) {
             qb.andWhere(

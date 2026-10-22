@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNumber, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsBoolean, IsIn } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -22,6 +22,11 @@ export class ExportQueryDto {
     @IsOptional()
     @IsString()
     subCategory?: string;
+
+    @ApiPropertyOptional({ description: 'Situación del producto', enum: ['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'] })
+    @IsOptional()
+    @IsIn(['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'])
+    estado?: 'sin-categoria' | 'sin-publicar' | 'con-error' | 'incompletos';
 
     @ApiPropertyOptional({ description: 'Precio mínimo' })
     @IsOptional()

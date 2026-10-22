@@ -15,6 +15,7 @@ import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
+import { MAX_PRODUCTOS_POR_CONSULTA, ProductOverviewService } from '../sync/product-overview.service';
 import { QueryProductsDto } from './dto/query-products.dto';
 
 @ApiTags('products')
@@ -29,6 +30,7 @@ export class ProductsController {
     private readonly syncService: SyncService,
     private readonly groups: ProductGroupsService,
     private readonly skuGenerator: SkuGeneratorService,
+    private readonly overview: ProductOverviewService,
   ) { }
 
   /**
@@ -198,13 +200,36 @@ export class ProductsController {
     return this.productsService.createWithAI(dto, req.user.id, req.store?.storeId);
   }
 
-  @Get()
+  @Get('overview')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('viewer')
   @ApiOperation({
-    summary: 'Listar productos del usuario con filtros, búsqueda y paginación',
+    summary: 'Categoría real, estado real en cada canal y qué falta para publicar, de los productos indicados',
+    description: 'ids = identificadores separados por coma (máximo 100). Usa las mismas reglas que se aplican al publicar.',
+  })
+  productOverview(@Query('ids') ids: string, @Req() req) {
+    const lista = String(ids ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (lista.length > MAX_PRODUCTOS_POR_CONSULTA) throw new BadRequestException(`Máximo ${MAX_PRODUCTOS_POR_CONSULTA} productos por consulta.`);
+    return this.overview.obtener({ userId: req.user.id, storeId: req.store.storeId }, lista);
+  }
+
+  @Get('summary')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('viewer')
+  @ApiOperation({ summary: 'Cuántos productos de la tienda no tienen categoría, no están publicados, tienen error o están incompletos' })
+  summary(@Req() req) {
+    return this.productsService.resumen({ userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Get()
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('viewer')
+  @ApiOperation({
+    summary: 'Listar los productos de la tienda activa con filtros, búsqueda y paginación',
     description: 'Admite: `page`, `limit`, `search` (nombre/SKU/descripción), `marketplace`, `category`, `subCategory`, `minPrice`, `maxPrice`, `inStock`, `sortBy`, `order`.',
   })
   findAll(@Query() query: QueryProductsDto, @Req() req) {
-    return this.productsService.findAll(req.user.id, query);
+    return this.productsService.findAll({ userId: req.user.id, storeId: req.store.storeId }, query);
   }
 
   @Get(':id')
