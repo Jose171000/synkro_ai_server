@@ -33,7 +33,7 @@ export interface ResumenDeProducto {
     };
 }
 
-export const MAX_PRODUCTOS_POR_CONSULTA = 100;
+export const MAX_PRODUCTOS_POR_CONSULTA = 500;
 
 /**
  * Lo que la lista de productos muestra de cada uno: la categoría real que tiene en cada canal, el estado real de cada

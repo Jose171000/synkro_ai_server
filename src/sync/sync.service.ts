@@ -3407,7 +3407,7 @@ export class SyncService implements OnModuleInit {
     async getAllListings(storeId: string) {
         const links = await this.listingLinkRepository.find({
             where: { connection: { store: { id: storeId } } },
-            relations: { product: true, connection: true },
+            relations: { product: { group: true }, connection: true },
             order: { updatedAt: 'DESC' },
         });
 
@@ -3418,6 +3418,11 @@ export class SyncService implements OnModuleInit {
             id: l.id,
             productId: l.product.id,
             productName: l.product.name,
+            // Variantes de un producto de Synkro: el tablero las junta bajo el grupo en vez de mostrarlas sueltas.
+            groupId: l.product.group?.id ?? null,
+            groupName: l.product.group?.name ?? null,
+            groupCode: l.product.group?.parentSku ?? null,
+            variantValues: l.product.variantValues ?? null,
             sku: l.product.sku,
             stock: l.product.stock,
             price: l.product.price,

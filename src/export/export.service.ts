@@ -44,6 +44,9 @@ export class ExportService {
             subCategory: p.subCategory ?? '',
             categoryFalabellaId: (p.marketplaceIds as any)?.falabella_category_id ?? '',
             categoryMercadoLibreId: (p.marketplaceIds as any)?.mercadolibre_category_id ?? (p.aiAttributes as any)?.mercadolibre_category_id ?? '',
+            group: (p as any).group?.name ?? '',
+            groupCode: (p as any).group?.parentSku ?? '',
+            variant: p.variantValues ? Object.entries(p.variantValues).map(([k, v]) => `${k}: ${v}`).join(', ') : '',
             channels: (listings.get(p.id) ?? [])
                 .map((l) => `${nombreDeCanal(l.marketplace)}${l.connection?.label ? ` (${l.connection.label})` : ''}: ${estadoDeCanal(l)}`)
                 .join(' | '),

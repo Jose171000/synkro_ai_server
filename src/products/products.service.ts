@@ -112,30 +112,46 @@ export class ProductsService {
         return qb.where('(product.storeId = :storeId OR (product.storeId IS NULL AND product.ownerId = :userId))', { storeId: scope.storeId, userId: scope.userId });
     }
 
-    /** Condiciones de lo que falta o falla en un producto, para filtrar y contar con la misma regla. */
-    private static readonly SIN_CATEGORIA = `COALESCE(NULLIF(product."marketplaceIds"->>'falabella_category_id', ''), NULLIF(product."marketplaceIds"->>'mercadolibre_category_id', ''), NULLIF(product."aiAttributes"->>'mercadolibre_category_id', ''), NULLIF(TRIM(product.category), '')) IS NULL`;
-    private static readonly SIN_PUBLICAR = `NOT EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = product.id AND l."syncStatus" IN ('published', 'pending', 'paused'))`;
-    private static readonly CON_ERROR = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = product.id AND l."syncStatus" = 'error')`;
-    private static readonly INCOMPLETO = `(NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = product.id) OR product.price IS NULL OR COALESCE(TRIM(product.description), '') = '' OR ${ProductsService.SIN_CATEGORIA})`;
+    /**
+     * Condiciones de lo que falta o falla en un producto, para filtrar y contar con la misma regla. `{p}` es el alias del
+     * producto: así la misma condición se aplica al producto de la fila o a cualquiera de las variantes de su grupo.
+     */
+    private static readonly SIN_CATEGORIA = `COALESCE(NULLIF({p}."marketplaceIds"->>'falabella_category_id', ''), NULLIF({p}."marketplaceIds"->>'mercadolibre_category_id', ''), NULLIF({p}."aiAttributes"->>'mercadolibre_category_id', ''), NULLIF(TRIM({p}.category), '')) IS NULL`;
+    private static readonly SIN_PUBLICAR = `NOT EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l."syncStatus" IN ('published', 'pending', 'paused'))`;
+    private static readonly CON_ERROR = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l."syncStatus" = 'error')`;
+    private static readonly INCOMPLETO = `(NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = {p}.id) OR {p}.price IS NULL OR COALESCE(TRIM({p}.description), '') = '' OR ${ProductsService.SIN_CATEGORIA})`;
+
+    /**
+     * Un grupo de variantes cuenta como UNA fila de la lista: la de su primera variante. Los productos sin grupo son una
+     * fila cada uno. Las variantes de un grupo se piden aparte (con `groupId`) al desplegarlo.
+     */
+    private static readonly UNA_FILA_POR_GRUPO = `(product."groupId" IS NULL OR product.id = (SELECT g.id FROM products g WHERE g."groupId" = product."groupId" ORDER BY g."createdAt" ASC, g.id ASC LIMIT 1))`;
+
+    /** La condición vale para la fila o para cualquiera de las variantes de su grupo (así buscar «rojo» encuentra el grupo). */
+    private conVariantes(plantilla: string): string {
+        const en = (alias: string) => plantilla.split('{p}').join(alias);
+        return `(${en('product')} OR (product."groupId" IS NOT NULL AND EXISTS (SELECT 1 FROM products s WHERE s."groupId" = product."groupId" AND ${en('s')})))`;
+    }
 
     private filtroDeEstado(estado?: string): string | null {
         switch (estado) {
-            case 'sin-categoria': return ProductsService.SIN_CATEGORIA;
-            case 'sin-publicar': return ProductsService.SIN_PUBLICAR;
-            case 'con-error': return ProductsService.CON_ERROR;
-            case 'incompletos': return ProductsService.INCOMPLETO;
+            case 'sin-categoria': return this.conVariantes(ProductsService.SIN_CATEGORIA);
+            case 'sin-publicar': return this.conVariantes(ProductsService.SIN_PUBLICAR);
+            case 'con-error': return this.conVariantes(ProductsService.CON_ERROR);
+            case 'incompletos': return this.conVariantes(ProductsService.INCOMPLETO);
             default: return null;
         }
     }
 
-    /** Cuántos productos de la tienda hay en cada situación (con las mismas reglas que los filtros). */
+    /** Cuántos productos (un grupo cuenta como uno) hay en cada situación, con las mismas reglas que los filtros. */
     async resumen(scope: SkuScope) {
         const fila = await this.enLaTienda(this.productRepository.createQueryBuilder('product'), scope)
+            .andWhere(ProductsService.UNA_FILA_POR_GRUPO)
             .select('COUNT(*)', 'total')
-            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.SIN_CATEGORIA})`, 'sinCategoria')
-            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.SIN_PUBLICAR})`, 'sinPublicar')
-            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.CON_ERROR})`, 'conError')
-            .addSelect(`COUNT(*) FILTER (WHERE ${ProductsService.INCOMPLETO})`, 'incompletos')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('sin-categoria')})`, 'sinCategoria')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('sin-publicar')})`, 'sinPublicar')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('con-error')})`, 'conError')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('incompletos')})`, 'incompletos')
             .getRawOne();
         const n = (v: any) => Number(v ?? 0);
         return { total: n(fila?.total), sinCategoria: n(fila?.sinCategoria), sinPublicar: n(fila?.sinPublicar), conError: n(fila?.conError), incompletos: n(fila?.incompletos) };
@@ -145,7 +161,7 @@ export class ProductsService {
         const {
             page = 1, limit = 20,
             search, marketplace, category, subCategory,
-            minPrice, maxPrice, inStock, estado,
+            minPrice, maxPrice, inStock, estado, groupId,
             sortBy = 'createdAt', order = 'desc',
         } = query;
 
@@ -159,10 +175,14 @@ export class ProductsService {
         };
         const sortColumn = allowedSortFields[sortBy] ?? 'product.createdAt';
 
-        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image'), scope)
+        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image').leftJoinAndSelect('product.group', 'grp'), scope)
             .orderBy(sortColumn, order.toUpperCase() as 'ASC' | 'DESC')
             .skip((page - 1) * limit)
             .take(limit);
+
+        // Con groupId se piden las variantes de un grupo; sin él, un grupo es una sola fila.
+        if (groupId) qb.andWhere('product."groupId" = :groupId', { groupId });
+        else qb.andWhere(ProductsService.UNA_FILA_POR_GRUPO);
 
         const condicionDeEstado = this.filtroDeEstado(estado);
         if (condicionDeEstado) qb.andWhere(condicionDeEstado);
@@ -170,7 +190,7 @@ export class ProductsService {
         // Full-text search across name, SKU and description
         if (search) {
             qb.andWhere(
-                '(product.name ILIKE :q OR product.sku ILIKE :q OR product.description ILIKE :q)',
+                this.conVariantes('({p}.name ILIKE :q OR {p}.sku ILIKE :q OR {p}.description ILIKE :q)'),
                 { q: `%${search}%` },
             );
         }
@@ -200,10 +220,11 @@ export class ProductsService {
         }
 
         if (inStock) {
-            qb.andWhere('product.stock > 0');
+            qb.andWhere(this.conVariantes('{p}.stock > 0'));
         }
 
-        const [data, total] = await qb.getManyAndCount();
+        const [filas, total] = await qb.getManyAndCount();
+        const data = await this.conResumenDeGrupo(filas);
 
         return {
             data,
@@ -216,6 +237,27 @@ export class ProductsService {
                 hasPreviousPage: page > 1,
             },
         };
+    }
+
+    /** A cada fila que es un grupo le añade el resumen de sus variantes: cuántas son, rango de precio, stock total y sus ids. */
+    private async conResumenDeGrupo(filas: Product[]) {
+        const grupos = [...new Set(filas.map((f) => f.group?.id).filter((x): x is string => !!x))];
+        if (!grupos.length) return filas.map((f) => ({ ...f, groupSummary: null as null }));
+        const resumen: { groupId: string; n: string; pmin: string | null; pmax: string | null; stock: string | null; ids: string[] }[] = await this.productRepository.query(
+            `SELECT s."groupId" AS "groupId", COUNT(*) AS n, MIN(s.price) AS pmin, MAX(s.price) AS pmax, SUM(s.stock) AS stock, ARRAY_AGG(s.id ORDER BY s."createdAt", s.id) AS ids
+               FROM products s WHERE s."groupId" = ANY($1) GROUP BY s."groupId"`,
+            [grupos],
+        );
+        const porGrupo = new Map(resumen.map((r) => [r.groupId, r]));
+        return filas.map((f) => {
+            const r = f.group ? porGrupo.get(f.group.id) : undefined;
+            return {
+                ...f,
+                groupSummary: r
+                    ? { variantCount: Number(r.n), priceMin: r.pmin != null ? Number(r.pmin) : null, priceMax: r.pmax != null ? Number(r.pmax) : null, stockTotal: Number(r.stock ?? 0), variantIds: r.ids }
+                    : null,
+            };
+        });
     }
 
     async findOne(id: string, userId: string) {
@@ -302,7 +344,7 @@ export class ProductsService {
     }
 
     async findAllForExport(scope: SkuScope, filters?: ExportQueryDto): Promise<Product[]> {
-        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image'), scope)
+        const qb = this.enLaTienda(this.productRepository.createQueryBuilder('product').leftJoinAndSelect('product.images', 'image').leftJoinAndSelect('product.group', 'grp'), scope)
             .orderBy('product.createdAt', 'DESC');
 
         const condicionDeEstado = this.filtroDeEstado(filters?.estado);
