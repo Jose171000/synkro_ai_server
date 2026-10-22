@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
@@ -9,6 +9,15 @@ import { QueryProductsDto } from './dto/query-products.dto';
 import { ExportQueryDto } from '../export/dto/export-query.dto';
 import { AiService } from 'src/ai/ai.service';
 
+/**
+ * Dónde debe ser único un SKU: dentro de una tienda. Un producto que todavía no tiene tienda (los de antes de las tiendas)
+ * compite solo con los demás sin tienda de su dueño.
+ */
+export interface SkuScope {
+    userId: string;
+    storeId?: string | null;
+}
+
 @Injectable()
 export class ProductsService {
     constructor(
@@ -17,55 +26,74 @@ export class ProductsService {
         private aiService: AiService,
     ) { }
 
-    async create(createProductDto: CreateProductDto, userId: string) {
+    async create(createProductDto: CreateProductDto, userId: string, storeId?: string | null) {
         const { images = [], ...productDetails } = createProductDto;
         productDetails.sku = (productDetails.sku ?? '').trim();
 
-        // Cada SKU es único: ni repetido ni con otra combinación de mayúsculas o espacios
-        await this.assertSkuLibre(productDetails.sku, userId);
+        // Cada SKU es único dentro de la tienda: ni repetido ni con otra combinación de mayúsculas o espacios
+        await this.assertSkuLibre(productDetails.sku, { userId, storeId });
 
         const product = this.productRepository.create({
             ...productDetails,
             owner: { id: userId },
+            ...(storeId ? { store: { id: storeId } } : {}),
             images: images.map(url => this.productRepository.manager.create(ProductImage, { url }))
         });
-        return this.productRepository.save(product);
+        return this.guardar(product, productDetails.sku);
+    }
+
+    /**
+     * Guarda un producto. Si la base de datos rechaza el SKU por repetido (dos cargas a la vez pasaron el control previo),
+     * se traduce a un mensaje claro: la unicidad real la garantiza un índice de la base.
+     */
+    private async guardar(product: Product, sku: string): Promise<Product> {
+        try {
+            return await this.productRepository.save(product);
+        } catch (error: any) {
+            if (error?.code === '23505' && /sku/i.test(String(error?.constraint ?? error?.detail ?? ''))) {
+                throw new ConflictException(`El SKU "${sku}" ya está en uso en esta tienda. Cada producto necesita un SKU distinto.`);
+            }
+            throw error;
+        }
+    }
+
+    /** Normaliza lo que llegue como ámbito: un id de usuario suelto (llamadas antiguas) o el ámbito completo. */
+    private ambitoDe(scope: string | SkuScope): SkuScope {
+        return typeof scope === 'string' ? { userId: scope, storeId: null } : scope;
+    }
+
+    /** Limita una consulta a los productos del mismo ámbito de unicidad que el SKU. */
+    private enElAmbito(qb: any, scope: SkuScope) {
+        if (scope.storeId) return qb.where('p."storeId" = :storeId', { storeId: scope.storeId });
+        return qb.where('p."ownerId" = :userId', { userId: scope.userId }).andWhere('p."storeId" IS NULL');
     }
 
     /** El SKU identifica al producto en todos los canales: «abc-1» y «ABC-1 » son el mismo. */
-    async assertSkuLibre(sku: string, userId: string, exceptId?: string): Promise<void> {
-        const existing = await this.productRepository
-            .createQueryBuilder('p')
-            .where('p."ownerId" = :userId', { userId })
+    async assertSkuLibre(sku: string, scope: string | SkuScope, exceptId?: string): Promise<void> {
+        const existing = await this.enElAmbito(this.productRepository.createQueryBuilder('p'), this.ambitoDe(scope))
             .andWhere('LOWER(TRIM(p.sku)) = LOWER(TRIM(:sku))', { sku })
             .andWhere(exceptId ? 'p.id <> :exceptId' : '1=1', { exceptId })
             .getOne();
         if (existing) {
             throw new ConflictException(
-                `El SKU "${sku}" ya está en uso por el producto "${existing.name}". Cada producto necesita un SKU distinto.`,
+                `El SKU "${sku}" ya está en uso por el producto "${existing.name}" de esta tienda. Cada producto necesita un SKU distinto.`,
             );
         }
     }
 
-    /** De una lista de SKUs, cuáles ya existen (en minúsculas y sin espacios). */
-    async skusExistentes(userId: string, skus: string[]): Promise<Set<string>> {
+    /** De una lista de SKUs, cuáles ya existen en la tienda (en minúsculas y sin espacios). */
+    async skusExistentes(scope: string | SkuScope, skus: string[]): Promise<Set<string>> {
         const claves = [...new Set(skus.map((s) => s.trim().toLowerCase()).filter(Boolean))];
         if (!claves.length) return new Set();
-        const filas: { sku: string }[] = await this.productRepository
-            .createQueryBuilder('p')
-            .select('LOWER(TRIM(p.sku))', 'sku')
-            .where('p."ownerId" = :userId', { userId })
+        const filas: { sku: string }[] = await this.enElAmbito(this.productRepository.createQueryBuilder('p').select('LOWER(TRIM(p.sku))', 'sku'), this.ambitoDe(scope))
             .andWhere('LOWER(TRIM(p.sku)) IN (:...claves)', { claves })
             .getRawMany();
         return new Set(filas.map((f) => f.sku));
     }
 
-    /** El producto de un dueño por su SKU (sin importar mayúsculas ni espacios); null si no existe. */
-    async findBySku(userId: string, sku: string): Promise<Product | null> {
-        return this.productRepository
-            .createQueryBuilder('p')
-            .leftJoinAndSelect('p.images', 'image')
-            .where('p."ownerId" = :userId', { userId })
+    /** El producto de una tienda por su SKU (sin importar mayúsculas ni espacios); null si no existe. */
+    async findBySku(scope: string | SkuScope, sku: string): Promise<Product | null> {
+        return this.enElAmbito(this.productRepository.createQueryBuilder('p').leftJoinAndSelect('p.images', 'image'), this.ambitoDe(scope))
             .andWhere('LOWER(TRIM(p.sku)) = LOWER(TRIM(:sku))', { sku })
             .getOne();
     }
@@ -174,10 +202,10 @@ export class ProductsService {
         return this.productRepository.save(product);
     }
 
-    async createWithAI(dto: CreateProductWithAiDto, userId: string) {
-        // Step 1: Check for duplicate SKU within same user BEFORE calling DeepSeek
+    async createWithAI(dto: CreateProductWithAiDto, userId: string, storeId?: string | null) {
+        // Step 1: Check for duplicate SKU within the store BEFORE calling DeepSeek
         dto.sku = (dto.sku ?? '').trim();
-        await this.assertSkuLibre(dto.sku, userId);
+        await this.assertSkuLibre(dto.sku, { userId, storeId });
 
         const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
 
@@ -192,10 +220,11 @@ export class ProductsService {
             name: nombreDelCliente || dto.sku,
             description: descripcionDelCliente,
             owner: { id: userId },
+            ...(storeId ? { store: { id: storeId } } : {}),
             images: images.map(url => this.productRepository.manager.create(ProductImage, { url })),
             status: 'pending',
         });
-        const savedProduct = await this.productRepository.save(product);
+        const savedProduct = await this.guardar(product, dto.sku);
 
         // Step 2: Call DeepSeek (Phase A + Phase B)
         const aiContent = await this.aiService.generateProductContent({
@@ -275,11 +304,12 @@ export class ProductsService {
         const product = await this.findOne(id, userId);
 
         const { images, ...productDetails } = updateDto;
+        // El SKU identifica al producto en todos los canales: una vez creado no se cambia.
         if (productDetails.sku !== undefined) {
-            productDetails.sku = productDetails.sku.trim();
-            if (productDetails.sku.toLowerCase() !== product.sku.trim().toLowerCase()) {
-                await this.assertSkuLibre(productDetails.sku, userId, product.id);
+            if (productDetails.sku.trim().toLowerCase() !== product.sku.trim().toLowerCase()) {
+                throw new BadRequestException('El SKU no se puede cambiar una vez creado. Si te equivocaste, elimina el producto y créalo de nuevo.');
             }
+            delete (productDetails as any).sku;
         }
         Object.assign(product, productDetails);
 

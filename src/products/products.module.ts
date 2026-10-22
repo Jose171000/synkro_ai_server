@@ -10,6 +10,8 @@ import { ProductImage } from './entities/product-image.entity';
 import { AuthModule } from '../auth/auth.module';
 import { UploadModule } from '../upload/upload.module';
 import { SyncModule } from '../sync/sync.module';
+import { StoresModule } from '../stores/stores.module';
+import { SkuUnicoService } from './sku-unico.service';
 
 @Module({
   imports: [
@@ -18,9 +20,10 @@ import { SyncModule } from '../sync/sync.module';
     AuthModule,
     UploadModule,
     SyncModule,
+    StoresModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, SectionAccessGuard],
+  providers: [ProductsService, SectionAccessGuard, SkuUnicoService],
   exports: [ProductsService],
 })
 export class ProductModule { }

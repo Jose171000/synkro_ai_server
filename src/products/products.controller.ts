@@ -8,6 +8,7 @@ import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { GenerateAIContentDto } from './dto/generate-ai-content.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
+import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -49,13 +50,17 @@ export class ProductsController {
   }
 
   @Post()
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
   @ApiOperation({ summary: 'Crear un producto (sin IA) — imágenes como URLs' })
   async create(@Body() createProductDto: CreateProductDto, @Req() req) {
     await this.validateImages(createProductDto.images, true);
-    return this.productsService.create(createProductDto, req.user.id);
+    return this.productsService.create(createProductDto, req.user.id, req.store?.storeId);
   }
 
   @Post('with-files')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
   @ApiOperation({
     summary: 'Crear un producto (sin IA) — imágenes como archivos físicos',
     description: 'Envía los datos del producto como JSON en el campo `data` y las imágenes como archivos en el campo `images`. Las imágenes se suben automáticamente a Cloudinary (JPG, máx. 10 MB, máx. 2000x2000px).',
@@ -88,14 +93,16 @@ export class ProductsController {
     const results = await this.uploadService.uploadImages(imageFiles, 'products');
     dto.images = results.map(r => r.secureUrl);
 
-    return this.productsService.create(dto, req.user.id);
+    return this.productsService.create(dto, req.user.id, req.store?.storeId);
   }
 
   @Post('with-ai')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
   @ApiOperation({ summary: 'Crear un producto con IA — imágenes como URLs' })
   async createWithAI(@Body() dto: CreateProductWithAiDto, @Req() req) {
     await this.validateImages(dto.images, true);
-    return this.productsService.createWithAI(dto, req.user.id);
+    return this.productsService.createWithAI(dto, req.user.id, req.store?.storeId);
   }
 
   @Post('with-ai/with-files')
@@ -114,6 +121,8 @@ export class ProductsController {
       required: ['data', 'images'],
     },
   })
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
   @UseInterceptors(AnyFilesInterceptor())
   async createWithAIAndFiles(@UploadedFiles() files: Express.Multer.File[], @Req() req) {
     const imageFiles = files?.filter(f => f.fieldname === 'images') ?? [];
@@ -131,7 +140,7 @@ export class ProductsController {
     const results = await this.uploadService.uploadImages(imageFiles, 'products');
     dto.images = results.map(r => r.secureUrl);
 
-    return this.productsService.createWithAI(dto, req.user.id);
+    return this.productsService.createWithAI(dto, req.user.id, req.store?.storeId);
   }
 
   @Get()

@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
@@ -593,7 +593,15 @@ export class SyncService implements OnModuleInit {
         });
         if (!product) throw new NotFoundException('Producto no encontrado');
         if (!product.store) {
-            await this.productRepository.update(product.id, { store: { id: scope.storeId } } as any);
+            try {
+                await this.productRepository.update(product.id, { store: { id: scope.storeId } } as any);
+            } catch (error: any) {
+                // Ya hay otro producto con ese SKU en la tienda: el índice único de la base lo impide.
+                if (error?.code === '23505') {
+                    throw new ConflictException(`No se puede usar este producto en la tienda: ya existe otro con el SKU "${product.sku}" en ella.`);
+                }
+                throw error;
+            }
             product.store = { id: scope.storeId } as any;
         }
         return product;

@@ -39,7 +39,7 @@ export class AiProcessor extends WorkerHost {
 
         try {
             // 1. Create the product with the resolved image URL (if any). En un reintento ya existe: se retoma sin duplicar.
-            const existente = job.attemptsMade > 0 ? await this.productsService.findBySku(userId, sku) : null;
+            const existente = job.attemptsMade > 0 ? await this.productsService.findBySku({ userId, storeId }, sku) : null;
             const product = existente ?? await this.productsService.create({
                 name: productName || sku,
                 description: description || '',
@@ -51,7 +51,7 @@ export class AiProcessor extends WorkerHost {
                 saleEndDate: saleEndDate ?? null,
                 targetMarketplaces,
                 images: imagenes,
-            } as any, userId);
+            } as any, userId, storeId);
 
             // 2. Generate AI content. En masivo se estima todo lo que falte (datos obligatorios y
             // medidas del paquete) para que se pueda publicar sin pasar por revisión.

@@ -180,7 +180,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
 
             // 1) Datos de cada fila. Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
             const skusDelExcel = rows.map((row: any) => this.getVal(row, COLUMNAS.sku) ?? '');
-            const existentes = await this.productsService.skusExistentes(req.user.id, skusDelExcel);
+            const existentes = await this.productsService.skusExistentes({ userId: req.user.id, storeId }, skusDelExcel);
             const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
             type Fila = { i: number; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };

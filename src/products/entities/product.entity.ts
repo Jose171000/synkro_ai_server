@@ -1,10 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany } from "typeorm";
 import { User } from "src/users/entities/user.entity";
 import { Store } from "../../stores/entities/store.entity";
 import { ProductImage } from "./product-image.entity";
 
+// Unicidad del SKU: índices únicos por tienda (sin distinguir mayúsculas ni espacios) creados por SkuUnicoService.
 @Entity('products')
-@Unique('UQ_product_sku_owner', ['sku', 'owner'])
 export class Product {
     @PrimaryGeneratedColumn('uuid')
     id: string;
