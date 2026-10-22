@@ -7,7 +7,7 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { SaveSheetDto } from './dto/save-sheet.dto';
-import { ATRIBUTOS_DE_SISTEMA } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema } from './falabella/falabella-fields';
 
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
@@ -113,7 +113,7 @@ export class ProductSheetService {
                 categoryReview: attrs._categoriaDudosa ? String(attrs._categoriaDudosa.motivo ?? 'revisa que la categoría sea la correcta') : null,
                 measures: { width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight },
                 attributes: definiciones
-                    .filter((a) => !ATRIBUTOS_YA_CUBIERTOS_FALABELLA.has(a.name))
+                    .filter((a) => !esAtributoDeSistema(a))
                     .map((a) => ({
                         name: a.name,
                         label: a.label || a.name,

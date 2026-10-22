@@ -10,7 +10,7 @@ import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { ProductVision } from './product-vision.service';
-import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo } from '../sync/falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 
 export interface FalabellaPrepReport {
@@ -270,7 +270,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         const vision = (attrs.vision as ProductVision | undefined) ?? null;
 
-        const definiciones = (await this.falabella.getCategoryAttributes(creds, categoryId)).filter((a) => !CUBIERTOS.has(a.name));
+        const definiciones = (await this.falabella.getCategoryAttributes(creds, categoryId)).filter((a) => !esAtributoDeSistema(a));
         const actuales: Record<string, string> = {};
         const faltantes = [] as { name: string; description: string; example: string; isRequired: boolean; options?: string[] }[];
         for (const a of definiciones) {

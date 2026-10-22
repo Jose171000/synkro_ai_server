@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CategoryAttribute, MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
 import { CategorySeederService } from '../categories/category-seeder.service';
-import { ATRIBUTOS_DE_SISTEMA } from '../sync/falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { MeliApiService } from '../sync/meli/meli-api.service';
 import { FalabellaApiService, FalabellaCredentials } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
@@ -194,7 +194,7 @@ export class ChannelAttributesService {
                 if (!creds) return null;
                 const atributos = await this.falabella.getCategoryAttributes(creds, categoryId);
                 const lista: CategoryAttribute[] = atributos
-                    .filter((a) => !YA_CUBIERTOS_FALABELLA.has(a.name))
+                    .filter((a) => !esAtributoDeSistema(a))
                     .map((a) => ({
                         name: a.feedName || a.name,
                         description: [a.label || a.name, a.description].filter(Boolean).join(' — '),

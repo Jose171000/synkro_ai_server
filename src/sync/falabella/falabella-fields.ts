@@ -20,16 +20,34 @@ export const claveDeAtributo = (nombre: string) => String(nombre ?? '').toLowerC
 const CLAVES_DE_SISTEMA = new Set(LISTA_DE_SISTEMA.map(claveDeAtributo));
 
 /**
+ * Los datos comerciales (precio, precio de oferta, stock y las fechas de la oferta) los fija Synkro desde lo que digitó el
+ * cliente: ni la IA ni la ficha del canal deben generarlos. Falabella los lista entre los atributos de algunas categorías
+ * («Precio (Falabella)», «Stock (Falabella)»…) con nombres distintos según la categoría, así que se reconocen por nombre y por etiqueta.
+ */
+const COMERCIAL_POR_NOMBRE = /price|stock|specialfrom|specialto|salestart|saleend|saledate/;
+const COMERCIAL_POR_ETIQUETA = [/\(falabella\).*(precio|stock|oferta|descuento|cantidad)|(precio|stock|oferta|descuento|cantidad).*\(falabella\)/, /fecha .*(oferta|precio)/];
+
+const sinTildes = (t: string) => String(t ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
+/**
  * Los nombres de los atributos llegan escritos de varias formas según la categoría («tax_class», «TaxClass»,
  * «taxclass»…): la comparación ignora mayúsculas, guiones y guiones bajos.
  */
 class ConjuntoDeSistema extends Set<string> {
     has(nombre: string): boolean {
-        return CLAVES_DE_SISTEMA.has(claveDeAtributo(nombre));
+        const clave = claveDeAtributo(nombre);
+        return CLAVES_DE_SISTEMA.has(clave) || COMERCIAL_POR_NOMBRE.test(clave);
     }
 }
 
 export const ATRIBUTOS_DE_SISTEMA: Set<string> = new ConjuntoDeSistema(LISTA_DE_SISTEMA);
+
+/** Un atributo de categoría que NO se completa con IA ni se manda como dato del producto: de sistema, o precio, oferta o stock. */
+export function esAtributoDeSistema(a: { name?: string; feedName?: string; label?: string }): boolean {
+    if (ATRIBUTOS_DE_SISTEMA.has(String(a?.name ?? '')) || ATRIBUTOS_DE_SISTEMA.has(String(a?.feedName ?? ''))) return true;
+    const etiqueta = sinTildes(a?.label ?? '');
+    return !!etiqueta && COMERCIAL_POR_ETIQUETA.some((r) => r.test(etiqueta));
+}
 
 /**
  * Atributos que Falabella respondió que «no aplican» a la categoría de este producto. Se guardan en el

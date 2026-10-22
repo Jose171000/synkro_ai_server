@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1061,7 +1061,7 @@ export class SyncService implements OnModuleInit {
 
         // Todos, no solo los obligatorios: los demás suben la calidad del contenido en Falabella.
         return attributes
-            .filter(a => !ATRIBUTOS_YA_CUBIERTOS.has(a.name))
+            .filter(a => !esAtributoDeSistema(a))
             .map(a => ({
                 name: a.name,
                 label: a.label || a.name,
@@ -1397,7 +1397,7 @@ export class SyncService implements OnModuleInit {
 
         const noAplican = atributosQueNoAplican(attributes);
         for (const attribute of categoryAttributes) {
-            if (ATRIBUTOS_YA_CUBIERTOS.has(attribute.name) || ATRIBUTOS_YA_CUBIERTOS.has(attribute.feedName)) continue;
+            if (esAtributoDeSistema(attribute)) continue;
             // Falabella ya respondió que este no aplica a la categoría de este producto.
             if (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name))) continue;
 
