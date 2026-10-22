@@ -6,7 +6,7 @@ import { SkuUnicoService } from './sku-unico.service';
 type Fila = { id: string; sku: string; name: string; ownerId: string; storeId: string | null };
 
 /** Repositorio en memoria con un query builder que entiende solo lo que usa la regla de SKU. */
-function construir(productos: Fila[], opciones: { falla23505?: boolean } = {}) {
+function construir(productos: Fila[], opciones: { falla23505?: boolean; publicado?: boolean } = {}) {
     const repo: any = {
         createQueryBuilder: () => {
             const filtros: ((p: Fila) => boolean)[] = [];
@@ -31,14 +31,16 @@ function construir(productos: Fila[], opciones: { falla23505?: boolean } = {}) {
             return qb;
         },
         create: (x: any) => x,
-        manager: { create: (_c: any, x: any) => x },
+        manager: { create: (_c: any, x: any) => x, count: undefined as any },
         save: jest.fn(async (x: any) => {
             if (opciones.falla23505) throw Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'UQ_product_sku_store' });
             return x;
         }),
         findOne: jest.fn(),
     };
-    return { service: new ProductsService(repo, {} as any), repo };
+    repo.manager.count = jest.fn(async () => opciones.publicado ? 1 : 0);
+    const generador: any = { siguientes: jest.fn(async () => ['KI-0013']) };
+    return { service: new ProductsService(repo, {} as any, generador), repo, generador };
 }
 
 describe('cada SKU es único dentro de su tienda', () => {
@@ -92,24 +94,40 @@ describe('cada SKU es único dentro de su tienda', () => {
     });
 });
 
-describe('el SKU no se cambia una vez creado', () => {
-    function conProducto() {
-        const producto: any = { id: 'p1', sku: 'ABC-1', name: 'Sábanas', images: [] };
-        const { service, repo } = construir([]);
+describe('el SKU se corrige hasta que el producto se publica', () => {
+    function conProducto(opciones: { publicado?: boolean; otros?: Fila[] } = {}) {
+        const producto: any = { id: 'p1', sku: 'ABC-1', name: 'Sábanas', images: [], store: { id: 'tiendaA' } };
+        const { service, repo } = construir(opciones.otros ?? [], { publicado: opciones.publicado });
         repo.findOne.mockResolvedValue(producto);
         return { service, repo, producto };
     }
 
-    it('rechaza un SKU distinto', async () => {
-        const { service } = conProducto();
+    it('un producto ya publicado no cambia de SKU', async () => {
+        const { service } = conProducto({ publicado: true });
         await expect(service.update('p1', { sku: 'OTRO-9' } as any, 'u1')).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    it('antes de publicar sí se corrige, y debe seguir siendo único en la tienda', async () => {
+        const { service, producto } = conProducto({ otros: [{ id: 'p9', sku: 'YA-ESTA', name: 'Otro', ownerId: 'u1', storeId: 'tiendaA' }] });
+        await service.update('p1', { sku: ' NUEVO-5 ' } as any, 'u1');
+        expect(producto.sku).toBe('NUEVO-5');
+        await expect(service.update('p1', { sku: 'ya-esta' } as any, 'u1')).rejects.toBeInstanceOf(ConflictException);
+    });
+
     it('acepta el mismo SKU (aunque cambien mayúsculas) y actualiza lo demás sin tocarlo', async () => {
-        const { service, producto } = conProducto();
+        const { service, producto } = conProducto({ publicado: true });
         await service.update('p1', { sku: ' abc-1 ', name: 'Nuevo nombre' } as any, 'u1');
         expect(producto.sku).toBe('ABC-1');
         expect(producto.name).toBe('Nuevo nombre');
+    });
+});
+
+describe('SKU generado cuando el producto no trae uno', () => {
+    it('create y createWithAI usan el siguiente SKU de la tienda', async () => {
+        const { service, repo, generador } = construir([]);
+        await service.create({ name: 'x', description: 'y' } as any, 'u1', 'tiendaA');
+        expect(generador.siguientes).toHaveBeenCalledWith({ userId: 'u1', storeId: 'tiendaA' });
+        expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ sku: 'KI-0013' }));
     });
 });
 

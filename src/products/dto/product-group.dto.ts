@@ -10,9 +10,10 @@ export class CreateProductGroupDto {
     @IsString()
     name?: string;
 
+    /** Opcional: sin código, se genera con el formato de la tienda. */
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
-    parentSku: string;
+    parentSku?: string;
 
     @IsOptional()
     @IsString()

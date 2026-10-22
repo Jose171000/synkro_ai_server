@@ -5,9 +5,10 @@ export class CreateProductDto {
     @IsNotEmpty()
     name: string;
 
+    /** Opcional: sin SKU, el sistema genera uno siguiendo el formato de la tienda. */
     @IsString()
-    @IsNotEmpty()
-    sku: string;
+    @IsOptional()
+    sku?: string;
 
     @IsString()
     @IsNotEmpty()

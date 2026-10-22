@@ -95,7 +95,7 @@ function construir(opciones: { productos?: any[]; ocupados?: string[]; falla2350
         molde.packageWidth = 30;
     });
     const vision: any = { detectarVariantes: jest.fn() };
-    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService, ai, vision), manager, guardados, productos, grupos, ai, productRepo, vision, groupRepo };
+    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService, ai, vision, { siguientes: jest.fn(async () => ['KI-0013']) } as any), manager, guardados, productos, grupos, ai, productRepo, vision, groupRepo };
 }
 
 const ambito = { userId: 'u1', storeId: 't1' };
@@ -118,6 +118,15 @@ describe('crear un producto con variantes', () => {
         expect(productos[0]).toMatchObject({ name: 'Polera Kasari - Rojo · M', price: 49.9, stock: 10, variantValues: { Color: 'Rojo', Talla: 'M' }, store: { id: 't1' } });
         expect(productos[0].images).toHaveLength(1);
         expect(g.id).toBeTruthy();
+    });
+
+    it('sin código de grupo, se genera con el formato de la tienda', async () => {
+        const { service, grupos, productos } = construir();
+        const e: any = entrada();
+        delete e.parentSku;
+        await service.crear(e, ambito);
+        expect(grupos[0].parentSku).toBe('KI-0013');
+        expect(productos[0].sku).toBe('KI-0013-ROJO-M');
     });
 
     it('rechaza un código de grupo que ya es el SKU de otro producto de la tienda', async () => {

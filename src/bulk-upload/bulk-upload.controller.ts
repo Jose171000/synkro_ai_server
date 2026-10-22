@@ -22,6 +22,7 @@ import { UploadService } from '../upload/upload.service';
 import { StoreAccessGuard } from '../stores/store-access.guard';
 import { SyncService } from '../sync/sync.service';
 import { ProductsService } from '../products/products.service';
+import { SkuGeneratorService } from '../products/sku-generator.service';
 import { StoresService } from '../stores/stores.service';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
@@ -43,6 +44,7 @@ export class BulkUploadController {
         private readonly syncService: SyncService,
         private readonly productsService: ProductsService,
         private readonly stores: StoresService,
+        private readonly skuGenerator: SkuGeneratorService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -187,26 +189,29 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const validas: Fila[] = [];
             rows.forEach((row: any, i: number) => {
                 const sku = (this.getVal(row, COLUMNAS.sku) ?? '').trim();
-                if (!sku) return rechazar(i, 'falta el SKU');
-                const clave = sku.toLowerCase();
-                if (existentes.has(clave)) return rechazar(i, `el SKU ${sku} ya existe en tus productos`);
-                if (vistos.has(clave)) return rechazar(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
-                vistos.set(clave, i);
+                // Una fila sin SKU no se rechaza: recibe uno generado con el formato de la tienda (más abajo).
+                const ref = sku || '(sin SKU)';
+                if (sku) {
+                    const clave = sku.toLowerCase();
+                    if (existentes.has(clave)) return rechazar(i, `el SKU ${sku} ya existe en tus productos`);
+                    if (vistos.has(clave)) return rechazar(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
+                    vistos.set(clave, i);
+                }
 
                 const precio = leerPrecio(this.getVal(row, COLUMNAS.precio));
-                if (precio === null) return rechazar(i, `${sku}: falta el precio o no es válido`);
+                if (precio === null) return rechazar(i, `${ref}: falta el precio o no es válido`);
                 const stock = leerStock(this.getVal(row, COLUMNAS.stock));
-                if (stock === null) return rechazar(i, `${sku}: el stock debe ser un número entero`);
+                if (stock === null) return rechazar(i, `${ref}: el stock debe ser un número entero`);
 
                 // Descuento opcional: menor que el precio y con fechas en orden.
                 const textoDescuento = this.getVal(row, COLUMNAS.precioDescuento);
                 const precioDescuento = textoDescuento ? leerPrecio(textoDescuento) : null;
-                if (textoDescuento && precioDescuento === null) return rechazar(i, `${sku}: el precio con descuento no es válido`);
-                if (precioDescuento !== null && precioDescuento >= precio) return rechazar(i, `${sku}: el precio con descuento (${precioDescuento}) debe ser menor que el precio (${precio})`);
+                if (textoDescuento && precioDescuento === null) return rechazar(i, `${ref}: el precio con descuento no es válido`);
+                if (precioDescuento !== null && precioDescuento >= precio) return rechazar(i, `${ref}: el precio con descuento (${precioDescuento}) debe ser menor que el precio (${precio})`);
                 const desde = leerFecha(this.getVal(row, COLUMNAS.descuentoDesde));
                 const hasta = leerFecha(this.getVal(row, COLUMNAS.descuentoHasta));
-                if (desde === undefined || hasta === undefined) return rechazar(i, `${sku}: las fechas del descuento no se entienden (usa AAAA-MM-DD, por ejemplo 2026-11-30)`);
-                if (desde && hasta && hasta < desde) return rechazar(i, `${sku}: la fecha de fin del descuento es anterior a la de inicio`);
+                if (desde === undefined || hasta === undefined) return rechazar(i, `${ref}: las fechas del descuento no se entienden (usa AAAA-MM-DD, por ejemplo 2026-11-30)`);
+                if (desde && hasta && hasta < desde) return rechazar(i, `${ref}: la fecha de fin del descuento es anterior a la de inicio`);
 
                 // Sin columna de canales se usan los marcados en pantalla o, si no hay, todos los conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
@@ -218,6 +223,14 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                     canales: indicados.length ? indicados : (marcados.length ? marcados : (conectados.length ? conectados : ['mercadolibre'])),
                 });
             });
+
+            // Las filas sin SKU reciben uno con el formato de la tienda (consecutivos, sin chocar con los escritos).
+            const sinSku = validas.filter((f) => !f.sku);
+            const skusGenerados: { fila: number; sku: string }[] = [];
+            if (sinSku.length) {
+                const nuevos = await this.skuGenerator.siguientes({ userId: req.user.id, storeId }, sinSku.length, new Set(vistos.keys()));
+                sinSku.forEach((f, k) => { f.sku = nuevos[k]; skusGenerados.push({ fila: f.i + 2, sku: nuevos[k] }); });
+            }
 
             // 2) Fotos de las filas que pasaron: se suben antes de encolar (puede tardar).
             const fotos = await Promise.allSettled(validas.map(f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus)));
@@ -267,6 +280,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 totalSkipped: rows.length - batchTotal,
                 zipImagesLoaded: zipEntries.size,
                 ...(rechazos.length && { rejectedDetails: rechazos }),
+                ...(skusGenerados.length && { skusGenerados }),
             };
         } catch (error) {
             if (error instanceof BadRequestException) throw error;

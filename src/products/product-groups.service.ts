@@ -6,6 +6,7 @@ import { ProductImage } from './entities/product-image.entity';
 import { EjeDeVariacion, ProductGroup } from './entities/product-group.entity';
 import { ProductsService } from './products.service';
 import { AiService } from '../ai/ai.service';
+import { SkuGeneratorService } from './sku-generator.service';
 import { DeteccionDeVariantes, ProductVisionService } from '../ai/product-vision.service';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
@@ -26,8 +27,8 @@ export interface VarianteEntrada {
 }
 
 export interface CrearGrupoEntrada {
-    /** Código del grupo (en Falabella es el ParentSku). */
-    parentSku: string;
+    /** Código del grupo (en Falabella es el ParentSku). Sin él, se genera con el formato de la tienda. */
+    parentSku?: string;
     /** Sin nombre, se usa el código mientras tanto y la IA lo reemplaza desde las fotos. */
     name?: string;
     description?: string;
@@ -79,6 +80,7 @@ export class ProductGroupsService {
         private readonly products: ProductsService,
         private readonly ai: AiService,
         private readonly vision: ProductVisionService,
+        private readonly skuGenerator: SkuGeneratorService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -86,8 +88,7 @@ export class ProductGroupsService {
     // ─────────────────────────────────────────────────────────────
 
     async crear(entrada: CrearGrupoEntrada, ambito: AmbitoDeGrupo): Promise<VistaDeGrupo> {
-        const parentSku = String(entrada?.parentSku ?? '').trim();
-        if (!parentSku) throw new BadRequestException('Falta el código del grupo.');
+        const parentSku = String(entrada?.parentSku ?? '').trim() || (await this.skuGenerator.siguientes({ userId: ambito.userId, storeId: ambito.storeId }))[0];
         const name = String(entrada?.name ?? '').trim() || parentSku;
 
         const ejes = normalizarEjes(entrada.axes);

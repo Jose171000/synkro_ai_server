@@ -3,9 +3,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateProductWithAiDto {
     @ApiProperty({ example: 'NK-001', description: 'SKU único del producto' })
+    /** Opcional: sin SKU, el sistema genera uno siguiendo el formato de la tienda. */
     @IsString()
-    @IsNotEmpty()
-    sku: string;
+    @IsOptional()
+    sku?: string;
 
     @ApiPropertyOptional({ example: 'Zapatillas Nike Air Max', description: 'Nombre del producto. Si se omite, la IA lo deduce de las fotos.' })
     @IsString()

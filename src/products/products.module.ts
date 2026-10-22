@@ -13,6 +13,7 @@ import { SyncModule } from '../sync/sync.module';
 import { StoresModule } from '../stores/stores.module';
 import { SkuUnicoService } from './sku-unico.service';
 import { ProductGroupsService } from './product-groups.service';
+import { SkuGeneratorService } from './sku-generator.service';
 import { ProductGroup } from './entities/product-group.entity';
 
 @Module({
@@ -25,7 +26,7 @@ import { ProductGroup } from './entities/product-group.entity';
     StoresModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, ProductGroupsService, SectionAccessGuard, SkuUnicoService],
-  exports: [ProductsService, ProductGroupsService],
+  providers: [ProductsService, ProductGroupsService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
+  exports: [ProductsService, ProductGroupsService, SkuGeneratorService],
 })
 export class ProductModule { }

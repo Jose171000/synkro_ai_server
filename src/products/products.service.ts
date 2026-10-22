@@ -8,6 +8,8 @@ import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { ExportQueryDto } from '../export/dto/export-query.dto';
 import { AiService } from 'src/ai/ai.service';
+import { SkuGeneratorService } from './sku-generator.service';
+import { ListingLink } from '../sync/entities/listing-link.entity';
 
 /**
  * Dónde debe ser único un SKU: dentro de una tienda. Un producto que todavía no tiene tienda (los de antes de las tiendas)
@@ -24,11 +26,14 @@ export class ProductsService {
         @InjectRepository(Product)
         private productRepository: Repository<Product>,
         private aiService: AiService,
+        private skuGenerator: SkuGeneratorService,
     ) { }
 
     async create(createProductDto: CreateProductDto, userId: string, storeId?: string | null) {
         const { images = [], ...productDetails } = createProductDto;
         productDetails.sku = (productDetails.sku ?? '').trim();
+        // Sin SKU escrito, se genera uno con el formato de la tienda.
+        if (!productDetails.sku) productDetails.sku = (await this.skuGenerator.siguientes({ userId, storeId }))[0];
 
         // Cada SKU es único dentro de la tienda: ni repetido ni con otra combinación de mayúsculas o espacios
         await this.assertSkuLibre(productDetails.sku, { userId, storeId });
@@ -205,6 +210,8 @@ export class ProductsService {
     async createWithAI(dto: CreateProductWithAiDto, userId: string, storeId?: string | null) {
         // Step 1: Check for duplicate SKU within the store BEFORE calling DeepSeek
         dto.sku = (dto.sku ?? '').trim();
+        // Sin SKU escrito, se genera uno con el formato de la tienda.
+        if (!dto.sku) dto.sku = (await this.skuGenerator.siguientes({ userId, storeId }))[0];
         await this.assertSkuLibre(dto.sku, { userId, storeId });
 
         const { tone, targetMarketplaces, images = [], ...productDetails } = dto;
@@ -301,15 +308,23 @@ export class ProductsService {
     }
 
     async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {
-        const product = await this.findOne(id, userId);
+        const product = await this.productRepository.findOne({ where: { id, owner: { id: userId } }, relations: { store: true } });
+        if (!product) throw new NotFoundException('Producto no encontrado');
 
         const { images, ...productDetails } = updateDto;
-        // El SKU identifica al producto en todos los canales: una vez creado no se cambia.
+        // El SKU se puede corregir mientras el producto no se haya publicado en ningún canal; después identifica la ficha
+        // en cada canal y ya no se cambia.
         if (productDetails.sku !== undefined) {
-            if (productDetails.sku.trim().toLowerCase() !== product.sku.trim().toLowerCase()) {
-                throw new BadRequestException('El SKU no se puede cambiar una vez creado. Si te equivocaste, elimina el producto y créalo de nuevo.');
+            const nuevo = productDetails.sku.trim();
+            if (nuevo && nuevo.toLowerCase() !== product.sku.trim().toLowerCase()) {
+                if (await this.tienePublicaciones(product.id)) {
+                    throw new BadRequestException('El SKU no se puede cambiar una vez publicado. Si te equivocaste, elimina el producto y créalo de nuevo.');
+                }
+                await this.assertSkuLibre(nuevo, { userId, storeId: product.store?.id ?? null }, product.id);
+                productDetails.sku = nuevo;
+            } else {
+                delete (productDetails as any).sku;
             }
-            delete (productDetails as any).sku;
         }
         Object.assign(product, productDetails);
 
@@ -318,6 +333,11 @@ export class ProductsService {
         }
 
         return this.productRepository.save(product);
+    }
+
+    /** ¿Ya se intentó publicar este producto en algún canal? Desde ahí su SKU no se cambia. */
+    private async tienePublicaciones(productId: string): Promise<boolean> {
+        return (await this.productRepository.manager.count(ListingLink, { where: { product: { id: productId } } })) > 0;
     }
 
     async save(product: Product) {

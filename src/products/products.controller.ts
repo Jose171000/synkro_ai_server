@@ -10,6 +10,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ProductGroupsService } from './product-groups.service';
+import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
@@ -27,6 +28,7 @@ export class ProductsController {
     private readonly uploadService: UploadService,
     private readonly syncService: SyncService,
     private readonly groups: ProductGroupsService,
+    private readonly skuGenerator: SkuGeneratorService,
   ) { }
 
   /**
@@ -97,6 +99,14 @@ export class ProductsController {
     dto.images = results.map(r => r.secureUrl);
 
     return this.productsService.create(dto, req.user.id, req.store?.storeId);
+  }
+
+  @Get('sku/next')
+  @UseGuards(StoreAccessGuard)
+  @ApiOperation({ summary: 'Los próximos SKU que se asignarían en la tienda activa', description: 'Sigue el formato del último bloque de productos publicados de la tienda; sin publicados, usa INICIALES-0001. Solo informa: no reserva el SKU.' })
+  async nextSku(@Req() req, @Query('count') count?: string) {
+    const n = Math.min(Math.max(parseInt(String(count ?? '1'), 10) || 1, 1), 50);
+    return { skus: await this.skuGenerator.siguientes({ userId: req.user.id, storeId: req.store.storeId }, n) };
   }
 
   @Post('groups')
