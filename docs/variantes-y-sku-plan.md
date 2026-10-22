@@ -91,3 +91,31 @@ Va después de definir las variantes y de subir todas las fotos juntas.
 - **Calibración:** antes de activarlo, probar con ~10 productos con variantes y ~10 sin ellas del usuario para medir falsos positivos/negativos y ajustar el umbral.
 
 Mockups aprobados en la conversación: recorrido paso a paso (valores personalizados con check, precio por uno o dos ejes), asignación de fotos con orden y lotes, y la tarjeta del detector.
+
+## 6. Actualización: orden del flujo, SKU automático, variantes por canal e importación
+
+### 6.1 Orden del flujo (decidido)
+1. El usuario sube fotos (y, si quiere, texto, precio y stock). Se identifican las variantes (detector de IA o el usuario).
+2. **Los SKU se generan solos en ese momento** (grupo y variantes), con el formato de la tienda.
+3. La IA llena todos los datos (una sola pasada para el grupo).
+4. **Recién entonces** se le indica al usuario que puede **revisar y editar todo lo que identificó la IA**: variantes (incluso agregar o quitar), SKU, fotos por variante (orden y lotes), precios (incluido por uno o dos ejes) y stock.
+5. Luego se publica.
+Esto desplaza al paso posterior a la IA lo que hoy se pide antes (fotos por variante, precio por ejes, stock): antes de crear solo se confirman ejes y valores; fotos, precio y stock arrancan con valores propuestos (fotos por el detector, precio y stock de los campos del formulario).
+
+### 6.2 SKU (implementado)
+- Opcional al crear (producto simple, grupo y filas del Excel masivo). Si falta se genera: formato dominante del último bloque (20) de productos publicados de la tienda, con el número siguiente al mayor usado y el mismo relleno de ceros; sin productos, `INICIALES-0001`. Variantes: código del grupo + valores (`KI-0013-ROJO-M`).
+- **Regla actualizada:** el SKU se puede corregir mientras el producto **no se haya intentado publicar** en ningún canal; desde el primer intento de publicación ya no cambia.
+- Endpoint informativo: `GET /products/sku/next`.
+- Pendiente: Excel descargable con los SKU asignados en la carga masiva (hoy la respuesta trae `skusGenerados`) y aviso de posibles duplicados en filas sin SKU.
+
+### 6.3 Publicar variantes por canal (por investigar y construir)
+- **Falabella:** solo se agrupan fichas (mismo `ParentSku`, `Variation` distinto) si la **categoría elegida coincide con el producto Y admite variantes**. Si no hay una categoría que cumpla ambas cosas, **cada variante se publica como producto independiente** (sin agrupar, nombre con su combinación). Lo más probable es que Falabella solo admita variación por talla y color: **hay que comprobarlo con los atributos reales de las categorías** (`GetCategoryAttributes`; ver qué marca una categoría como apta para variantes). Un grupo de Synkro con más ejes de los que admite el canal publica solo los que el canal admite y el resto se separa en fichas independientes.
+- **Mercado Libre:** una publicación con `variations`; los ejes deben ser atributos de la categoría marcados como aptos para variación (etiquetas `allow_variations`/`variation_attribute` de `GET /categories/{id}/attributes`). Una característica personalizada ("Personaje") solo sirve si la categoría la ofrece como atributo de variación; si no, publicaciones separadas o atributo del producto. **Por verificar contra la API real**, igual que si se pueden agregar variaciones a una publicación existente.
+- **Yavendio:** opciones y valores de nombre libre (confirmado en su documentación): admite cualquier eje.
+
+### 6.4 Importar con la estructura de variantes de cada canal
+Objetivo: al importar, Synkro crea el grupo con los mismos ejes y variantes que tiene el canal.
+- **Mercado Libre:** `variations[].attribute_combinations` da los ejes (nombre y valor) y cada variación su id, precio, stock y fotos (`picture_ids`); la importación actual ya crea un producto por variación y guarda `variationId`; falta reunirlos en un grupo con esos ejes.
+- **Yavendio:** producto → `options` (ejes y valores) → `variants` (con `option_values`) → media por variante: se importa tal cual.
+- **Falabella:** no hay estructura explícita: se agrupan las fichas con el mismo `ParentSku` y los ejes se deducen de los atributos que difieren entre las fichas hermanas (Color, Talla…); si no se pueden deducir, un eje "Variante" con el texto de `Variation`.
+- Cada vínculo conserva el id del canal (producto y variante) para sincronizar precio, stock y pedidos por variante.
