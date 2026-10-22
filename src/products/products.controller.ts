@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ProductGroupsService } from './product-groups.service';
-import { AddVariantsDto, CreateProductGroupDto, DetectVariantsDto } from './dto/product-group.dto';
+import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -113,10 +113,14 @@ export class ProductsController {
   @Post('variants/detect')
   @ApiOperation({
     summary: 'Filtro previo: ¿el producto parece tener variantes?',
-    description: 'Mira las fotos (incluido el texto que aparezca en ellas) y el texto del cliente. Solo recomienda variantes con evidencia concreta; sin ella devuelve recomendar = false.',
+    description: 'Recibe las fotos como archivos (campo images, hasta 8) y el texto del cliente (campo text). Mira las fotos, incluido el texto que aparezca en ellas. Solo recomienda variantes con evidencia concreta; sin ella devuelve recomendar = false. No guarda las fotos.',
   })
-  async detectVariants(@Body() dto: DetectVariantsDto) {
-    return { resultado: await this.groups.detectar(dto.imageUrls, dto.text) };
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(AnyFilesInterceptor())
+  async detectVariants(@UploadedFiles() files: Express.Multer.File[], @Body('text') text?: string) {
+    const imagenes = (files ?? []).filter((f) => f.fieldname === 'images' && /^image\//.test(f.mimetype)).slice(0, 8);
+    const urls = imagenes.map((f) => `data:${f.mimetype};base64,${f.buffer.toString('base64')}`);
+    return { resultado: await this.groups.detectar(urls, text) };
   }
 
   @Get('groups/:id')

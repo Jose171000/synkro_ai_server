@@ -174,7 +174,8 @@ export class ProductVisionService {
      * las fotos («disponible en azul y negro»). Nunca lanza: si falla devuelve null y la creación sigue como producto simple.
      */
     async detectarVariantes(imageUrls: string[], textoDelCliente?: string): Promise<DeteccionDeVariantes | null> {
-        const urls = (imageUrls ?? []).filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_FOTOS_DETECCION);
+        // Direcciones web o imágenes en base64 (el detector corre antes de subir las fotos a ningún lado).
+        const urls = (imageUrls ?? []).filter((u) => /^(https?:\/\/|data:image\/)/i.test(u)).slice(0, MAX_FOTOS_DETECCION);
         const texto = (textoDelCliente ?? '').trim().slice(0, 1500);
         if (!urls.length && !texto) return null;
         try {

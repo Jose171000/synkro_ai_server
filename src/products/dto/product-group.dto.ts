@@ -40,15 +40,6 @@ export class CreateProductGroupDto {
     variants: { values: Record<string, string>; sku?: string | null; price?: number | null; stock?: number | null; images?: string[] }[];
 }
 
-export class DetectVariantsDto {
-    @IsArray()
-    imageUrls: string[];
-
-    @IsOptional()
-    @IsString()
-    text?: string;
-}
-
 export class AddVariantsDto {
     @IsOptional()
     @IsArray()
