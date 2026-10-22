@@ -12,10 +12,12 @@ import { UploadModule } from '../upload/upload.module';
 import { SyncModule } from '../sync/sync.module';
 import { StoresModule } from '../stores/stores.module';
 import { SkuUnicoService } from './sku-unico.service';
+import { ProductGroupsService } from './product-groups.service';
+import { ProductGroup } from './entities/product-group.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Product, ProductImage, User]),
+    TypeOrmModule.forFeature([Product, ProductImage, ProductGroup, User]),
     AiModule,
     AuthModule,
     UploadModule,
@@ -23,7 +25,7 @@ import { SkuUnicoService } from './sku-unico.service';
     StoresModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, SectionAccessGuard, SkuUnicoService],
-  exports: [ProductsService],
+  providers: [ProductsService, ProductGroupsService, SectionAccessGuard, SkuUnicoService],
+  exports: [ProductsService, ProductGroupsService],
 })
 export class ProductModule { }

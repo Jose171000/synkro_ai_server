@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 import { User } from "src/users/entities/user.entity";
 import { Store } from "../../stores/entities/store.entity";
 import { ProductImage } from "./product-image.entity";
+import { ProductGroup } from "./product-group.entity";
 
 // Unicidad del SKU: índices únicos por tienda (sin distinguir mayúsculas ni espacios) creados por SkuUnicoService.
 @Entity('products')
@@ -107,6 +108,14 @@ export class Product {
     /** Tienda a la que pertenece el producto. Nulo en productos aún sin asignar. */
     @ManyToOne(() => Store, { onDelete: 'SET NULL', nullable: true })
     store: Store | null;
+
+    /** Grupo de variantes al que pertenece. Nulo en un producto simple. */
+    @ManyToOne(() => ProductGroup, (group) => group.variants, { onDelete: 'SET NULL', nullable: true })
+    group: ProductGroup | null;
+
+    /** Valores de esta variante en cada eje del grupo, ej. {Color:'Rojo', Talla:'M'}. */
+    @Column({ type: 'jsonb', nullable: true })
+    variantValues: Record<string, string> | null;
 
     @CreateDateColumn()
     createdAt: Date;

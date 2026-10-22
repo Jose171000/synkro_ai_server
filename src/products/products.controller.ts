@@ -9,6 +9,8 @@ import { GenerateAIContentDto } from './dto/generate-ai-content.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { ProductGroupsService } from './product-groups.service';
+import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -24,6 +26,7 @@ export class ProductsController {
     private readonly productsService: ProductsService,
     private readonly uploadService: UploadService,
     private readonly syncService: SyncService,
+    private readonly groups: ProductGroupsService,
   ) { }
 
   /**
@@ -94,6 +97,35 @@ export class ProductsController {
     dto.images = results.map(r => r.secureUrl);
 
     return this.productsService.create(dto, req.user.id, req.store?.storeId);
+  }
+
+  @Post('groups')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
+  @ApiOperation({
+    summary: 'Crear un producto con variantes',
+    description: 'Crea el grupo y todas sus variantes en un solo paso (cada variante es un producto con su SKU único en la tienda). Los SKU que no se escriban se generan a partir del código del grupo y los valores.',
+  })
+  createGroup(@Body() dto: CreateProductGroupDto, @Req() req) {
+    return this.groups.crear(dto, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Get('groups/:id')
+  @UseGuards(StoreAccessGuard)
+  @ApiOperation({ summary: 'Un producto con variantes y todas sus variantes' })
+  getGroup(@Param('id') id: string, @Req() req) {
+    return this.groups.obtener(id, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post(':id/variants')
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
+  @ApiOperation({
+    summary: 'Agregar variantes a un producto ya creado',
+    description: 'Si el producto es simple se convierte en grupo (conserva su SKU, stock, fotos y enlaces; pasa a ser la primera variante). Hay que indicar los ejes completos y qué variante es el producto actual (thisVariant). Si ya es un grupo, las variantes se suman a él.',
+  })
+  addVariants(@Param('id') id: string, @Body() dto: AddVariantsDto, @Req() req) {
+    return this.groups.agregarVariantes(id, dto, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post('with-ai')
