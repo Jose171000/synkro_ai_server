@@ -5,9 +5,10 @@ import { IsArray, IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString } from '
  * aquí solo se exige la forma general, para que el ValidationPipe global no rechace los objetos anidados.
  */
 export class CreateProductGroupDto {
+    /** Opcional: sin nombre, la IA lo arma desde las fotos. */
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
-    name: string;
+    name?: string;
 
     @IsString()
     @IsNotEmpty()

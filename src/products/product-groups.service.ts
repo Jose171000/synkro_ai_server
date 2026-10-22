@@ -28,7 +28,8 @@ export interface VarianteEntrada {
 export interface CrearGrupoEntrada {
     /** Código del grupo (en Falabella es el ParentSku). */
     parentSku: string;
-    name: string;
+    /** Sin nombre, se usa el código mientras tanto y la IA lo reemplaza desde las fotos. */
+    name?: string;
     description?: string;
     category?: string;
     subCategory?: string;
@@ -85,10 +86,9 @@ export class ProductGroupsService {
     // ─────────────────────────────────────────────────────────────
 
     async crear(entrada: CrearGrupoEntrada, ambito: AmbitoDeGrupo): Promise<VistaDeGrupo> {
-        const name = String(entrada?.name ?? '').trim();
         const parentSku = String(entrada?.parentSku ?? '').trim();
-        if (!name) throw new BadRequestException('El producto necesita un nombre.');
         if (!parentSku) throw new BadRequestException('Falta el código del grupo.');
+        const name = String(entrada?.name ?? '').trim() || parentSku;
 
         const ejes = normalizarEjes(entrada.axes);
         const variantes = this.variantesValidas(entrada.variants, ejes);
@@ -108,7 +108,7 @@ export class ProductGroupsService {
             return grupo.id;
         });
         const vista = await this.obtener(grupoId, ambito);
-        if (entrada.generateWithAi) vista.ia = await this.generarContenido(grupoId, entrada, ambito, vista);
+        if (entrada.generateWithAi) vista.ia = await this.generarContenido(grupoId, { ...entrada, name }, ambito, vista, { sinNombre: !String(entrada?.name ?? '').trim(), sinDescripcion: !String(entrada?.description ?? '').trim() });
         return vista.ia ? { ...(await this.obtener(grupoId, ambito)), ia: vista.ia } : vista;
     }
 
@@ -122,7 +122,13 @@ export class ProductGroupsService {
      * todas las variantes: cada una conserva su título con su combinación y recibe sus valores como atributos (Color, Talla…).
      * Si la IA falla, las variantes quedan creadas igual y se avisa.
      */
-    private async generarContenido(grupoId: string, entrada: CrearGrupoEntrada, ambito: AmbitoDeGrupo, vista: VistaDeGrupo): Promise<{ ok: boolean; motivo?: string }> {
+    private async generarContenido(
+        grupoId: string,
+        entrada: CrearGrupoEntrada,
+        ambito: AmbitoDeGrupo,
+        vista: VistaDeGrupo,
+        faltaba: { sinNombre: boolean; sinDescripcion: boolean },
+    ): Promise<{ ok: boolean; motivo?: string }> {
         try {
             const variantes = await this.productRepository.find({ where: { group: { id: grupoId } }, order: { createdAt: 'ASC' } });
             // Una foto de cada variante primero (así la IA ve todos los colores), y luego las demás.
@@ -131,7 +137,8 @@ export class ProductGroupsService {
             const urls = [...new Set([...primeras, ...resto])].slice(0, 4);
 
             const contenido = await this.ai.generateProductContent({
-                name: entrada.name,
+                // Sin nombre escrito la IA parte de las fotos, no del código usado mientras tanto.
+                name: faltaba.sinNombre ? '' : String(entrada.name ?? ''),
                 description: entrada.description ?? '',
                 category: entrada.category,
                 subcategory: entrada.subCategory,
@@ -142,8 +149,15 @@ export class ProductGroupsService {
 
             const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
             this.products.applyAiContent(molde, contenido);
+
+            // Sin nombre escrito, el del grupo y el de cada variante pasan a ser el que armó la IA.
+            const nombreDeLaIa = faltaba.sinNombre ? String(molde.aiTitle || (contenido as any)?.vision?.suggestedName || '').trim().slice(0, 150) : '';
+            if (nombreDeLaIa) await this.groupRepository.update(grupoId, { name: nombreDeLaIa } as any);
+
             for (const variante of variantes) {
                 const etiqueta = etiquetaDe(variante.variantValues ?? {}, vista.axes);
+                if (nombreDeLaIa) variante.name = `${nombreDeLaIa} - ${etiqueta}`.slice(0, 250);
+                if (faltaba.sinDescripcion && molde.aiDescription) variante.description = molde.aiDescription;
                 variante.aiTitle = this.tituloDeVariante(molde.aiTitle, etiqueta) as any;
                 variante.aiDescription = molde.aiDescription;
                 variante.aiKeywords = molde.aiKeywords;

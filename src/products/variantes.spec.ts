@@ -79,7 +79,7 @@ function construir(opciones: { productos?: any[]; ocupados?: string[]; falla2350
         findOne: jest.fn(async ({ where }: any) => productos.find((p) => p.id === where.id) ?? null),
         find: jest.fn(async ({ where }: any) => productos.filter((p) => p.group?.id === where.group.id)),
     };
-    const groupRepo: any = { findOne: jest.fn(async ({ where }: any) => grupos.find((g) => g.id === where.id) ?? null) };
+    const groupRepo: any = { findOne: jest.fn(async ({ where }: any) => grupos.find((g) => g.id === where.id) ?? null), update: jest.fn(async (id: string, datos: any) => { Object.assign(grupos.find((g) => g.id === id) ?? {}, datos); }) };
     const dataSource: any = { transaction: async (fn: any) => fn(manager) };
     const ocupados = new Set((opciones.ocupados ?? []).map((s) => s.toLowerCase()));
     const products: any = {
@@ -95,7 +95,7 @@ function construir(opciones: { productos?: any[]; ocupados?: string[]; falla2350
         molde.packageWidth = 30;
     });
     const vision: any = { detectarVariantes: jest.fn() };
-    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService, ai, vision), manager, guardados, productos, grupos, ai, productRepo, vision };
+    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService, ai, vision), manager, guardados, productos, grupos, ai, productRepo, vision, groupRepo };
 }
 
 const ambito = { userId: 'u1', storeId: 't1' };
@@ -213,6 +213,17 @@ describe('generar con IA el contenido de un grupo', () => {
         expect(v.aiTitle.length).toBeLessThanOrEqual(60);
         expect(v).toMatchObject({ aiDescription: 'Descripción de la IA', marketplaceIds: { falabella_category_id: '123' }, packageWidth: 30, status: 'synced' });
         expect(v.aiAttributes).toMatchObject({ brand: 'GENERICO', Color: 'Rojo', Talla: 'M' });
+    });
+
+    it('sin nombre ni descripción escritos, el nombre del grupo y de las variantes lo pone la IA', async () => {
+        const { service, productos, grupos, productRepo } = construir();
+        productRepo.find.mockImplementation(async () => productos.filter((p) => p.variantValues));
+        const e: any = { ...conIa(), name: undefined, description: undefined };
+        await service.crear(e, ambito);
+        expect(grupos[0].name).toBe('Polera de algodón estampada con diseño de personajes');
+        const v = productos.find((p) => p.sku === 'MK-1-ROJO-M');
+        expect(v.name).toBe('Polera de algodón estampada con diseño de personajes - Rojo · M');
+        expect(v.description).toBe('Descripción de la IA');
     });
 
     it('si la IA falla, las variantes quedan creadas y se avisa', async () => {
