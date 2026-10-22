@@ -57,3 +57,37 @@ Después: "Agregar variante" en la Ficha del grupo (misma lógica). Excel masivo
 3. Cantidad típica de variantes por grupo (si pasan de 20–30, replantear tabla y Excel).
 4. Mercado Libre: eje no permitido → ¿publicaciones separadas o atributo?
 5. SKU: confirmar alcance de unicidad por tienda, tamaño del "último bloque" (20) y qué hacer con posibles duplicados sin SKU en cargas masivas.
+
+## 5. Actualización (2026-10-21): detalle de la creación con variantes
+
+### 5.1 Valores personalizados
+Cada campo "Otro…" (eje nuevo o valor nuevo dentro de un eje) lleva un círculo con check al lado: apagado (gris) mientras el campo está vacío; en cuanto hay texto se pone verde y al tocarlo agrega el valor. Enter sigue funcionando.
+
+### 5.2 Precio que depende de uno o dos ejes
+En el paso del precio las opciones de ejes son casillas combinables ("Varía según color", "Varía según talla").
+- Ninguna: todas usan el precio de arriba.
+- Un eje: una casilla de precio por valor.
+- **Dos ejes: cuadrícula** con un precio por cada combinación (filas = un eje, columnas = el otro), con el precio base como valor inicial en todas las celdas. No se suma "base + extra por color + extra por talla": los precios no suelen ser aditivos.
+- Tres ejes o más: el precio de cada variante se escribe en la tabla final.
+
+### 5.3 Fotos por variante (paso nuevo, solo si hay variantes)
+Va después de definir las variantes y de subir todas las fotos juntas.
+1. Se marcan una, varias o todas las variantes (casillas, con atajos: "Todas", "Todas las rojas", "Talla M"…). Lo que se toque se aplica a las marcadas.
+2. Se tocan las fotos **en el orden en que se quieren mostrar**: cada una muestra su número al instante; la primera es la **Principal**. Una foto que solo tienen algunas de las marcadas muestra "~"; cada foto indica en cuántas variantes se usa.
+3. **Una sola foto para todas** = atajo "Todas" y tocar la foto. Por lotes = marcar un grupo (por color, por talla o a mano).
+4. **Regla acordada (opción A):** si todas las marcadas ya tienen la foto, tocarla la quita de todas; si no, se agrega al final de las que no la tienen.
+5. Máximo 8 fotos por variante (tope de Falabella). "Quitar las fotos de las marcadas" limpia solo esas variantes.
+6. **"Asignar con IA"**: propone por color y deja las fotos neutras (tabla de tallas) como comunes a todas; siempre es una propuesta que el usuario revisa.
+7. Resumen final por variante: orden de sus fotos y principal; las variantes sin fotos se marcan antes de generar.
+8. Carga masiva: en el ZIP, una carpeta por color dentro de la del producto (`MK-1/rojo/1.jpg`) hace la asignación sola.
+
+### 5.4 Detector de variantes (filtro previo con IA)
+- **Cuándo:** al pulsar "Generar con IA", antes de crear como producto individual.
+- **Qué mira:** fotos (el mismo producto en varios colores/versiones, muestras de color, tablas de tallas), texto ("disponible en tallas…", "en colores…", medidas alternativas) y, en masivo, nombres de archivo.
+- **Qué entrega:** si parece tener variantes, con evidencia concreta (qué fotos, qué frase) y una propuesta lista (ejes, valores, fotos por color). Botones: "Sí, crear con variantes" (entra al recorrido rellenado) o "No, es un solo producto" (no vuelve a preguntar por ese producto).
+- **Sin señales concretas no pregunta nada.** Debe distinguir "mismo producto en varios colores" de un producto con varios colores en su diseño y de un set de piezas distintas; la decisión es del usuario. Se puede apagar por tienda.
+- **Costo:** no es una consulta aparte: se extiende la lectura de fotos de `ProductVisionService.analyze` (esquema con `variantes`: ejes, valores, evidencia, etiqueta de color por foto) y su resultado se pasa a `generateProductContent` para no repetirla.
+- **Carga masiva:** no frena el lote; las filas con posibles variantes se crean como productos individuales y quedan marcadas en el resultado ("posibles variantes: rojo y azul, sugiero agruparlas con `sku_padre`").
+- **Calibración:** antes de activarlo, probar con ~10 productos con variantes y ~10 sin ellas del usuario para medir falsos positivos/negativos y ajustar el umbral.
+
+Mockups aprobados en la conversación: recorrido paso a paso (valores personalizados con check, precio por uno o dos ejes), asignación de fotos con orden y lotes, y la tarjeta del detector.
