@@ -18,6 +18,6 @@ import { Product } from '../products/entities/product.entity';
   imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, Product])],
   controllers: [AiController, FalabellaPrepController],
   providers: [AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService, ProductLaunchService],
-  exports: [AiService, FalabellaAutoPrepService, ProductLaunchService],
+  exports: [AiService, ProductVisionService, FalabellaAutoPrepService, ProductLaunchService],
 })
 export class AiModule { }

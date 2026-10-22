@@ -5,6 +5,8 @@ import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { EjeDeVariacion, ProductGroup } from './entities/product-group.entity';
 import { ProductsService } from './products.service';
+import { AiService } from '../ai/ai.service';
+import { DeteccionDeVariantes, ProductVisionService } from '../ai/product-vision.service';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
 } from './variantes';
@@ -31,6 +33,8 @@ export interface CrearGrupoEntrada {
     category?: string;
     subCategory?: string;
     targetMarketplaces?: string[];
+    /** Genera con IA, una sola vez para todo el grupo, los datos que el cliente no escribió. */
+    generateWithAi?: boolean;
     axes: { name: string; values: string[] }[];
     variants: VarianteEntrada[];
 }
@@ -44,6 +48,8 @@ export interface AgregarVariantesEntrada {
 }
 
 export interface VistaDeGrupo {
+    /** Resultado de la generación con IA, si se pidió. Un fallo no impide que el grupo quede creado. */
+    ia?: { ok: boolean; motivo?: string };
     id: string;
     name: string;
     parentSku: string;
@@ -70,6 +76,8 @@ export class ProductGroupsService {
         @InjectRepository(ProductGroup) private readonly groupRepository: Repository<ProductGroup>,
         private readonly dataSource: DataSource,
         private readonly products: ProductsService,
+        private readonly ai: AiService,
+        private readonly vision: ProductVisionService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -99,7 +107,67 @@ export class ProductGroupsService {
             }
             return grupo.id;
         });
-        return this.obtener(grupoId, ambito);
+        const vista = await this.obtener(grupoId, ambito);
+        if (entrada.generateWithAi) vista.ia = await this.generarContenido(grupoId, entrada, ambito, vista);
+        return vista.ia ? { ...(await this.obtener(grupoId, ambito)), ia: vista.ia } : vista;
+    }
+
+    /** Filtro previo: ¿las fotos y el texto indican que el producto tiene variantes? Devuelve null si no se pudo comprobar. */
+    async detectar(imageUrls: string[], texto?: string): Promise<DeteccionDeVariantes | null> {
+        return this.vision.detectarVariantes(imageUrls ?? [], texto);
+    }
+
+    /**
+     * Genera una sola vez, con IA, el contenido del grupo (categoría, descripción, atributos, medidas) y lo reparte entre
+     * todas las variantes: cada una conserva su título con su combinación y recibe sus valores como atributos (Color, Talla…).
+     * Si la IA falla, las variantes quedan creadas igual y se avisa.
+     */
+    private async generarContenido(grupoId: string, entrada: CrearGrupoEntrada, ambito: AmbitoDeGrupo, vista: VistaDeGrupo): Promise<{ ok: boolean; motivo?: string }> {
+        try {
+            const variantes = await this.productRepository.find({ where: { group: { id: grupoId } }, order: { createdAt: 'ASC' } });
+            // Una foto de cada variante primero (así la IA ve todos los colores), y luego las demás.
+            const primeras = variantes.map((v) => v.images?.[0]?.url).filter(Boolean) as string[];
+            const resto = variantes.flatMap((v) => (v.images ?? []).slice(1).map((i) => i.url));
+            const urls = [...new Set([...primeras, ...resto])].slice(0, 4);
+
+            const contenido = await this.ai.generateProductContent({
+                name: entrada.name,
+                description: entrada.description ?? '',
+                category: entrada.category,
+                subcategory: entrada.subCategory,
+                targetMarketplaces: entrada.targetMarketplaces?.length ? entrada.targetMarketplaces : ['mercadolibre', 'falabella'],
+                imageUrls: urls,
+                userId: ambito.userId,
+            });
+
+            const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
+            this.products.applyAiContent(molde, contenido);
+            for (const variante of variantes) {
+                const etiqueta = etiquetaDe(variante.variantValues ?? {}, vista.axes);
+                variante.aiTitle = this.tituloDeVariante(molde.aiTitle, etiqueta) as any;
+                variante.aiDescription = molde.aiDescription;
+                variante.aiKeywords = molde.aiKeywords;
+                variante.marketplaceIds = { ...(molde.marketplaceIds ?? {}) };
+                // Cada variante lleva sus propios valores como atributos (Color: Rojo, Talla: M) y lo común del grupo.
+                variante.aiAttributes = { ...(molde.aiAttributes ?? {}), ...(variante.variantValues ?? {}) };
+                if (molde.packageWidth != null) {
+                    variante.packageWidth = molde.packageWidth; variante.packageLength = molde.packageLength;
+                    variante.packageHeight = molde.packageHeight; variante.packageWeight = molde.packageWeight;
+                }
+                variante.status = 'synced';
+                await this.productRepository.save(variante);
+            }
+            return { ok: true };
+        } catch (error: any) {
+            return { ok: false, motivo: String(error?.response?.message ?? error?.message ?? 'La IA no pudo generar el contenido') };
+        }
+    }
+
+    /** Título de la variante: el del grupo más su combinación, sin pasar de 60 caracteres (el límite más estricto de los canales). */
+    private tituloDeVariante(base: string | undefined, etiqueta: string): string | undefined {
+        if (!base) return undefined;
+        const sufijo = ` - ${etiqueta}`;
+        return `${base.slice(0, Math.max(10, 60 - sufijo.length)).trim()}${sufijo}`.slice(0, 60);
     }
 
     // ─────────────────────────────────────────────────────────────

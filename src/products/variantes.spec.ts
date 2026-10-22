@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { asignarSkus, claveDeCombinacion, combinaciones, etiquetaDe, normalizarEjes, valoresDeVariante } from './variantes';
 import { ProductGroupsService } from './product-groups.service';
 import { ProductsService } from './products.service';
+import { normalizarDeteccion } from '../ai/product-vision.service';
 
 describe('ejes y combinaciones de variantes', () => {
     it('limpia los ejes: sin repetidos (ni por mayúsculas o tildes), sin vacíos', () => {
@@ -57,7 +58,7 @@ describe('SKU de las variantes', () => {
 });
 
 /** Base de datos en memoria: solo lo que usa ProductGroupsService. */
-function construir(opciones: { productos?: any[]; ocupados?: string[]; falla23505?: boolean } = {}) {
+function construir(opciones: { productos?: any[]; ocupados?: string[]; falla23505?: boolean; ia?: any } = {}) {
     const guardados: any[] = [];
     const productos: any[] = opciones.productos ?? [];
     const grupos: any[] = [];
@@ -84,7 +85,17 @@ function construir(opciones: { productos?: any[]; ocupados?: string[]; falla2350
     const products: any = {
         skusExistentes: jest.fn(async (_a: any, skus: string[]) => new Set(skus.map((s) => s.toLowerCase()).filter((s) => ocupados.has(s)))),
     };
-    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService), manager, guardados, productos, grupos };
+    productRepo.save = jest.fn(async (p: any) => p);
+    const ai: any = opciones.ia ?? { generateProductContent: jest.fn(async () => ({})) };
+    products.applyAiContent = jest.fn((molde: any) => {
+        molde.aiTitle = 'Polera de algodón estampada con diseño de personajes';
+        molde.aiDescription = 'Descripción de la IA';
+        molde.aiAttributes = { brand: 'GENERICO' };
+        molde.marketplaceIds = { falabella_category_id: '123' };
+        molde.packageWidth = 30;
+    });
+    const vision: any = { detectarVariantes: jest.fn() };
+    return { service: new ProductGroupsService(productRepo, groupRepo, dataSource, products as ProductsService, ai, vision), manager, guardados, productos, grupos, ai, productRepo, vision };
 }
 
 const ambito = { userId: 'u1', storeId: 't1' };
@@ -183,5 +194,66 @@ describe('agregar variantes a un producto que ya existe', () => {
         const { service } = construir({ productos: [ajeno] });
         await expect(service.agregarVariantes('p0', { axes: [{ name: 'Color', values: ['A', 'B'] }], thisVariant: { Color: 'A' }, variants: [{ values: { Color: 'B' } }] }, ambito))
             .rejects.toThrow(/no encontrado/);
+    });
+});
+
+describe('generar con IA el contenido de un grupo', () => {
+    const conIa = () => ({ ...entrada(), generateWithAi: true, targetMarketplaces: ['falabella'] });
+
+    it('genera una sola vez y reparte el contenido entre las variantes, cada una con su título y sus valores', async () => {
+        const { service, ai, productRepo, productos } = construir();
+        // el simulador devuelve las variantes creadas cuando se las pide por grupo
+        productRepo.find.mockImplementation(async () => productos.filter((p) => p.variantValues));
+        const g = await service.crear(conIa(), ambito);
+        expect(ai.generateProductContent).toHaveBeenCalledTimes(1);
+        expect(ai.generateProductContent.mock.calls[0][0]).toMatchObject({ imageUrls: ['https://i/1.jpg'], targetMarketplaces: ['falabella'], userId: 'u1' });
+        expect(g.ia).toEqual({ ok: true });
+        const v = productos.find((p) => p.sku === 'MK-1-ROJO-M');
+        expect(v.aiTitle.endsWith(' - Rojo · M')).toBe(true);
+        expect(v.aiTitle.length).toBeLessThanOrEqual(60);
+        expect(v).toMatchObject({ aiDescription: 'Descripción de la IA', marketplaceIds: { falabella_category_id: '123' }, packageWidth: 30, status: 'synced' });
+        expect(v.aiAttributes).toMatchObject({ brand: 'GENERICO', Color: 'Rojo', Talla: 'M' });
+    });
+
+    it('si la IA falla, las variantes quedan creadas y se avisa', async () => {
+        const ia: any = { generateProductContent: jest.fn(async () => { throw new Error('IA caída'); }) };
+        const { service, productos, productRepo } = construir({ ia });
+        productRepo.find.mockImplementation(async () => productos.filter((p) => p.variantValues));
+        const g = await service.crear(conIa(), ambito);
+        expect(g.ia).toEqual({ ok: false, motivo: 'IA caída' });
+        expect(productos.filter((p) => p.variantValues)).toHaveLength(2);
+    });
+});
+
+describe('detector de variantes', () => {
+    it('una sola foto que dice «disponible en azul y negro» recomienda variantes de color, sin foto por color', () => {
+        const r = normalizarDeteccion({
+            nivel: 'alta',
+            ejes: [{ nombre: 'Color', valores: ['Azul', 'Negro'], evidencia: 'La foto 1 dice «disponible en azul y negro»' }],
+            fotos: [{ foto: 1, valores: null }],
+            resumen: 'Disponible en dos colores',
+        }, 1);
+        expect(r.recomendar).toBe(true);
+        expect(r.ejes).toEqual([{ name: 'Color', values: ['Azul', 'Negro'], evidence: 'La foto 1 dice «disponible en azul y negro»' }]);
+        expect(r.fotos).toEqual([{ indice: 1, valores: null }]);
+    });
+
+    it('no recomienda si no hay evidencia: nivel bajo, o un eje con un solo valor', () => {
+        expect(normalizarDeteccion({ nivel: 'baja', ejes: [{ nombre: 'Color', valores: ['Rojo', 'Azul'] }] }).recomendar).toBe(false);
+        const unico = normalizarDeteccion({ nivel: 'alta', ejes: [{ nombre: 'Color', valores: ['Rojo'] }] });
+        expect(unico.recomendar).toBe(false);
+        expect(unico.nivel).toBe('baja');
+        expect(unico.ejes).toEqual([]);
+        expect(normalizarDeteccion(null).recomendar).toBe(false);
+    });
+
+    it('asigna fotos a valores solo si el valor existe en el eje, y limpia repetidos y excesos', () => {
+        const r = normalizarDeteccion({
+            nivel: 'media',
+            ejes: [{ nombre: 'Color', valores: ['Rojo', 'rojo', 'Azul'] }, { nombre: 'Talla', valores: ['M', 'L'] }, { nombre: 'Color', valores: ['X'] }],
+            fotos: [{ foto: 1, valores: { color: 'rojo' } }, { foto: 2, valores: { Color: 'Verde' } }, { foto: 9, valores: { Color: 'Azul' } }],
+        }, 3);
+        expect(r.ejes.map((e) => e.values)).toEqual([['Rojo', 'Azul'], ['M', 'L']]);
+        expect(r.fotos).toEqual([{ indice: 1, valores: { Color: 'Rojo' } }, { indice: 2, valores: null }]);
     });
 });

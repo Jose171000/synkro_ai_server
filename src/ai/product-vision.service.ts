@@ -76,6 +76,85 @@ export function normalizarVision(crudo: any): ProductVision | null {
     };
 }
 
+
+/** Lo que la IA concluye sobre si el producto se vende en varias versiones (colores, tallas, modelos…). */
+export interface DeteccionDeVariantes {
+    nivel: 'alta' | 'media' | 'baja' | 'ninguna';
+    /** Solo se recomienda con evidencia concreta: nivel alto o medio y algún eje con al menos dos valores. */
+    recomendar: boolean;
+    ejes: { name: string; values: string[]; evidence: string }[];
+    /** Qué valor de cada eje muestra cada foto (índice desde 1), o null si la foto no es de un valor concreto. */
+    fotos: { indice: number; valores: Record<string, string> | null }[];
+    resumen: string;
+}
+
+const MAX_FOTOS_DETECCION = 8;
+
+const SISTEMA_DETECTOR = `Eres un revisor de catálogo para marketplaces. Decides si un producto se vende en VARIAS versiones
+(colores, tallas, modelos, personajes, medidas…) mirando todas las fotos, leyendo cualquier texto que aparezca en ellas
+(carteles, etiquetas, muestras de color, tablas de tallas) y el texto del cliente.
+Reglas estrictas:
+- Solo cuenta lo que se ve o se lee. Cita la evidencia concreta (qué foto, qué frase).
+- Un solo artículo con varios colores en su diseño (rayas, estampado) NO son variantes.
+- Un conjunto de piezas distintas que se venden juntas NO son variantes.
+- Las tallas o medidas solo cuentan si un texto las ofrece como opciones.
+- Si hay dudas, baja el nivel: es preferible no sugerir a sugerir sin base.
+- Responde únicamente con un JSON válido, en español.`;
+
+const FORMATO_DETECTOR = `Devuelve exactamente este JSON:
+{
+  "nivel": "alta" | "media" | "baja" | "ninguna",
+  "ejes": [ { "nombre": "Color", "valores": ["Azul", "Negro"], "evidencia": "El texto de la foto 1 dice «disponible en azul y negro»" } ],
+  "fotos": [ { "foto": 1, "valores": { "Color": "Azul" } } ],
+  "resumen": "una frase"
+}
+En "fotos" pon el valor que muestra cada foto o null si la foto no corresponde a un valor concreto. Máximo 3 ejes y 12 valores por eje.`;
+
+/** Convierte lo que devuelva el modelo en algo seguro de usar. */
+export function normalizarDeteccion(crudo: any, totalFotos = MAX_FOTOS_DETECCION): DeteccionDeVariantes {
+    const vacio: DeteccionDeVariantes = { nivel: 'ninguna', recomendar: false, ejes: [], fotos: [], resumen: '' };
+    if (!crudo || typeof crudo !== 'object') return vacio;
+    const texto = (v: any): string => (typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '');
+
+    const ejes: DeteccionDeVariantes['ejes'] = [];
+    const nombres = new Set<string>();
+    for (const e of Array.isArray(crudo.ejes) ? crudo.ejes : []) {
+        const name = texto(e?.nombre).slice(0, 50);
+        if (!name || nombres.has(name.toLowerCase()) || ejes.length >= 3) continue;
+        nombres.add(name.toLowerCase());
+        const vistos = new Set<string>();
+        const values: string[] = [];
+        for (const v of Array.isArray(e?.valores) ? e.valores : []) {
+            const valor = texto(v).slice(0, 60);
+            if (valor && !vistos.has(valor.toLowerCase()) && values.length < 12) { vistos.add(valor.toLowerCase()); values.push(valor); }
+        }
+        if (values.length) ejes.push({ name, values, evidence: texto(e?.evidencia).slice(0, 300) });
+    }
+
+    const fotos: DeteccionDeVariantes['fotos'] = [];
+    for (const f of Array.isArray(crudo.fotos) ? crudo.fotos : []) {
+        const indice = Number(f?.foto);
+        if (!Number.isInteger(indice) || indice < 1 || indice > totalFotos) continue;
+        let valores: Record<string, string> | null = null;
+        if (f?.valores && typeof f.valores === 'object') {
+            const limpios: Record<string, string> = {};
+            for (const [eje, valor] of Object.entries(f.valores)) {
+                const dueno = ejes.find((x) => x.name.toLowerCase() === String(eje).trim().toLowerCase());
+                const v = texto(valor);
+                const oficial = dueno?.values.find((x) => x.toLowerCase() === v.toLowerCase());
+                if (dueno && oficial) limpios[dueno.name] = oficial;
+            }
+            if (Object.keys(limpios).length) valores = limpios;
+        }
+        fotos.push({ indice, valores });
+    }
+
+    let nivel: DeteccionDeVariantes['nivel'] = ['alta', 'media', 'baja', 'ninguna'].includes(crudo.nivel) ? crudo.nivel : 'ninguna';
+    const recomendar = (nivel === 'alta' || nivel === 'media') && ejes.some((e) => e.values.length >= 2);
+    if (!recomendar && (nivel === 'alta' || nivel === 'media')) nivel = 'baja';
+    return { nivel, recomendar, ejes: recomendar ? ejes : [], fotos: recomendar ? fotos : [], resumen: texto(crudo.resumen).slice(0, 300) };
+}
+
 /**
  * Mira las fotos del producto y extrae lo que el cliente no escribió.
  * Nunca lanza: si falla, el flujo sigue con lo que el cliente haya escrito.
@@ -88,6 +167,37 @@ export class ProductVisionService {
     private get openai(): OpenAI {
         if (!this.client) this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
         return this.client;
+    }
+
+    /**
+     * Filtro previo a crear un producto: ¿parece venderse en varias versiones? Lee también el texto que aparezca dentro de
+     * las fotos («disponible en azul y negro»). Nunca lanza: si falla devuelve null y la creación sigue como producto simple.
+     */
+    async detectarVariantes(imageUrls: string[], textoDelCliente?: string): Promise<DeteccionDeVariantes | null> {
+        const urls = (imageUrls ?? []).filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_FOTOS_DETECCION);
+        const texto = (textoDelCliente ?? '').trim().slice(0, 1500);
+        if (!urls.length && !texto) return null;
+        try {
+            const respuesta = await this.openai.chat.completions.create({
+                model: process.env.VISION_MODEL || 'gpt-4o-mini',
+                response_format: { type: 'json_object' },
+                temperature: 0,
+                messages: [
+                    { role: 'system', content: SISTEMA_DETECTOR },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: `${texto ? `Texto del cliente: ${texto}\n\n` : ''}Hay ${urls.length} foto(s), numeradas en el orden en que llegan.\n${FORMATO_DETECTOR}` },
+                            ...urls.map((url) => ({ type: 'image_url' as const, image_url: { url, detail: 'high' as const } })),
+                        ],
+                    },
+                ],
+            });
+            return normalizarDeteccion(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), urls.length);
+        } catch (error: any) {
+            this.logger.warn(`No se pudo comprobar si el producto tiene variantes: ${error?.message}`);
+            return null;
+        }
     }
 
     async analyze(imageUrls: string[], hint?: { name?: string; description?: string }): Promise<ProductVision | null> {

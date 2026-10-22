@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ProductGroupsService } from './product-groups.service';
-import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
+import { AddVariantsDto, CreateProductGroupDto, DetectVariantsDto } from './dto/product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -108,6 +108,15 @@ export class ProductsController {
   })
   createGroup(@Body() dto: CreateProductGroupDto, @Req() req) {
     return this.groups.crear(dto, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('variants/detect')
+  @ApiOperation({
+    summary: 'Filtro previo: ¿el producto parece tener variantes?',
+    description: 'Mira las fotos (incluido el texto que aparezca en ellas) y el texto del cliente. Solo recomienda variantes con evidencia concreta; sin ella devuelve recomendar = false.',
+  })
+  async detectVariants(@Body() dto: DetectVariantsDto) {
+    return { resultado: await this.groups.detectar(dto.imageUrls, dto.text) };
   }
 
   @Get('groups/:id')

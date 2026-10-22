@@ -1,4 +1,4 @@
-import { IsArray, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 /**
  * Los ejes y las variantes se validan a fondo en ProductGroupsService (valores, combinaciones repetidas, SKU, límites):
@@ -29,11 +29,24 @@ export class CreateProductGroupDto {
     @IsArray()
     targetMarketplaces?: string[];
 
+    @IsOptional()
+    @IsBoolean()
+    generateWithAi?: boolean;
+
     @IsArray()
     axes: { name: string; values: string[] }[];
 
     @IsArray()
     variants: { values: Record<string, string>; sku?: string | null; price?: number | null; stock?: number | null; images?: string[] }[];
+}
+
+export class DetectVariantsDto {
+    @IsArray()
+    imageUrls: string[];
+
+    @IsOptional()
+    @IsString()
+    text?: string;
 }
 
 export class AddVariantsDto {
