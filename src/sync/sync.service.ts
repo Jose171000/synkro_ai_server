@@ -3278,6 +3278,22 @@ export class SyncService implements OnModuleInit {
                 familiasConVarias: [...familias.entries()].filter(([, f]) => f.n >= 2).length,
                 muestraDeFamilias: [...familias.entries()].filter(([, f]) => f.n >= 2).slice(0, 5).map(([id, f]) => ({ id, ...f })),
                 muestraDeCampos: (items as any[]).slice(0, 1).map((it) => Object.keys(it ?? {}).filter((k) => /family|user_product|catalog|parent|domain|tags/i.test(k))),
+                // Publicaciones con variaciones propias: cuántas tienen, cuántas con SKU y con atributos que las distingan.
+                conVariaciones: (items as any[]).filter((it) => Array.isArray(it?.variations) && it.variations.length).slice(0, 12).map((it) => ({
+                    id: it.id, titulo: String(it.title ?? '').slice(0, 60), variaciones: it.variations.length,
+                    conSku: it.variations.filter((v: any) => v?.seller_custom_field || (v?.attributes ?? []).some((a: any) => a?.id === 'SELLER_SKU')).length,
+                    conCombinaciones: it.variations.filter((v: any) => Array.isArray(v?.attribute_combinations) && v.attribute_combinations.length).length,
+                    muestra: it.variations[0] ? { sku: it.variations[0].seller_custom_field ?? null, atributos: (it.variations[0].attributes ?? []).map((a: any) => a?.id).slice(0, 6), combinaciones: (it.variations[0].attribute_combinations ?? []).map((a: any) => `${a?.name}=${a?.value_name}`) } : null,
+                })),
+                // Atributos de las publicaciones de las primeras familias: qué cambia entre ellas.
+                atributosDeFamilias: [...familias.entries()].filter(([, f]) => f.n >= 2).slice(0, 3).map(([id]) => ({
+                    id,
+                    items: (items as any[]).filter((it) => String(it?.family_id ?? it?.family_name ?? it?.user_product_id) === id).slice(0, 4).map((it) => ({
+                        id: it.id, familia: it.family_name ?? null,
+                        atributos: Object.fromEntries((it.attributes ?? []).filter((a: any) => a?.value_name && String(a.value_name).length <= 50).slice(0, 25).map((a: any) => [a.id, a.value_name])),
+                        imagenes: (it.pictures ?? []).length,
+                    })),
+                })),
             };
         }
         resumen.variantes.grupos = planMeli.grupos.length;
