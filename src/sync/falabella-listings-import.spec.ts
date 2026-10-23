@@ -518,6 +518,32 @@ describe('importFalabellaListings', () => {
                 expect(fichas[0].atributos).toMatchObject({ pagina_size: '42', pagina_modelo: 'Runner' });
             });
 
+            it('lo que ya está agrupado en Synkro no vuelve a salir como pendiente ni gasta la IA', async () => {
+                const { repoProductos } = await construir(sinAtributos());
+                const qb: any = { select: () => qb, where: () => qb, andWhere: () => qb, getRawMany: async () => [{ sku: 'S-ROSA' }, { sku: 'S-NEGRO' }] };
+                (repoProductos as any).createQueryBuilder = jest.fn(() => qb);
+                const proponer = jest.fn();
+                service.proponerEjesConIA = proponer;
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.sinResolver).toEqual([]);
+                expect(resumen.variantes.yaAgrupadas).toBe(1);
+                expect(proponer).not.toHaveBeenCalled();
+            });
+
+            it('si solo algunos SKU de la familia están agrupados, la familia sigue pendiente', async () => {
+                const { repoProductos } = await construir(sinAtributos());
+                const qb: any = { select: () => qb, where: () => qb, andWhere: () => qb, getRawMany: async () => [{ sku: 'S-ROSA' }] };
+                (repoProductos as any).createQueryBuilder = jest.fn(() => qb);
+                service.proponerEjesConIA = jest.fn(async () => null);
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.sinResolver).toHaveLength(1);
+                expect(resumen.variantes.yaAgrupadas).toBe(0);
+            });
+
             it('si la IA falla, la familia pasa a la revisión manual sin romper la importación', async () => {
                 await construir(sinAtributos());
                 service.proponerEjesConIA = jest.fn(async () => { throw new Error('IA caída'); });

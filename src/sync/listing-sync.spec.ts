@@ -262,6 +262,24 @@ describe('importar publicaciones de Mercado Libre', () => {
             expect(enlaces[0]).toMatchObject({ externalId: 'MPE2', regularPrice: 80 });
         });
 
+        it('las familias que ya están agrupadas en Synkro no se vuelven a proponer', async () => {
+            const publicacion = (id: string, sku: string, color: string) => ({
+                id, title: `Sábana ${color}`, status: 'active', price: 180, available_quantity: 3, seller_custom_field: sku,
+                family_id: '777', family_name: 'Sábana', category_id: 'MPE7', pictures: [],
+                attributes: [{ id: 'COLOR', name: 'Color', value_name: color }],
+            });
+            const { service, meli, repoProductos } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['M1', 'M2'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [publicacion('M1', 'S-1', 'Rojo'), publicacion('M2', 'S-2', 'Azul')], notFound: [] });
+            const qb: any = { select: () => qb, where: () => qb, andWhere: () => qb, getRawMany: async () => [{ sku: 'S-1' }, { sku: 'S-2' }] };
+            (repoProductos as any).createQueryBuilder = jest.fn(() => qb);
+
+            const r = await service.importMeliListings(SCOPE, undefined, { dryRun: true });
+
+            expect(r.variantes.grupos).toBe(0);
+            expect(r.variantes.yaAgrupadas).toBe(1);
+        });
+
         it('una publicación sin variaciones no forma grupo', async () => {
             const { service, meli } = await construir({ conexiones: [cuenta()] });
             meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });

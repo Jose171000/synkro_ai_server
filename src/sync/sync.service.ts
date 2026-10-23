@@ -5,7 +5,7 @@ import { planearGruposDeMeli } from './meli/variantes-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
-import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
+import { GrupoSinResolver, nombreDelGrupo, PlanDeGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
 import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
 import { FalabellaPublicPageService } from './falabella-public-page.service';
@@ -706,6 +706,8 @@ export class SyncService implements OnModuleInit {
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
                 sinResolver: [] as GrupoSinResolver[],
                 aplicado: null as ResultadoDeAgrupar | null,
+                /** Familias que ya estaban agrupadas en Synkro (a mano o antes): no se vuelven a proponer. */
+                yaAgrupadas: 0,
                 /** Lectura de la página pública de Falabella para las familias que los atributos no resolvieron. */
                 paginaPublica: { familias: 0, leidas: 0, resueltas: 0, bloqueada: false, pendientes: 0, sinDatos: [] as { parentSku: string; motivo: string }[] },
                 /** Segundo recurso: la IA propone los ejes y se comprueban contra los datos de cada ficha. */
@@ -838,6 +840,7 @@ export class SyncService implements OnModuleInit {
         // (dryRun) solo cuenta cómo quedarían.
         const plan = planearGruposDeFalabella(productos);
         // Lo que dijo la página de cada ficha (aunque no bastara para armar el grupo) también le sirve a la IA como evidencia.
+        resumen.variantes.yaAgrupadas = await this.quitarYaAgrupadas(scope, plan);
         const datosDePagina = new Map<string, Record<string, string>>();
         await this.completarConPaginaPublica(productos, plan, resumen.variantes.paginaPublica, datosDePagina);
         await this.completarConIA(productos, plan, resumen.variantes.ia, datosDePagina);
@@ -954,6 +957,32 @@ export class SyncService implements OnModuleInit {
             } catch { /* sin esa lista se usan los atributos habituales */ }
         }
         return salida;
+    }
+
+    /**
+     * Quita del plan lo que ya está agrupado en Synkro (a mano o en una importación anterior): ni vuelve a salir como
+     * «Estructurar» ni se gasta la IA en ello, y la estructura que la persona definió se respeta. Devuelve cuántas quitó.
+     */
+    private async quitarYaAgrupadas(scope: SyncScope, plan: { grupos: PlanDeGrupo[]; sinResolver: GrupoSinResolver[] }): Promise<number> {
+        const skus = [...new Set([...plan.grupos.flatMap(g => g.variants.map(v => v.sellerSku)), ...plan.sinResolver.flatMap(g => g.skus)])];
+        if (!skus.length || typeof (this.productRepository as any).createQueryBuilder !== 'function') return 0;
+        const agrupados = new Set<string>();
+        try {
+            for (let i = 0; i < skus.length; i += 500) {
+                const filas: { sku: string }[] = await this.productRepository.createQueryBuilder('p')
+                    .select('p.sku', 'sku')
+                    .where('(p.storeId = :storeId OR (p.storeId IS NULL AND p.ownerId = :userId))', { storeId: scope.storeId, userId: scope.userId })
+                    .andWhere('p."groupId" IS NOT NULL')
+                    .andWhere('LOWER(TRIM(p.sku)) IN (:...skus)', { skus: skus.slice(i, i + 500).map(x => x.trim().toLowerCase()) })
+                    .getRawMany();
+                for (const f of filas) agrupados.add(String(f.sku).trim().toLowerCase());
+            }
+        } catch { return 0; }
+        const ya = (sku: string) => agrupados.has(sku.trim().toLowerCase());
+        const antes = plan.grupos.length + plan.sinResolver.length;
+        plan.grupos = plan.grupos.filter(g => !g.variants.every(v => ya(v.sellerSku)));
+        plan.sinResolver = plan.sinResolver.filter(g => !(g.skus.length > 0 && g.skus.every(ya)));
+        return antes - (plan.grupos.length + plan.sinResolver.length);
     }
 
     /** Cuántas páginas públicas se leen en una importación: pocas peticiones; el resto queda para la siguiente. */
@@ -3220,6 +3249,8 @@ export class SyncService implements OnModuleInit {
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
                 sinResolver: [] as GrupoSinResolver[],
                 aplicado: null as ResultadoDeAgrupar | null,
+                /** Familias que ya estaban agrupadas en Synkro (a mano o antes): no se vuelven a proponer. */
+                yaAgrupadas: 0,
                 /** Segundo recurso: la IA propone los ejes de las familias que los atributos no resolvieron. */
                 ia: { intentadas: 0, resueltas: 0, pendientes: 0 },
                 /** Qué campos de familia o de variación traen las publicaciones (para decidir cómo agruparlas). */
@@ -3294,6 +3325,7 @@ export class SyncService implements OnModuleInit {
         const familias = planearFamiliasDeMeli(itemsSinDuplicadas, variacionPorCategoria);
         planMeli.grupos.push(...familias.grupos);
         planMeli.sinResolver.push(...familias.sinResolver);
+        resumen.variantes.yaAgrupadas = await this.quitarYaAgrupadas(scope, planMeli);
         await this.completarConIA(familias.paraLaIA, planMeli, resumen.variantes.ia);
         {
             const claves = new Map<string, number>();
