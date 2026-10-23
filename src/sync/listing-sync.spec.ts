@@ -178,6 +178,62 @@ describe('importar publicaciones de Mercado Libre', () => {
         expect(enlaces.map(e => [e.externalId, e.variationId])).toEqual([['MPE2', '11'], ['MPE2', '12']]);
     });
 
+    describe('variaciones agrupadas', () => {
+        const polo = () => ({
+            id: 'MPE2', title: 'Polo Básico', status: 'active', price: 40, available_quantity: 9,
+            pictures: [{ id: 'f1', secure_url: 'https://img/rojo.jpg' }, { id: 'f2', secure_url: 'https://img/azul.jpg' }],
+            variations: [
+                { id: 11, price: 40, available_quantity: 4, seller_custom_field: 'POLO-RJ', picture_ids: ['f1'], attribute_combinations: [{ name: 'Color', value_name: 'Rojo' }] },
+                { id: 12, price: 40, available_quantity: 5, seller_custom_field: 'POLO-AZ', picture_ids: ['f2'], attribute_combinations: [{ name: 'Color', value_name: 'Azul' }] },
+            ],
+        });
+
+        it('la vista previa cuenta el grupo con su eje y sus valores, sin crear nada', async () => {
+            const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE2'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [polo()], notFound: [] });
+            const aplicar = jest.fn();
+            (service as any).variantImport = { aplicar };
+
+            const r = await service.importMeliListings(SCOPE, undefined, { dryRun: true });
+
+            expect(r.variantes.grupos).toBe(1);
+            expect(r.variantes.variantes).toBe(2);
+            expect(r.variantes.ejemplos[0]).toMatchObject({ parentSku: 'MPE2', nombre: 'Polo Básico', ejes: [{ name: 'Color', values: ['Rojo', 'Azul'] }] });
+            expect(aplicar).not.toHaveBeenCalled();
+            expect(productos).toHaveLength(0);
+        });
+
+        it('al importar, cada variante conserva su propia foto y se agrupan con los valores de Mercado Libre', async () => {
+            const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE2'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [polo()], notFound: [] });
+            const aplicar = jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] }));
+            (service as any).variantImport = { aplicar };
+
+            const r = await service.importMeliListings(SCOPE, undefined);
+
+            expect(productos.map(p => [p.sku, p.images[0].url])).toEqual([['POLO-RJ', 'https://img/rojo.jpg'], ['POLO-AZ', 'https://img/azul.jpg']]);
+            const [, grupos, porSku] = aplicar.mock.calls[0] as any[];
+            expect(grupos[0].variants).toEqual([{ sellerSku: 'POLO-RJ', values: { Color: 'Rojo' } }, { sellerSku: 'POLO-AZ', values: { Color: 'Azul' } }]);
+            expect([...porSku.keys()]).toEqual(['POLO-RJ', 'POLO-AZ']);
+            expect(r.variantes.aplicado).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
+        });
+
+        it('una publicación sin variaciones no forma grupo', async () => {
+            const { service, meli } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [itemSimple()], notFound: [] });
+            const aplicar = jest.fn();
+            (service as any).variantImport = { aplicar };
+
+            const r = await service.importMeliListings(SCOPE, undefined);
+
+            expect(r.variantes.grupos).toBe(0);
+            expect(aplicar).not.toHaveBeenCalled();
+        });
+    });
+
     it('la vista previa no escribe nada', async () => {
         const { service, meli, productos, enlaces, avisos } = await construir({ conexiones: [cuenta()] });
         meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });

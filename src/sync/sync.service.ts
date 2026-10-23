@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
+import { planearGruposDeMeli } from './meli/variantes-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
@@ -3193,7 +3194,16 @@ export class SyncService implements OnModuleInit {
             porEstado: {} as Record<string, number>,
             notaMedia: null as number | null,
             ejemplos: [] as { sku: string; nombre: string; estado: string; nota: number | null; enCatalogo: boolean }[],
+            /** Publicaciones con variaciones: cómo quedan agrupadas (Mercado Libre ya trae el eje y el valor de cada una). */
+            variantes: {
+                grupos: 0,
+                variantes: 0,
+                ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
+                sinResolver: [] as GrupoSinResolver[],
+                aplicado: null as ResultadoDeAgrupar | null,
+            },
         };
+        const vinculadosMeli = new Map<string, Product>();
 
         for (const item of items) {
             const { rows, sinSku } = filasDeItemMeli(item);
@@ -3239,8 +3249,19 @@ export class SyncService implements OnModuleInit {
                 }
 
                 await this.guardarEnlaceMeli(connection, product, fila);
+                vinculadosMeli.set(fila.sku, product);
                 resumen.enlazadas++;
             }
+        }
+
+        // Las publicaciones con variaciones se agrupan con el eje y el valor que Mercado Libre da a cada una.
+        const planMeli = planearGruposDeMeli(items);
+        resumen.variantes.grupos = planMeli.grupos.length;
+        resumen.variantes.variantes = planMeli.grupos.reduce((n, g) => n + g.variants.length, 0);
+        resumen.variantes.sinResolver = planMeli.sinResolver;
+        resumen.variantes.ejemplos = planMeli.grupos.slice(0, 8).map(g => ({ parentSku: g.parentSku, nombre: g.name, ejes: g.axes, variantes: g.variants.length }));
+        if (!options.dryRun && this.variantImport && planMeli.grupos.length) {
+            resumen.variantes.aplicado = await this.variantImport.aplicar(scope, planMeli.grupos, vinculadosMeli);
         }
 
         resumen.notaMedia = conNota > 0 ? Math.round(sumaNotas / conNota) : null;
