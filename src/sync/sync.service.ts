@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
-import { planearGruposDeFalabella } from './falabella/variantes-falabella';
+import { nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
+import { familiasPorPagina, planearGrupoDesdePagina } from './falabella/pagina-publica';
+import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
@@ -148,6 +150,7 @@ export class SyncService implements OnModuleInit {
         private readonly stores: StoresService,
         private readonly saleAlerts: SaleAlertsService,
         @Optional() private readonly variantImport?: FalabellaVariantImportService,
+        @Optional() private readonly publicPage?: FalabellaPublicPageService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -693,6 +696,8 @@ export class SyncService implements OnModuleInit {
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
                 sinResolver: [] as { parentSku: string; skus: string[]; motivo: string }[],
                 aplicado: null as ResultadoDeAgrupar | null,
+                /** Lectura de la página pública de Falabella para las familias que los atributos no resolvieron. */
+                paginaPublica: { familias: 0, leidas: 0, resueltas: 0, bloqueada: false, pendientes: 0, sinDatos: [] as { parentSku: string; motivo: string }[] },
             },
             porEstado: {} as Record<string, number>,
             /** Media de la nota de calidad que pone Falabella. */
@@ -820,6 +825,7 @@ export class SyncService implements OnModuleInit {
         // Las fichas que son variantes de un mismo producto (mismo ParentSku) se agrupan con sus ejes; la vista previa
         // (dryRun) solo cuenta cómo quedarían.
         const plan = planearGruposDeFalabella(productos);
+        await this.completarConPaginaPublica(productos, plan, resumen.variantes.paginaPublica);
         resumen.variantes.grupos = plan.grupos.length;
         resumen.variantes.variantes = plan.grupos.reduce((n, g) => n + g.variants.length, 0);
         resumen.variantes.sinResolver = plan.sinResolver;
@@ -845,6 +851,48 @@ export class SyncService implements OnModuleInit {
         }
 
         return resumen;
+    }
+
+    /** Cuántas páginas públicas se leen en una importación: pocas peticiones; el resto queda para la siguiente. */
+    private static readonly MAX_PAGINAS_POR_IMPORTACION = 40;
+
+    /**
+     * Las familias que Falabella junta en una misma página pública y que los atributos no pudieron resolver se completan
+     * con lo que dice esa página (color y talla reales de cada variante). Si Falabella bloquea la lectura se detiene y esas
+     * familias quedan sin agrupar; nunca se adivina.
+     */
+    private async completarConPaginaPublica(
+        productos: FalabellaProduct[],
+        plan: ReturnType<typeof planearGruposDeFalabella>,
+        informe: { familias: number; leidas: number; resueltas: number; bloqueada: boolean; pendientes: number; sinDatos: { parentSku: string; motivo: string }[] },
+    ) {
+        if (!this.publicPage) return;
+        const sku = (f: FalabellaProduct) => String(f.SellerSku).trim();
+        const resueltos = new Set(plan.grupos.flatMap(g => g.variants.map(v => v.sellerSku)));
+        const porResolver = familiasPorPagina(productos).filter(f => !f.fichas.every(x => resueltos.has(sku(x))));
+        informe.familias = porResolver.length;
+
+        for (const familia of porResolver.slice(0, SyncService.MAX_PAGINAS_POR_IMPORTACION)) {
+            const lectura = await this.publicPage.leer(familia.url);
+            if (lectura.bloqueada) { informe.bloqueada = true; break; }
+            informe.leidas++;
+
+            const frecuencia = new Map<string, number>();
+            for (const f of familia.fichas) { const p = String(f.ParentSku ?? '').trim(); if (p) frecuencia.set(p, (frecuencia.get(p) ?? 0) + 1); }
+            const parentSku = [...frecuencia.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? `FAL-${familia.productId}`;
+
+            const r = planearGrupoDesdePagina(familia, lectura, '', parentSku);
+            if (!r.plan) { informe.sinDatos.push({ parentSku, motivo: r.motivo ?? 'sin datos' }); continue; }
+
+            r.plan.name = nombreDelGrupo(familia.fichas, r.plan.axes, r.plan.variants[0].values, parentSku);
+            // La página manda sobre lo que se dedujo de los atributos para esas mismas fichas.
+            const skusDeLaPagina = new Set(r.plan.variants.map(v => v.sellerSku));
+            plan.grupos = plan.grupos.filter(g => !g.variants.some(v => skusDeLaPagina.has(v.sellerSku)));
+            plan.sinResolver = plan.sinResolver.filter(g => !g.skus.every(s => skusDeLaPagina.has(s)));
+            plan.grupos.push(r.plan);
+            informe.resueltas++;
+        }
+        informe.pendientes = Math.max(0, porResolver.length - informe.leidas);
     }
 
     // ─────────────────────────────────────────────────────────────

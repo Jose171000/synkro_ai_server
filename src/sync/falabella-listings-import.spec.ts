@@ -386,6 +386,71 @@ describe('importFalabellaListings', () => {
             expect(resumen.variantes.aplicado).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
         });
 
+        describe('con la página pública', () => {
+            const URL_P = 'https://www.falabella.com.pe/falabella-pe/product/153461795/Sabana-King/153461796';
+            const mismaPagina = () => [
+                ficha({ SellerSku: 'BL-K-RPA', ShopSku: 'S1', Name: 'Sábana King', ParentSku: 'BL-K-RPA', Url: URL_P, ProductData: { ColorBasico: 'Gris' } }),
+                ficha({ SellerSku: 'BL-K-NGR', ShopSku: 'S2', Name: 'Sábana King', ParentSku: 'BL-K-RPA', Url: URL_P, ProductData: { ColorBasico: 'Gris' } }),
+            ];
+            const lecturaBuena = {
+                ok: true, productId: '153461795',
+                variantes: [
+                    { variantId: '1', sellerSkus: ['BL-K-RPA'], size: 'King', colorName: 'Rosado', colorCode: '#FFC0CB' },
+                    { variantId: '2', sellerSkus: ['BL-K-NGR'], size: 'King', colorName: 'Negro', colorCode: '#000000' },
+                ],
+            };
+
+            it('lo que los atributos no resuelven se completa con color y talla reales de la página', async () => {
+                await construir(mismaPagina());
+                const leer = jest.fn(async () => lecturaBuena);
+                (service as any).publicPage = { leer };
+                (service as any).variantImport = { aplicar: jest.fn() };
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(leer).toHaveBeenCalledWith(URL_P);
+                expect(resumen.variantes.grupos).toBe(1);
+                expect(resumen.variantes.sinResolver).toEqual([]);
+                expect(resumen.variantes.ejemplos[0].ejes).toEqual([{ name: 'Color', values: ['Rosado', 'Negro'] }]);
+                expect(resumen.variantes.paginaPublica).toMatchObject({ familias: 1, leidas: 1, resueltas: 1, bloqueada: false });
+            });
+
+            it('si Falabella bloquea la lectura, se detiene y no agrupa nada a ciegas', async () => {
+                await construir(mismaPagina());
+                const leer = jest.fn(async () => ({ ok: false, bloqueada: true, motivo: 'bloqueada', variantes: [] }));
+                (service as any).publicPage = { leer };
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.grupos).toBe(0);
+                expect(resumen.variantes.paginaPublica.bloqueada).toBe(true);
+            });
+
+            it('si la página cambió o no trae las variantes, las familias quedan sin agrupar y se informa el motivo', async () => {
+                await construir(mismaPagina());
+                (service as any).publicPage = { leer: jest.fn(async () => ({ ok: false, motivo: 'la página no trae los datos esperados', variantes: [] })) };
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.grupos).toBe(0);
+                expect(resumen.variantes.paginaPublica.sinDatos[0].motivo).toMatch(/datos esperados/);
+            });
+
+            it('lo que ya resolvieron los atributos no vuelve a pedir la página', async () => {
+                await construir([
+                    ficha({ SellerSku: 'A', ParentSku: 'P', Url: URL_P, ProductData: { Color: 'Rojo' } }),
+                    ficha({ SellerSku: 'B', ParentSku: 'P', Url: URL_P, ProductData: { Color: 'Azul' } }),
+                ]);
+                const leer = jest.fn();
+                (service as any).publicPage = { leer };
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.grupos).toBe(1);
+                expect(leer).not.toHaveBeenCalled();
+            });
+        });
+
         it('productos sueltos no forman grupos y no se llama a agrupar', async () => {
             await construir([ficha({ SellerSku: 'A', ParentSku: 'A' }), ficha({ SellerSku: 'B', ParentSku: 'B' })]);
             const aplicar = jest.fn();

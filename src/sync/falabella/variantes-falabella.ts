@@ -18,6 +18,8 @@ export interface PlanDeGrupo {
     name: string;
     axes: EjeDeVariacion[];
     variants: { sellerSku: string; values: Record<string, string> }[];
+    /** De dónde salieron los ejes: los atributos de las fichas o la página pública de Falabella. */
+    origen?: 'atributos' | 'pagina';
 }
 
 export interface GrupoSinResolver {
@@ -102,7 +104,7 @@ function ejeDe(c: { nombre: string; porSku: Map<string, string> }, orden: string
 }
 
 /** Nombre del grupo: lo que comparten los títulos de las variantes; si no comparten, el del primero sin sus valores. */
-function nombreDelGrupo(fichas: FalabellaProduct[], ejes: EjeDeVariacion[], valoresDelPrimero: Record<string, string>, parentSku: string): string {
+export function nombreDelGrupo(fichas: FalabellaProduct[], ejes: EjeDeVariacion[], valoresDelPrimero: Record<string, string>, parentSku: string): string {
     const palabras = fichas.map((f) => String(f.Name ?? '').trim().split(/\s+/).filter(Boolean));
     let comun = 0;
     while (palabras.every((p) => p[comun] && normalizar(p[comun]) === normalizar(palabras[0][comun]))) comun++;

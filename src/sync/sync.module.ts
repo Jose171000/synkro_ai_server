@@ -7,6 +7,7 @@ import { SyncController } from './sync.controller';
 import { ListingActionsService } from './listing-actions.service';
 import { ProductOverviewService } from './product-overview.service';
 import { FalabellaVariantImportService } from './falabella-variant-import.service';
+import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { ProductGroup } from '../products/entities/product-group.entity';
 import { StoreMember } from '../stores/entities/store-member.entity';
 import { SaleAlertsService } from './sale-alerts.service';
@@ -40,7 +41,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService],
 })
 export class SyncModule { }
