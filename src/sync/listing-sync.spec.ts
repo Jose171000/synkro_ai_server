@@ -243,6 +243,25 @@ describe('importar publicaciones de Mercado Libre', () => {
             expect([...porSku.keys()]).toEqual(['SAB-BE', 'SAB-CR']);
         });
 
+        it('dos publicaciones con el mismo SKU: solo la principal se enlaza, la otra se informa como repetida y no pisa el enlace', async () => {
+            const publicacion = (id: string, vendidas: number, precio: number) => ({
+                id, title: 'Organizador Zapateras', status: 'active', price: precio, available_quantity: 10, seller_custom_field: 'ZPT-6',
+                sold_quantity: vendidas, permalink: `https://ml/${id}`, pictures: [{ id: 'f', secure_url: `https://img/${id}.jpg` }],
+            });
+            const { service, meli, productos, enlaces } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1', 'MPE2'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [publicacion('MPE1', 0, 150), publicacion('MPE2', 7, 80)], notFound: [] });
+
+            const r = await service.importMeliListings(SCOPE, undefined);
+
+            expect(r.duplicadas).toBe(1);
+            expect(r.total).toBe(1);
+            expect(r.duplicados[0].publicaciones.map((x: any) => [x.externalId, x.principal])).toEqual([['MPE2', true], ['MPE1', false]]);
+            expect(productos).toHaveLength(1);
+            expect(enlaces).toHaveLength(1);
+            expect(enlaces[0]).toMatchObject({ externalId: 'MPE2', regularPrice: 80 });
+        });
+
         it('una publicación sin variaciones no forma grupo', async () => {
             const { service, meli } = await construir({ conexiones: [cuenta()] });
             meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });

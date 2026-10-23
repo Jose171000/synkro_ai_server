@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
+import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
@@ -3205,6 +3206,9 @@ export class SyncService implements OnModuleInit {
             enlazadas: 0,
             enOtraTienda: 0,
             sinSku: 0,
+            /** Publicaciones repetidas (mismo SKU en la misma cuenta): no son variantes; solo se enlaza la principal. */
+            duplicadas: 0,
+            duplicados: [] as DuplicadoMeli[],
             incompleto,
             porEstado: {} as Record<string, number>,
             notaMedia: null as number | null,
@@ -3224,11 +3228,18 @@ export class SyncService implements OnModuleInit {
         };
         const vinculadosMeli = new Map<string, Product>();
 
+        // Dos publicaciones con el mismo SKU no son variantes: son la misma cosa publicada dos veces. Se enlaza la principal
+        // (activa y con más ventas) y las demás se informan para que la persona decida.
+        const detectadas = detectarDuplicados((items as any[]).flatMap(i => filasDeItemMeli(i).rows));
+        resumen.duplicados = detectadas.duplicados.slice(0, 100);
+        resumen.duplicadas = detectadas.secundarias.size;
+
         for (const item of items) {
             const { rows, sinSku } = filasDeItemMeli(item);
             resumen.sinSku += sinSku;
 
             for (const fila of rows) {
+                if (detectadas.secundarias.has(claveDeFilaMeli(fila))) continue;
                 resumen.total++;
                 resumen.porEstado[fila.status] = (resumen.porEstado[fila.status] ?? 0) + 1;
                 if (fila.quality !== null) { sumaNotas += fila.quality; conNota++; }
@@ -3274,11 +3285,13 @@ export class SyncService implements OnModuleInit {
         }
 
         // Las publicaciones con variaciones se agrupan con el eje y el valor que Mercado Libre da a cada una.
-        const planMeli = planearGruposDeMeli(items);
+        // Las duplicadas no cuentan para las familias ni para las variaciones: ya se informaron aparte.
+        const itemsSinDuplicadas = (items as any[]).filter(i => !filasDeItemMeli(i).rows.some(r => detectadas.secundarias.has(claveDeFilaMeli(r))));
+        const planMeli = planearGruposDeMeli(itemsSinDuplicadas);
         // Familias de Mercado Libre (publicaciones separadas que comparten family_id): se agrupan por sus atributos; lo que
         // no se pueda decidir pasa a la IA y, por último, a la revisión manual.
-        const variacionPorCategoria = await this.atributosDeVariacionMeli(items as any[]);
-        const familias = planearFamiliasDeMeli(items as any[], variacionPorCategoria);
+        const variacionPorCategoria = await this.atributosDeVariacionMeli(itemsSinDuplicadas);
+        const familias = planearFamiliasDeMeli(itemsSinDuplicadas, variacionPorCategoria);
         planMeli.grupos.push(...familias.grupos);
         planMeli.sinResolver.push(...familias.sinResolver);
         await this.completarConIA(familias.paraLaIA, planMeli, resumen.variantes.ia);

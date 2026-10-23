@@ -27,6 +27,11 @@ export interface MeliListingRow {
     images: string[];
     /** Nota de calidad de 0 a 100 (la «salud» de la publicación en ML). */
     quality: number | null;
+    /** Unidades vendidas de la publicación o de la variación, si Mercado Libre las informa. */
+    vendidas?: number | null;
+    /** Tipo de publicación (clásica, premium…) y, si Mercado Libre la marca como sincronizada, la publicación con la que lo está. */
+    tipo?: string | null;
+    sincronizadaCon?: string | null;
     currency: string | null;
 }
 
@@ -92,6 +97,9 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
     const original = numero(item?.original_price);
     const precio = numero(item?.price);
     const enOferta = original !== null && precio !== null && original > precio;
+    const vendidasDelItem = numero(item?.sold_quantity);
+    const tipo = texto(item?.listing_type_id);
+    const sincronizadaCon = texto(item?.parent_item_id);
     const base = {
         externalId,
         title: texto(item?.title) ?? externalId,
@@ -99,6 +107,8 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
         permalink: texto(item?.permalink),
         quality: calidad,
         currency: texto(item?.currency_id),
+        tipo,
+        sincronizadaCon,
     };
 
     const variantes: any[] = Array.isArray(item?.variations) ? item.variations : [];
@@ -115,6 +125,7 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
                 regularPrice: enOferta ? original : precio,
                 salePrice: enOferta ? precio : null,
                 stock: numero(item?.available_quantity) ?? 0,
+                vendidas: vendidasDelItem,
                 imageUrl: todas[0] ?? miniatura,
                 images: todas,
             }],
@@ -147,6 +158,7 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
             regularPrice: ofertaVar ? originalVar : precioVar,
             salePrice: ofertaVar ? precioVar : null,
             stock: numero(v?.available_quantity) ?? 0,
+            vendidas: numero(v?.sold_quantity) ?? vendidasDelItem,
             imageUrl: propias[0] ?? todas[0] ?? miniatura,
             images: propias.length ? propias : todas,
         });
