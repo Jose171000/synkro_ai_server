@@ -220,6 +220,29 @@ describe('importar publicaciones de Mercado Libre', () => {
             expect(r.variantes.aplicado).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
         });
 
+        it('las publicaciones de una familia se agrupan por su atributo COLOR, cada una con su foto', async () => {
+            const publicacion = (id: string, sku: string, color: string) => ({
+                id, title: `Sábana Queen ${color}`, status: 'active', price: 180, available_quantity: 3, seller_custom_field: sku,
+                family_id: '999', family_name: 'Sábana Queen', category_id: 'MPE7',
+                pictures: [{ id: `f${id}`, secure_url: `https://img/${id}.jpg` }],
+                attributes: [{ id: 'COLOR', name: 'Color', value_name: color }, { id: 'MATTRESS_SIZE', name: 'Tamaño', value_name: 'Queen' }],
+            });
+            const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+            meli.listSellerItemIds.mockResolvedValue({ ids: ['M1', 'M2'], incompleto: false });
+            meli.getItems.mockResolvedValue({ items: [publicacion('M1', 'SAB-BE__31166982', 'Beige y gris'), publicacion('M2', 'SAB-CR__31166975', 'Crema y marrón')], notFound: [] });
+            const aplicar = jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] }));
+            (service as any).variantImport = { aplicar };
+
+            const r = await service.importMeliListings(SCOPE, undefined);
+
+            expect(r.variantes.grupos).toBe(1);
+            expect(r.variantes.ejemplos[0]).toMatchObject({ parentSku: 'FAM-999', nombre: 'Sábana Queen', ejes: [{ name: 'Color', values: ['Beige y gris', 'Crema y marrón'] }] });
+            expect(productos.map((x) => [x.sku, x.images[0].url])).toEqual([['SAB-BE', 'https://img/M1.jpg'], ['SAB-CR', 'https://img/M2.jpg']]);
+            const [, grupos, porSku] = aplicar.mock.calls[0] as any[];
+            expect(grupos[0].variants.map((v: any) => v.sellerSku)).toEqual(['SAB-BE', 'SAB-CR']);
+            expect([...porSku.keys()]).toEqual(['SAB-BE', 'SAB-CR']);
+        });
+
         it('una publicación sin variaciones no forma grupo', async () => {
             const { service, meli } = await construir({ conexiones: [cuenta()] });
             meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });

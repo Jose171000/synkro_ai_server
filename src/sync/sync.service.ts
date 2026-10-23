@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
+import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
@@ -938,6 +939,20 @@ export class SyncService implements OnModuleInit {
             console.warn(`[Sync] La IA no pudo proponer los ejes de ${parentSku}: ${error?.message}`);
             return null;
         }
+    }
+
+    /** De cada categoría de las publicaciones, qué atributos admite Mercado Libre como variación (una consulta por categoría). */
+    private async atributosDeVariacionMeli(items: any[]): Promise<Map<string, Set<string>>> {
+        const salida = new Map<string, Set<string>>();
+        const categorias = [...new Set(items.filter(i => i?.family_id && i?.category_id).map(i => String(i.category_id)))].slice(0, 30);
+        for (const categoria of categorias) {
+            try {
+                const atributos = await this.meliApi.getCategoryAttributes(categoria);
+                const ids = (atributos ?? []).filter((a: any) => a?.tags?.variation_attribute || a?.tags?.allow_variations).map((a: any) => String(a.id));
+                if (ids.length) salida.set(categoria, new Set(ids));
+            } catch { /* sin esa lista se usan los atributos habituales */ }
+        }
+        return salida;
     }
 
     /** Cuántas páginas públicas se leen en una importación: pocas peticiones; el resto queda para la siguiente. */
@@ -3201,6 +3216,8 @@ export class SyncService implements OnModuleInit {
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
                 sinResolver: [] as GrupoSinResolver[],
                 aplicado: null as ResultadoDeAgrupar | null,
+                /** Segundo recurso: la IA propone los ejes de las familias que los atributos no resolvieron. */
+                ia: { intentadas: 0, resueltas: 0, pendientes: 0 },
                 /** Qué campos de familia o de variación traen las publicaciones (para decidir cómo agruparlas). */
                 diagnostico: null as any,
             },
@@ -3258,6 +3275,13 @@ export class SyncService implements OnModuleInit {
 
         // Las publicaciones con variaciones se agrupan con el eje y el valor que Mercado Libre da a cada una.
         const planMeli = planearGruposDeMeli(items);
+        // Familias de Mercado Libre (publicaciones separadas que comparten family_id): se agrupan por sus atributos; lo que
+        // no se pueda decidir pasa a la IA y, por último, a la revisión manual.
+        const variacionPorCategoria = await this.atributosDeVariacionMeli(items as any[]);
+        const familias = planearFamiliasDeMeli(items as any[], variacionPorCategoria);
+        planMeli.grupos.push(...familias.grupos);
+        planMeli.sinResolver.push(...familias.sinResolver);
+        await this.completarConIA(familias.paraLaIA, planMeli, resumen.variantes.ia);
         {
             const claves = new Map<string, number>();
             const familias = new Map<string, { n: number; titulos: string[]; skus: string[] }>();
