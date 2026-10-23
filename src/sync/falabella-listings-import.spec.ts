@@ -395,8 +395,8 @@ describe('importFalabellaListings', () => {
             const lecturaBuena = {
                 ok: true, productId: '153461795',
                 variantes: [
-                    { variantId: '1', sellerSkus: ['BL-K-RPA'], size: 'King', colorName: 'Rosado', colorCode: '#FFC0CB' },
-                    { variantId: '2', sellerSkus: ['BL-K-NGR'], size: 'King', colorName: 'Negro', colorCode: '#000000' },
+                    { variantId: '1', sellerSkus: ['BL-K-RPA'], size: 'King', colorName: 'Rosado', colorCode: '#FFC0CB', atributos: { size: 'King', colorName: 'Rosado' } },
+                    { variantId: '2', sellerSkus: ['BL-K-NGR'], size: 'King', colorName: 'Negro', colorCode: '#000000', atributos: { size: 'King', colorName: 'Negro' } },
                 ],
             };
 
@@ -448,6 +448,62 @@ describe('importFalabellaListings', () => {
 
                 expect(resumen.variantes.grupos).toBe(1);
                 expect(leer).not.toHaveBeenCalled();
+            });
+        });
+
+        describe('con IA como segundo recurso', () => {
+            const sinAtributos = () => [
+                ficha({ SellerSku: 'S-ROSA', Name: 'Sábana King Rosa Pastel', ParentSku: 'FAM', ProductData: {} }),
+                ficha({ SellerSku: 'S-NEGRO', Name: 'Sábana King Negro', ParentSku: 'FAM', ProductData: {} }),
+            ];
+
+            it('si la página no dio los ejes, la IA los propone y, comprobados contra cada ficha, se agrupa', async () => {
+                await construir(sinAtributos());
+                const proponer = jest.fn(async () => ({ ejes: [{ nombre: 'Color' }], valores: { 'S-ROSA': { Color: 'Rosa Pastel' }, 'S-NEGRO': { Color: 'Negro' } }, confianza: 'alta' as const }));
+                service.proponerEjesConIA = proponer;
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(proponer).toHaveBeenCalledTimes(1);
+                expect(resumen.variantes.ia).toMatchObject({ intentadas: 1, resueltas: 1 });
+                expect(resumen.variantes.grupos).toBe(1);
+                expect(resumen.variantes.sinResolver).toEqual([]);
+            });
+
+            it('una propuesta que no se puede comprobar no se aplica: queda para la revisión manual con la sugerencia', async () => {
+                await construir(sinAtributos());
+                service.proponerEjesConIA = jest.fn(async () => ({ ejes: [{ nombre: 'Color' }], valores: { 'S-ROSA': { Color: 'Fucsia' }, 'S-NEGRO': { Color: 'Gris' } }, confianza: 'alta' as const }));
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.grupos).toBe(0);
+                expect(resumen.variantes.ia.resueltas).toBe(0);
+                const g = resumen.variantes.sinResolver[0];
+                expect(g.motivo).toMatch(/IA:.*no se puede comprobar/);
+                expect(g.fichas).toEqual([{ sku: 'S-ROSA', nombre: 'Sábana King Rosa Pastel' }, { sku: 'S-NEGRO', nombre: 'Sábana King Negro' }]);
+                expect(g.sugerencia?.ejes).toEqual(['Color']);
+            });
+
+            it('si la IA falla, la familia pasa a la revisión manual sin romper la importación', async () => {
+                await construir(sinAtributos());
+                service.proponerEjesConIA = jest.fn(async () => { throw new Error('IA caída'); });
+
+                const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(resumen.variantes.sinResolver).toHaveLength(1);
+            });
+
+            it('no consulta a la IA por familias que los atributos ya resolvieron', async () => {
+                await construir([
+                    ficha({ SellerSku: 'A', ParentSku: 'P', ProductData: { Color: 'Rojo' } }),
+                    ficha({ SellerSku: 'B', ParentSku: 'P', ProductData: { Color: 'Azul' } }),
+                ]);
+                const proponer = jest.fn();
+                service.proponerEjesConIA = proponer;
+
+                await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(proponer).not.toHaveBeenCalled();
             });
         });
 

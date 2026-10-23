@@ -542,6 +542,51 @@ Responde solo JSON: {"category_id": "<ID de la lista o null>", "confidence": <n�
    * Completa de una vez los datos obligatorios de una categoría. Devuelve los valores y cuáles son estimados
    * (los que no se podían deducir y se eligió el más probable).
    */
+  /**
+   * Propone en qué se diferencian las fichas de una familia de variantes (color, talla, plazas…) y el valor de cada SKU,
+   * leyendo títulos, atributos y SKU. Solo lo que esté escrito: si no hay certeza devuelve confianza «baja». El llamador
+   * comprueba cada valor contra los datos de la ficha antes de usarlo.
+   */
+  public async proponerEjesDeVariacion(fichas: { sellerSku: string; nombre: string; variation: string | null; atributos: Record<string, string> }[]) {
+    if (fichas.length < 2) return null;
+    try {
+      const lista = fichas.slice(0, 60).map((f) => `- SKU "${f.sellerSku}" | título: ${f.nombre.slice(0, 160)} | variación: ${f.variation ?? '-'} | atributos: ${JSON.stringify(f.atributos)}`).join('\n');
+      const r = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Estas fichas de un marketplace son variantes de un mismo producto. Indica en qué se diferencian (los ejes de variación: Color, Talla, Plazas, Tamaño, Modelo…) y el valor de cada SKU.
+
+${lista}
+
+Reglas estrictas:
+- Usa SOLO lo que está escrito en el título, la variación, los atributos o el propio SKU. No inventes.
+- El valor de cada SKU debe aparecer escrito en SU ficha (título, variación, atributo o SKU). Si un código del SKU no se puede traducir con certeza, NO lo traduzcas ni lo adivines: devuelve confianza "baja".
+- Un título que lista varios colores ("BLANCO / NEGRO / BEIGE") es el mismo para todas: no sirve por sí solo para asignar un color a un SKU.
+- Entre 1 y 3 ejes. Todos los SKU deben tener valor en todos los ejes y las combinaciones no pueden repetirse.
+- Si no hay certeza: confianza "baja" y explica por qué en "motivo".
+Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde sale" }], "valores": { "<SKU>": { "<nombre del eje>": "valor" } }, "confianza": "alta" | "media" | "baja", "motivo": "…" }`,
+          },
+        ],
+      });
+      const j = JSON.parse(r.choices[0]?.message?.content || '{}');
+      const confianza = ['alta', 'media', 'baja'].includes(j.confianza) ? j.confianza : 'baja';
+      return {
+        ejes: Array.isArray(j.ejes) ? j.ejes.map((e: any) => ({ nombre: String(e?.nombre ?? ''), evidencia: e?.evidencia ? String(e.evidencia) : undefined })) : [],
+        valores: j.valores && typeof j.valores === 'object' ? (j.valores as Record<string, Record<string, string>>) : {},
+        confianza: confianza as 'alta' | 'media' | 'baja',
+        motivo: j.motivo ? String(j.motivo) : undefined,
+      };
+    } catch (error: any) {
+      console.warn(`[AI] No se pudieron proponer los ejes de variación: ${error?.message}`);
+      return null;
+    }
+  }
+
   public async completarAtributos(
     nombre: string,
     descripcion: string,

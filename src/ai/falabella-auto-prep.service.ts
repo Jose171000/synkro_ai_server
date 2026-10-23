@@ -240,6 +240,8 @@ export class FalabellaAutoPrepService implements OnModuleInit {
     }
 
     onModuleInit() {
+        // Cuando la página pública de Falabella no da los ejes de una familia de variantes, la IA los propone (y se comprueban).
+        this.sync.proponerEjesConIA = (fichas) => this.ai.proponerEjesDeVariacion(fichas);
         this.sync.alAprobarseUnaFicha = async (product) => {
             const categoria = this.sync.categoriaFalabella(product);
             if (!categoria) return;

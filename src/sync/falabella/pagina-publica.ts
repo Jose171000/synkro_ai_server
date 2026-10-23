@@ -19,6 +19,22 @@ export interface VarianteDePagina {
     size: string | null;
     colorName: string | null;
     colorCode: string | null;
+    /** Todos los atributos de texto corto de la variante (talla, color, material…), sin los técnicos: son los posibles ejes. */
+    atributos: Record<string, string>;
+}
+
+/** Atributos de la variante que no son ejes: códigos, orden, medidas y fichas técnicas. */
+const NO_SON_EJES = new Set(['colorcode', 'primarycolor', 'sizeorder', 'specifications', 'topspecifications', 'measurement', 'sizechart']);
+
+/** Nombre con que se muestra un atributo de la página como eje. */
+const NOMBRES_DE_EJE: Record<string, string> = { colorname: 'Color', size: 'Talla', material: 'Material', style: 'Estilo', model: 'Modelo', capacity: 'Capacidad', flavor: 'Sabor', scent: 'Aroma' };
+const PRIORIDAD_DE_EJE = ['Color', 'Talla'];
+
+function nombreDeEje(clave: string): string {
+    const conocido = NOMBRES_DE_EJE[clave.toLowerCase()];
+    if (conocido) return conocido;
+    const palabras = clave.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-]+/g, ' ').trim();
+    return palabras.charAt(0).toUpperCase() + palabras.slice(1).toLowerCase();
 }
 
 export interface LecturaDePagina {
@@ -68,12 +84,18 @@ export function leerPaginaPublica(html: string): LecturaDePagina {
         const ofertas = Array.isArray(v.offerings) ? v.offerings : [];
         const sellerSkus = ofertas.map((o: any) => texto(o?.sellerSkuId)).filter((x: string | null): x is string => !!x);
         const a = v.attributes && typeof v.attributes === 'object' ? v.attributes : {};
+        const atributos: Record<string, string> = {};
+        for (const [k, valor] of Object.entries(a)) {
+            const t = texto(valor);
+            if (t && typeof valor === 'string' && !NO_SON_EJES.has(k.toLowerCase())) atributos[k] = t;
+        }
         variantes.push({
             variantId: String(v.id ?? ''),
             sellerSkus,
             size: texto(a.size),
             colorName: texto(a.colorName) ?? texto(String(a.primaryColor ?? '').split('|')[0]),
             colorCode: texto(a.colorCode),
+            atributos,
         });
     }
     // Sin SKU del vendedor no hay forma segura de emparejar la variante con un producto de Synkro.
@@ -132,14 +154,24 @@ export function planearGrupoDesdePagina(familia: FamiliaDePagina, lectura: Lectu
     const sinPar = emparejadas.filter((e) => !e.variante);
     if (sinPar.length) return { plan: null, motivo: `la página no incluye ${sinPar.length === 1 ? 'el SKU' : 'los SKU'} ${sinPar.slice(0, 3).map((e) => e.sku).join(', ')}` };
 
-    const ejes: { nombre: string; valor: (v: VarianteDePagina) => string | null }[] = [
-        { nombre: 'Color', valor: (v) => v.colorName },
-        { nombre: 'Talla', valor: (v) => v.size },
-    ];
-    const elegidos = ejes
+    // Todo atributo de la página que TODAS las variantes tienen y que cambia entre ellas es un eje (color, talla, material…).
+    const claves = new Set<string>();
+    for (const x of emparejadas) for (const k of Object.keys(x.variante!.atributos ?? {})) claves.add(k);
+    const ejes: { nombre: string; valor: (v: VarianteDePagina) => string | null }[] = [...claves].map((k) => ({
+        nombre: nombreDeEje(k),
+        valor: (v: VarianteDePagina) => v.atributos?.[k] ?? null,
+    }));
+    // Dos atributos con el mismo nombre de eje (p. ej. dos «Color») no se duplican.
+    const unicos = new Map<string, (typeof ejes)[number]>();
+    for (const e of ejes) if (!unicos.has(e.nombre)) unicos.set(e.nombre, e);
+    const elegidos = [...unicos.values()]
         .filter((e) => emparejadas.every((x) => !!e.valor(x.variante!)) && new Set(emparejadas.map((x) => normalizar(e.valor(x.variante!)))).size >= 2)
+        .sort((a, b) => {
+            const pa = PRIORIDAD_DE_EJE.indexOf(a.nombre); const pb = PRIORIDAD_DE_EJE.indexOf(b.nombre);
+            return (pa < 0 ? 99 : pa) - (pb < 0 ? 99 : pb) || a.nombre.localeCompare(b.nombre);
+        })
         .slice(0, MAX_EJES);
-    if (!elegidos.length) return { plan: null, motivo: 'la página no distingue las variantes por color ni talla' };
+    if (!elegidos.length) return { plan: null, motivo: 'la página no distingue las variantes por ningún atributo (color, talla…)' };
 
     const axes: EjeDeVariacion[] = elegidos.map((e) => {
         const vistos = new Set<string>();

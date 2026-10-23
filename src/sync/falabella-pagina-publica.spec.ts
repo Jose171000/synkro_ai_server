@@ -30,8 +30,8 @@ describe('leerPaginaPublica', () => {
         expect(r.productId).toBe('153461795');
         expect(r.categoria).toEqual({ ruta: ['Sábanas King', 'Sábanas', 'Dormitorio - Ropa de Cama'], codigo: 'G21040209' });
         expect(r.variantes).toEqual([
-            { variantId: '1', sellerSkus: ['BL-A6-K-RPA'], size: 'King', colorName: 'Rosado', colorCode: '#FFC0CB' },
-            { variantId: '2', sellerSkus: ['BL-A6-K-NGR'], size: 'King', colorName: 'Negro', colorCode: '#FFC0CB' },
+            { variantId: '1', sellerSkus: ['BL-A6-K-RPA'], size: 'King', colorName: 'Rosado', colorCode: '#FFC0CB', atributos: { size: 'King', colorName: 'Rosado' } },
+            { variantId: '2', sellerSkus: ['BL-A6-K-NGR'], size: 'King', colorName: 'Negro', colorCode: '#FFC0CB', atributos: { size: 'King', colorName: 'Negro' } },
         ]);
     });
 
@@ -94,6 +94,25 @@ describe('planearGrupoDesdePagina', () => {
             'Polo', 'POLO',
         );
         expect(plan!.axes.map((e) => e.name)).toEqual(['Color', 'Talla']);
+    });
+
+    it('cualquier otro atributo que cambie entre variantes también es un eje (material, estilo…)', () => {
+        const { plan } = planearGrupoDesdePagina(
+            familia([ficha('A'), ficha('B'), ficha('C')]),
+            lectura([
+                variante('1', 'A', { color: 'Rojo', attributes: { material: 'Algodón', tipoDeProducto: 'Sábana' } }),
+                variante('2', 'B', { color: 'Azul', attributes: { material: 'Poliéster', tipoDeProducto: 'Sábana' } }),
+                variante('3', 'C', { color: 'Rojo', attributes: { material: 'Poliéster', tipoDeProducto: 'Sábana' } }),
+            ]),
+            'Sábana', 'SAB',
+        );
+        // «size: King» y «tipoDeProducto: Sábana» son iguales en todas: no son ejes. Color y Material sí.
+        expect(plan!.axes.map((e) => e.name)).toEqual(['Color', 'Material']);
+    });
+
+    it('los datos técnicos de la página (código de color, orden de talla) no se toman como ejes', () => {
+        const r = planearGrupoDesdePagina(familia([ficha('A'), ficha('B')]), lectura([variante('1', 'A', { attributes: { colorCode: '#111111', sizeOrder: '0' } }), variante('2', 'B', { attributes: { colorCode: '#222222', sizeOrder: '1' } })]), 'X', 'X');
+        expect(r.plan).toBeNull();
     });
 
     it('empareja aunque el SKU lleve el prefijo «SKU · »', () => {

@@ -19,7 +19,7 @@ export interface PlanDeGrupo {
     axes: EjeDeVariacion[];
     variants: { sellerSku: string; values: Record<string, string> }[];
     /** De dónde salieron los ejes: los atributos de las fichas o la página pública de Falabella. */
-    origen?: 'atributos' | 'pagina';
+    origen?: 'atributos' | 'pagina' | 'ia' | 'manual';
 }
 
 export interface GrupoSinResolver {
@@ -28,6 +28,10 @@ export interface GrupoSinResolver {
     motivo: string;
     /** Qué traen las primeras fichas (variación y atributos), para entender por qué no se pudo resolver. */
     pistas?: { sellerSku: string; variation: string | null; atributos: Record<string, string> }[];
+    /** Las fichas de la familia (SKU y título), para estructurarlas a mano. */
+    fichas?: { sku: string; nombre: string }[];
+    /** Lo que propuso la IA y no se pudo comprobar: sirve de sugerencia al estructurar a mano. */
+    sugerencia?: { ejes: string[]; valores: Record<string, Record<string, string>>; motivo: string };
 }
 
 /** Atributos de texto corto de una ficha, para mostrar en una pista (sin descripciones largas). */
@@ -38,6 +42,8 @@ function atributosCortos(f: FalabellaProduct): Record<string, string> {
     }
     return salida;
 }
+
+export const fichasDe = (fichas: FalabellaProduct[]) => fichas.slice(0, 100).map((f) => ({ sku: String(f.SellerSku).trim(), nombre: String(f.Name ?? '').slice(0, 160) }));
 
 const pistasDe = (fichas: FalabellaProduct[]) =>
     fichas.slice(0, 3).map((f) => ({ sellerSku: String(f.SellerSku).trim(), variation: f.Variation ? String(f.Variation).slice(0, 60) : null, atributos: atributosCortos(f) }));
@@ -135,7 +141,7 @@ export function planearGruposDeFalabella(productos: FalabellaProduct[]): { grupo
     for (const [parentSku, fichas] of porPadre) {
         if (fichas.length < 2) continue; // Falabella pone ParentSku = SellerSku a los productos sueltos
         const skus = fichas.map((f) => String(f.SellerSku).trim());
-        if (fichas.length > MAX_VARIANTES) { sinResolver.push({ parentSku, skus, motivo: `tiene más de ${MAX_VARIANTES} variantes` }); continue; }
+        if (fichas.length > MAX_VARIANTES) { sinResolver.push({ parentSku, skus, motivo: `tiene más de ${MAX_VARIANTES} variantes`, fichas: fichasDe(fichas) }); continue; }
 
         const candidatos = candidatosDeEje(fichas).slice(0, MAX_EJES);
         const ejesBase = candidatos.map((c) => ejeDe(c, skus));
@@ -162,7 +168,7 @@ export function planearGruposDeFalabella(productos: FalabellaProduct[]): { grupo
         }
 
         if (!sonUnicas()) {
-            sinResolver.push({ parentSku, skus, motivo: 'no se pudo determinar en qué se diferencian (color, talla…): revisa los atributos de variación en Falabella', pistas: pistasDe(fichas) });
+            sinResolver.push({ parentSku, skus, motivo: 'no se pudo determinar en qué se diferencian (color, talla…): revisa los atributos de variación en Falabella', pistas: pistasDe(fichas), fichas: fichasDe(fichas) });
             continue;
         }
 

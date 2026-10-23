@@ -1,8 +1,9 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
-import { nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
+import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina } from './falabella/pagina-publica';
+import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, validarPropuestaDeIA } from './falabella/ejes-ia';
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
@@ -82,6 +83,8 @@ export interface ChannelHandler {
     history(connection: MarketplaceConnection, desde: Date, hasta: Date): Promise<{ registradas: number; yaRegistradas: number; incompleto: boolean }>;
     pushInventory(productId: string, connectionId?: string): Promise<void>;
 }
+
+const sku0 = (f: { SellerSku?: string }) => String(f.SellerSku ?? '').trim();
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -667,6 +670,9 @@ export class SyncService implements OnModuleInit {
      * vendedor con cientos de fichas no espera que le aparezcan cientos de
      * productos nuevos sin avisar.
      */
+    /** Lo registra el módulo de IA: propone los ejes de una familia cuando la página pública no los dio. */
+    proponerEjesConIA?: ProponerEjesConIA;
+
     async importFalabellaListings(
         scope: SyncScope,
         connectionId: string | undefined,
@@ -694,10 +700,12 @@ export class SyncService implements OnModuleInit {
                 grupos: 0,
                 variantes: 0,
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
-                sinResolver: [] as { parentSku: string; skus: string[]; motivo: string }[],
+                sinResolver: [] as GrupoSinResolver[],
                 aplicado: null as ResultadoDeAgrupar | null,
                 /** Lectura de la página pública de Falabella para las familias que los atributos no resolvieron. */
                 paginaPublica: { familias: 0, leidas: 0, resueltas: 0, bloqueada: false, pendientes: 0, sinDatos: [] as { parentSku: string; motivo: string }[] },
+                /** Segundo recurso: la IA propone los ejes y se comprueban contra los datos de cada ficha. */
+                ia: { intentadas: 0, resueltas: 0, pendientes: 0 },
             },
             porEstado: {} as Record<string, number>,
             /** Media de la nota de calidad que pone Falabella. */
@@ -826,6 +834,7 @@ export class SyncService implements OnModuleInit {
         // (dryRun) solo cuenta cómo quedarían.
         const plan = planearGruposDeFalabella(productos);
         await this.completarConPaginaPublica(productos, plan, resumen.variantes.paginaPublica);
+        await this.completarConIA(productos, plan, resumen.variantes.ia);
         resumen.variantes.grupos = plan.grupos.length;
         resumen.variantes.variantes = plan.grupos.reduce((n, g) => n + g.variants.length, 0);
         resumen.variantes.sinResolver = plan.sinResolver;
@@ -853,6 +862,47 @@ export class SyncService implements OnModuleInit {
         return resumen;
     }
 
+    private static readonly MAX_FAMILIAS_IA_POR_IMPORTACION = 30;
+
+    /**
+     * Segundo recurso, antes de pedirle al usuario que estructure a mano: una IA propone el eje y el valor de cada SKU y la
+     * propuesta se comprueba contra los datos de cada ficha. Lo que no se pueda comprobar no se aplica: queda para la
+     * revisión manual con la propuesta como sugerencia.
+     */
+    private async completarConIA(
+        productos: FalabellaProduct[],
+        plan: ReturnType<typeof planearGruposDeFalabella>,
+        informe: { intentadas: number; resueltas: number; pendientes: number },
+    ) {
+        if (!this.proponerEjesConIA || !plan.sinResolver.length) return;
+        const porSku = new Map(productos.map(p => [String(p.SellerSku).trim(), p]));
+        const pendientes = [...plan.sinResolver];
+        for (const grupo of pendientes.slice(0, SyncService.MAX_FAMILIAS_IA_POR_IMPORTACION)) {
+            const fichasOriginales = grupo.skus.map(s => porSku.get(s)).filter((f): f is FalabellaProduct => !!f);
+            if (fichasOriginales.length < 2) continue;
+            const fichas: FichaParaIA[] = fichasOriginales.map(f => ({
+                sellerSku: sku0(f),
+                nombre: String(f.Name ?? ''),
+                variation: f.Variation ? String(f.Variation) : null,
+                atributos: Object.fromEntries(Object.entries(f.ProductData ?? {}).filter(([, v]) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 40).slice(0, 30).map(([k, v]) => [k, String(v)])),
+            }));
+            informe.intentadas++;
+            let propuesta: PropuestaDeEjes | null = null;
+            try { propuesta = await this.proponerEjesConIA(fichas); } catch (error: any) { console.warn(`[Sync] La IA no pudo proponer los ejes de ${grupo.parentSku}: ${error?.message}`); }
+
+            const r = validarPropuestaDeIA(fichas, propuesta);
+            if (r.plan) {
+                plan.grupos.push({ ...r.plan, parentSku: grupo.parentSku, name: nombreDelGrupo(fichasOriginales, r.plan.axes, r.plan.variants[0].values, grupo.parentSku) });
+                plan.sinResolver = plan.sinResolver.filter(g => g !== grupo);
+                informe.resueltas++;
+            } else {
+                grupo.motivo = `${grupo.motivo}. IA: ${r.motivo}`;
+                if (propuesta) grupo.sugerencia = { ejes: propuesta.ejes.map(e => e.nombre), valores: propuesta.valores, motivo: r.motivo ?? '' };
+            }
+        }
+        informe.pendientes = plan.sinResolver.length;
+    }
+
     /** Cuántas páginas públicas se leen en una importación: pocas peticiones; el resto queda para la siguiente. */
     private static readonly MAX_PAGINAS_POR_IMPORTACION = 40;
 
@@ -867,7 +917,7 @@ export class SyncService implements OnModuleInit {
         informe: { familias: number; leidas: number; resueltas: number; bloqueada: boolean; pendientes: number; sinDatos: { parentSku: string; motivo: string }[] },
     ) {
         if (!this.publicPage) return;
-        const sku = (f: FalabellaProduct) => String(f.SellerSku).trim();
+        const sku = sku0;
         const resueltos = new Set(plan.grupos.flatMap(g => g.variants.map(v => v.sellerSku)));
         const porResolver = familiasPorPagina(productos).filter(f => !f.fichas.every(x => resueltos.has(sku(x))));
         informe.familias = porResolver.length;
