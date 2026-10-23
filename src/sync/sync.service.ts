@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash } from 'crypto';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina } from './falabella/pagina-publica';
@@ -877,9 +878,9 @@ export class SyncService implements OnModuleInit {
         if (!this.proponerEjesConIA || !plan.sinResolver.length) return;
         const porSku = new Map(productos.map(p => [String(p.SellerSku).trim(), p]));
         const pendientes = [...plan.sinResolver];
-        for (const grupo of pendientes.slice(0, SyncService.MAX_FAMILIAS_IA_POR_IMPORTACION)) {
+        const tomar = async (grupo: (typeof pendientes)[number]) => {
             const fichasOriginales = grupo.skus.map(s => porSku.get(s)).filter((f): f is FalabellaProduct => !!f);
-            if (fichasOriginales.length < 2) continue;
+            if (fichasOriginales.length < 2) return;
             const fichas: FichaParaIA[] = fichasOriginales.map(f => ({
                 sellerSku: sku0(f),
                 nombre: String(f.Name ?? ''),
@@ -887,8 +888,7 @@ export class SyncService implements OnModuleInit {
                 atributos: Object.fromEntries(Object.entries(f.ProductData ?? {}).filter(([, v]) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 40).slice(0, 30).map(([k, v]) => [k, String(v)])),
             }));
             informe.intentadas++;
-            let propuesta: PropuestaDeEjes | null = null;
-            try { propuesta = await this.proponerEjesConIA(fichas); } catch (error: any) { console.warn(`[Sync] La IA no pudo proponer los ejes de ${grupo.parentSku}: ${error?.message}`); }
+            const propuesta = await this.propuestaDeIA(fichas, grupo.parentSku);
 
             const r = validarPropuestaDeIA(fichas, propuesta);
             if (r.plan) {
@@ -899,8 +899,28 @@ export class SyncService implements OnModuleInit {
                 grupo.motivo = `${grupo.motivo}. IA: ${r.motivo}`;
                 if (propuesta) grupo.sugerencia = { ejes: propuesta.ejes.map(e => e.nombre), valores: propuesta.valores, motivo: r.motivo ?? '' };
             }
-        }
+        };
+        // Varias familias a la vez (la IA tarda unos segundos por familia), sin pasarse de unas pocas en paralelo.
+        const lote = pendientes.slice(0, SyncService.MAX_FAMILIAS_IA_POR_IMPORTACION);
+        for (let i = 0; i < lote.length; i += 4) await Promise.all(lote.slice(i, i + 4).map(tomar));
         informe.pendientes = plan.sinResolver.length;
+    }
+
+    /** La propuesta de la IA para una familia, recordada una semana: la vista previa no repite las mismas consultas. */
+    private async propuestaDeIA(fichas: FichaParaIA[], parentSku: string): Promise<PropuestaDeEjes | null> {
+        const clave = 'ia-ejes:' + createHash('sha1').update(JSON.stringify(fichas)).digest('hex');
+        try {
+            const guardada = await this.redis.get(clave);
+            if (guardada) return JSON.parse(guardada) as PropuestaDeEjes;
+        } catch { /* sin caché se consulta de nuevo */ }
+        try {
+            const propuesta = await this.proponerEjesConIA!(fichas);
+            if (propuesta) { try { await this.redis.set(clave, JSON.stringify(propuesta), 'EX', 7 * 86_400); } catch { /* sin caché */ } }
+            return propuesta;
+        } catch (error: any) {
+            console.warn(`[Sync] La IA no pudo proponer los ejes de ${parentSku}: ${error?.message}`);
+            return null;
+        }
     }
 
     /** Cuántas páginas públicas se leen en una importación: pocas peticiones; el resto queda para la siguiente. */

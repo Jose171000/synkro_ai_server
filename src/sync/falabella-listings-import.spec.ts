@@ -484,6 +484,20 @@ describe('importFalabellaListings', () => {
                 expect(g.sugerencia?.ejes).toEqual(['Color']);
             });
 
+            it('la propuesta de la IA se recuerda: abrir la vista previa de nuevo no repite la consulta', async () => {
+                await construir(sinAtributos());
+                const memoria = new Map<string, string>();
+                (service as any).redis = { get: jest.fn(async (k: string) => memoria.get(k) ?? null), set: jest.fn(async (k: string, v: string) => { memoria.set(k, v); }) };
+                const proponer = jest.fn(async () => ({ ejes: [{ nombre: 'Color' }], valores: { 'S-ROSA': { Color: 'Rosa Pastel' }, 'S-NEGRO': { Color: 'Negro' } }, confianza: 'alta' as const }));
+                service.proponerEjesConIA = proponer;
+
+                await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+                const segunda = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                expect(proponer).toHaveBeenCalledTimes(1);
+                expect(segunda.variantes.grupos).toBe(1);
+            });
+
             it('si la IA falla, la familia pasa a la revisión manual sin romper la importación', async () => {
                 await construir(sinAtributos());
                 service.proponerEjesConIA = jest.fn(async () => { throw new Error('IA caída'); });

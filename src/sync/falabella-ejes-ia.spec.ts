@@ -44,6 +44,23 @@ describe('validarPropuestaDeIA', () => {
         expect(r.motivo).toMatch(/no aparece escrito.*no se puede comprobar/);
     });
 
+    it('un código del SKU que no es un color («PP») no se acepta aunque esté escrito en el SKU', () => {
+        const r = validarPropuestaDeIA(
+            [ficha('EDRDN-3PCS-T-PP', 'Set Edredón Reversible 3 Piezas'), ficha('EDRDN-3PCS-T-UVA', 'Set Edredón Reversible 3 Piezas')],
+            propuesta({ 'EDRDN-3PCS-T-PP': { Color: 'PP' }, 'EDRDN-3PCS-T-UVA': { Color: 'Uva' } }),
+        );
+        expect(r.plan).toBeNull();
+        expect(r.motivo).toMatch(/PP/);
+    });
+
+    it('un color escrito en palabras sí se acepta aunque en el SKU vaya pegado («BEIGECLARO» → «Beige claro»)', () => {
+        const r = validarPropuestaDeIA(
+            [ficha('EDRDN-3PCS-T-BEIGECLARO', 'Set Edredón Reversible'), ficha('EDRDN-3PCS-T-AZULACERO', 'Set Edredón Reversible')],
+            propuesta({ 'EDRDN-3PCS-T-BEIGECLARO': { Color: 'Beige claro' }, 'EDRDN-3PCS-T-AZULACERO': { Color: 'Azul acero' } }),
+        );
+        expect(r.plan!.axes[0].values).toEqual(['Beige claro', 'Azul acero']);
+    });
+
     it('rechaza si la IA dice que no está segura', () => {
         const r = validarPropuestaDeIA(fichas, propuesta({ 'BL-K-RPA': { Color: 'Rosa Pastel' }, 'BL-K-NGR': { Color: 'Negro' } }, { confianza: 'baja', motivo: 'títulos iguales' }));
         expect(r.plan).toBeNull();

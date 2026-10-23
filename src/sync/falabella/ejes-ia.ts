@@ -30,14 +30,29 @@ export type ProponerEjesConIA = (fichas: FichaParaIA[]) => Promise<PropuestaDeEj
 const limpio = (t: unknown) => (typeof t === 'string' || typeof t === 'number' ? String(t).trim().replace(/\s+/g, ' ').slice(0, 60) : '');
 const sinSeparadores = (t: string) => normalizar(t).replace(/[^a-z0-9]/g, '');
 
+/** Palabras de color (y sus modificadores) que se aceptan cuando el valor solo se apoya en el código del SKU. */
+const PALABRAS_DE_COLOR = new Set((
+    'blanco negro gris plomo plateado plata dorado oro beige crema marfil hueso arena cafe marron chocolate camel nude rojo vino burdeos guinda granate ' +
+    'rosa rosado fucsia palo pastel lila morado violeta uva lavanda purpura azul celeste turquesa acero marino petroleo aqua verde oliva menta musgo ' +
+    'amarillo mostaza naranja anaranjado coral cemento humo ceniza topo taupe claro oscuro suave intenso multicolor transparente natural cobre bronce'
+).split(' '));
+
+/** «Beige claro» y «Azul acero» son colores; «PP» o «TU» son códigos que no se pueden traducir con certeza. */
+function esValorDeColor(valor: string): boolean {
+    const palabras = normalizar(valor).split(/[^a-z0-9]+/).filter(Boolean);
+    return palabras.length > 0 && palabras.every((p) => PALABRAS_DE_COLOR.has(p));
+}
+
 /** El valor está escrito en los datos de la ficha (título, variación, atributos o SKU). */
 function respaldado(valor: string, ficha: FichaParaIA): boolean {
     const v = sinSeparadores(valor);
     if (!v) return false;
-    const textos = [ficha.nombre, ficha.variation ?? '', ...Object.values(ficha.atributos ?? {}), ficha.sellerSku].map(String);
+    const textos = [ficha.nombre, ficha.variation ?? '', ...Object.values(ficha.atributos ?? {})].map(String);
     // Un valor de una sola letra (talla S, M, L) solo vale como palabra completa: «s» está dentro de casi cualquier texto.
-    if (v.length < 2) return textos.some((t) => normalizar(t).split(/[^a-z0-9]+/).includes(v));
-    return textos.some((t) => sinSeparadores(t).includes(v));
+    const enTextos = v.length < 2 ? textos.some((t) => normalizar(t).split(/[^a-z0-9]+/).includes(v)) : textos.some((t) => sinSeparadores(t).includes(v));
+    if (enTextos) return true;
+    // Solo está en el código del SKU: vale únicamente si es un color reconocible («…-BEIGE»); un código como «PP» no se traduce.
+    return v.length >= 2 && sinSeparadores(ficha.sellerSku).includes(v) && esValorDeColor(valor);
 }
 
 export interface ResultadoDeValidacion {
