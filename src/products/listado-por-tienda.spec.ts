@@ -71,6 +71,22 @@ describe('lista de productos por tienda', () => {
         expect(error).toContain('EXISTS (SELECT 1 FROM products s WHERE s."groupId" = product."groupId"');
     });
 
+    it('el filtro por canal usa las publicaciones reales (no los canales de destino) y también las de las variantes', async () => {
+        const { servicio, llamadas } = construir();
+        await servicio.findAll({ userId: 'u1', storeId: 's1' }, { marketplace: 'Falabella' } as any);
+        const filtro = llamadas.donde.find((d) => d.includes('listing_links') && d.includes(':mp'))!;
+        expect(filtro).toContain("l.\"syncStatus\" <> 'removed'");
+        expect(filtro).toContain('EXISTS (SELECT 1 FROM products s WHERE s."groupId" = product."groupId"');
+        expect(llamadas.donde.some((d) => d.includes('targetMarketplaces'))).toBe(false);
+        expect(llamadas.params.find((p) => p && 'mp' in p)).toEqual({ mp: 'falabella' });
+    });
+
+    it('la exportación filtra por canal de la misma forma', async () => {
+        const { servicio, llamadas } = construir();
+        await servicio.findAllForExport({ userId: 'u1', storeId: 's1' }, { marketplace: 'mercadolibre' } as any);
+        expect(llamadas.donde.some((d) => d.includes('listing_links') && d.includes(':mp'))).toBe(true);
+    });
+
     it('el resumen cuenta con las mismas condiciones y devuelve números', async () => {
         const { servicio, qb } = construir();
         const r = await servicio.resumen({ userId: 'u1', storeId: 's1' });

@@ -119,6 +119,8 @@ export class ProductsService {
     private static readonly SIN_CATEGORIA = `COALESCE(NULLIF({p}."marketplaceIds"->>'falabella_category_id', ''), NULLIF({p}."marketplaceIds"->>'mercadolibre_category_id', ''), NULLIF({p}."aiAttributes"->>'mercadolibre_category_id', ''), NULLIF(TRIM({p}.category), '')) IS NULL`;
     private static readonly SIN_PUBLICAR = `NOT EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l."syncStatus" IN ('published', 'pending', 'paused'))`;
     private static readonly CON_ERROR = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l."syncStatus" = 'error')`;
+    /** El producto tiene una publicación real en ese canal (no una que se quitó). Es lo que filtra «Todos los canales». */
+    private static readonly EN_CANAL = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l.marketplace = :mp AND l."syncStatus" <> 'removed')`;
     private static readonly INCOMPLETO = `(NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = {p}.id) OR {p}.price IS NULL OR COALESCE(TRIM({p}.description), '') = '' OR ${ProductsService.SIN_CATEGORIA})`;
 
     /**
@@ -196,12 +198,8 @@ export class ProductsService {
         }
 
         // Marketplace filter — targetMarketplaces is a JSON/text[] column
-        if (marketplace) {
-            qb.andWhere(
-                `product.targetMarketplaces::text ILIKE :mp`,
-                { mp: `%${marketplace.toLowerCase()}%` },
-            );
-        }
+        // Por las publicaciones reales de cada canal (también las de las variantes de un grupo), no por los canales de destino.
+        if (marketplace) qb.andWhere(this.conVariantes(ProductsService.EN_CANAL), { mp: marketplace.toLowerCase() });
 
         if (category) {
             qb.andWhere('product.category ILIKE :category', { category: `%${category}%` });
@@ -357,12 +355,7 @@ export class ProductsService {
             );
         }
 
-        if (filters?.marketplace) {
-            qb.andWhere(
-                `product.targetMarketplaces::text ILIKE :mp`,
-                { mp: `%${filters.marketplace.toLowerCase()}%` },
-            );
-        }
+        if (filters?.marketplace) qb.andWhere(this.conVariantes(ProductsService.EN_CANAL), { mp: filters.marketplace.toLowerCase() });
 
         if (filters?.category) {
             qb.andWhere('product.category ILIKE :category', { category: `%${filters.category}%` });
