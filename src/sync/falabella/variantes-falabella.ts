@@ -24,7 +24,21 @@ export interface GrupoSinResolver {
     parentSku: string;
     skus: string[];
     motivo: string;
+    /** Qué traen las primeras fichas (variación y atributos), para entender por qué no se pudo resolver. */
+    pistas?: { sellerSku: string; variation: string | null; atributos: Record<string, string> }[];
 }
+
+/** Atributos de texto corto de una ficha, para mostrar en una pista (sin descripciones largas). */
+function atributosCortos(f: FalabellaProduct): Record<string, string> {
+    const salida: Record<string, string> = {};
+    for (const [k, v] of Object.entries(f.ProductData ?? {})) {
+        if ((typeof v === 'string' || typeof v === 'number') && String(v).length <= 40 && Object.keys(salida).length < 40) salida[k] = String(v);
+    }
+    return salida;
+}
+
+const pistasDe = (fichas: FalabellaProduct[]) =>
+    fichas.slice(0, 3).map((f) => ({ sellerSku: String(f.SellerSku).trim(), variation: f.Variation ? String(f.Variation).slice(0, 60) : null, atributos: atributosCortos(f) }));
 
 /** Atributos que suelen ser el eje de variación, en el orden en que se prefieren, y el nombre con que se muestran. */
 const FAMILIAS: { nombre: string; patron: RegExp }[] = [
@@ -146,7 +160,7 @@ export function planearGruposDeFalabella(productos: FalabellaProduct[]): { grupo
         }
 
         if (!sonUnicas()) {
-            sinResolver.push({ parentSku, skus, motivo: 'no se pudo determinar en qué se diferencian (color, talla…): revisa los atributos de variación en Falabella' });
+            sinResolver.push({ parentSku, skus, motivo: 'no se pudo determinar en qué se diferencian (color, talla…): revisa los atributos de variación en Falabella', pistas: pistasDe(fichas) });
             continue;
         }
 
