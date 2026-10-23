@@ -498,6 +498,26 @@ describe('importFalabellaListings', () => {
                 expect(segunda.variantes.grupos).toBe(1);
             });
 
+            it('lo que mostró la página de cada ficha (aunque no bastara) llega a la IA como evidencia', async () => {
+                const URL_Z = 'https://www.falabella.com.pe/falabella-pe/product/777/Zapatillas/778';
+                await construir([
+                    ficha({ SellerSku: 'Z-1', Name: 'Zapatillas Urbanas', ParentSku: 'Z', Url: URL_Z, ProductData: {} }),
+                    ficha({ SellerSku: 'Z-2', Name: 'Zapatillas Urbanas', ParentSku: 'Z', Url: URL_Z, ProductData: {} }),
+                ]);
+                // La página trae las variantes pero con la misma talla en ambas: no alcanza para armar el grupo.
+                (service as any).publicPage = { leer: jest.fn(async () => ({ ok: true, productId: '777', variantes: [
+                    { variantId: '1', sellerSkus: ['Z-1'], size: '42', colorName: null, colorCode: null, atributos: { size: '42', modelo: 'Runner' } },
+                    { variantId: '2', sellerSkus: ['Z-2'], size: '42', colorName: null, colorCode: null, atributos: { size: '42', modelo: 'Runner' } },
+                ] })) };
+                const proponer = jest.fn(async () => null);
+                service.proponerEjesConIA = proponer;
+
+                await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+                const fichas = (proponer.mock.calls[0] as any[])[0];
+                expect(fichas[0].atributos).toMatchObject({ pagina_size: '42', pagina_modelo: 'Runner' });
+            });
+
             it('si la IA falla, la familia pasa a la revisión manual sin romper la importación', async () => {
                 await construir(sinAtributos());
                 service.proponerEjesConIA = jest.fn(async () => { throw new Error('IA caída'); });

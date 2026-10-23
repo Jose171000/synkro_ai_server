@@ -566,6 +566,7 @@ ${lista}
 Reglas estrictas:
 - Usa SOLO lo que está escrito en el título, la variación, los atributos o el propio SKU. No inventes.
 - El valor de cada SKU debe aparecer escrito en SU ficha (título, variación, atributo o SKU). Escribe los valores como palabras normales («Azul acero», «Beige claro»), no como códigos pegados. Si un código del SKU no se puede traducir con certeza (por ejemplo «PP» o «TU»), NO lo traduzcas ni lo adivines: devuelve confianza "baja".
+- Los atributos que empiezan por «pagina_» son lo que muestra la página pública del marketplace para ESE SKU (talla, color…): son la mejor evidencia.
 - Un título que lista varios colores ("BLANCO / NEGRO / BEIGE") es el mismo para todas: no sirve por sí solo para asignar un color a un SKU.
 - Entre 1 y 3 ejes. Todos los SKU deben tener valor en todos los ejes y las combinaciones no pueden repetirse.
 - Si no hay certeza: confianza "baja" y explica por qué en "motivo".

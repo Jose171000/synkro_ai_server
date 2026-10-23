@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
-import { familiasPorPagina, planearGrupoDesdePagina } from './falabella/pagina-publica';
+import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
 import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
@@ -834,8 +834,10 @@ export class SyncService implements OnModuleInit {
         // Las fichas que son variantes de un mismo producto (mismo ParentSku) se agrupan con sus ejes; la vista previa
         // (dryRun) solo cuenta cómo quedarían.
         const plan = planearGruposDeFalabella(productos);
-        await this.completarConPaginaPublica(productos, plan, resumen.variantes.paginaPublica);
-        await this.completarConIA(productos, plan, resumen.variantes.ia);
+        // Lo que dijo la página de cada ficha (aunque no bastara para armar el grupo) también le sirve a la IA como evidencia.
+        const datosDePagina = new Map<string, Record<string, string>>();
+        await this.completarConPaginaPublica(productos, plan, resumen.variantes.paginaPublica, datosDePagina);
+        await this.completarConIA(productos, plan, resumen.variantes.ia, datosDePagina);
         resumen.variantes.grupos = plan.grupos.length;
         resumen.variantes.variantes = plan.grupos.reduce((n, g) => n + g.variants.length, 0);
         resumen.variantes.sinResolver = plan.sinResolver;
@@ -874,6 +876,7 @@ export class SyncService implements OnModuleInit {
         productos: FalabellaProduct[],
         plan: ReturnType<typeof planearGruposDeFalabella>,
         informe: { intentadas: number; resueltas: number; pendientes: number },
+        datosDePagina: Map<string, Record<string, string>> = new Map(),
     ) {
         if (!this.proponerEjesConIA || !plan.sinResolver.length) return;
         const porSku = new Map(productos.map(p => [String(p.SellerSku).trim(), p]));
@@ -885,7 +888,11 @@ export class SyncService implements OnModuleInit {
                 sellerSku: sku0(f),
                 nombre: String(f.Name ?? ''),
                 variation: f.Variation ? String(f.Variation) : null,
-                atributos: Object.fromEntries(Object.entries(f.ProductData ?? {}).filter(([, v]) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 40).slice(0, 30).map(([k, v]) => [k, String(v)])),
+                atributos: {
+                    ...Object.fromEntries(Object.entries(f.ProductData ?? {}).filter(([, v]) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 40).slice(0, 30).map(([k, v]) => [k, String(v)])),
+                    // Lo que mostró la página pública de esta ficha (talla, color…), si se pudo leer.
+                    ...Object.fromEntries(Object.entries(datosDePagina.get(sku0(f)) ?? {}).map(([k, v]) => [`pagina_${k}`, v])),
+                },
             }));
             informe.intentadas++;
             const propuesta = await this.propuestaDeIA(fichas, grupo.parentSku);
@@ -944,6 +951,7 @@ export class SyncService implements OnModuleInit {
         productos: FalabellaProduct[],
         plan: ReturnType<typeof planearGruposDeFalabella>,
         informe: { familias: number; leidas: number; resueltas: number; bloqueada: boolean; pendientes: number; sinDatos: { parentSku: string; motivo: string }[] },
+        datosDePagina: Map<string, Record<string, string>> = new Map(),
     ) {
         if (!this.publicPage) return;
         const sku = sku0;
@@ -955,6 +963,14 @@ export class SyncService implements OnModuleInit {
             const lectura = await this.publicPage.leer(familia.url);
             if (lectura.bloqueada) { informe.bloqueada = true; break; }
             informe.leidas++;
+            if (lectura.ok) {
+                const porSkuDePagina = new Map<string, VarianteDePagina>();
+                for (const v of lectura.variantes) for (const s of v.sellerSkus) porSkuDePagina.set(skuComparable(s), v);
+                for (const f of familia.fichas) {
+                    const v = porSkuDePagina.get(skuComparable(sku(f)));
+                    if (v && Object.keys(v.atributos).length) datosDePagina.set(sku(f), v.atributos);
+                }
+            }
 
             const frecuencia = new Map<string, number>();
             for (const f of familia.fichas) { const p = String(f.ParentSku ?? '').trim(); if (p) frecuencia.set(p, (frecuencia.get(p) ?? 0) + 1); }
