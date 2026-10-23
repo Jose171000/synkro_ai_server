@@ -1,4 +1,4 @@
-import { agruparVentas } from './ganadoras';
+import { agruparVentas, direccionDePublicacion } from './ganadoras';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
@@ -193,6 +193,7 @@ export class DashboardInsightsService {
         const enlaces = productos.length
             ? await this.listings.find({ where: { product: { id: In(productos.map(p => p.id)) } }, relations: { product: true } })
             : [];
+        const enlacesPlanos = enlaces.map(e => ({ productId: e.product.id, marketplace: e.marketplace, permalink: e.permalink ?? null, syncStatus: e.syncStatus }));
         const fotoPorProducto = new Map<string, string>();
         for (const e of enlaces) if (e.imageUrl && !fotoPorProducto.has(e.product.id)) fotoPorProducto.set(e.product.id, e.imageUrl);
 
@@ -208,8 +209,8 @@ export class DashboardInsightsService {
                 unidades,
                 importe: redondear(Number(f.importe)),
                 /** Canal donde más ingresó este producto (con su porcentaje) y todos los canales donde se vendió. */
-                canal: f.canal,
-                canales: f.canales,
+                canal: f.canal ? { ...f.canal, url: producto ? direccionDePublicacion(enlacesPlanos, producto.id, f.canal.marketplace) : null } : null,
+                canales: f.canales.map(c => ({ ...c, url: producto ? direccionDePublicacion(enlacesPlanos, producto.id, c.marketplace) : null })),
                 stock,
                 diasDeStock,
                 imagen: producto ? (fotoPorProducto.get(producto.id) ?? producto.images?.[0]?.url ?? null) : null,

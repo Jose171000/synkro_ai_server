@@ -1,4 +1,4 @@
-import { agruparVentas } from './ganadoras';
+import { agruparVentas, direccionDePublicacion } from './ganadoras';
 
 /**
  * Productos ganadores: por defecto ordenados por ingresos; el canal más fuerte de cada producto sale de lo que ingresó
@@ -50,5 +50,24 @@ describe('agruparVentas', () => {
         const r = agruparVentas([fila('', 'falabella', 5, 50), fila('A', 'falabella', 1, 10), fila('A', 'falabella', 1, 10)], 5);
         expect(r).toHaveLength(1);
         expect(r[0]).toMatchObject({ sku: 'A', unidades: 2, importe: 20 });
+    });
+});
+
+describe('direccionDePublicacion', () => {
+    const e = (marketplace: string, permalink: string | null, syncStatus = 'published', productId = 'p1') => ({ productId, marketplace, permalink, syncStatus });
+
+    it('devuelve la dirección de la publicación en ese canal', () => {
+        expect(direccionDePublicacion([e('falabella', 'https://www.falabella.com.pe/x'), e('mercadolibre', 'https://articulo.mercadolibre.com.pe/y')], 'p1', 'falabella')).toBe('https://www.falabella.com.pe/x');
+    });
+
+    it('con varias cuentas prefiere la publicada', () => {
+        expect(direccionDePublicacion([e('mercadolibre', 'https://ml/pausada', 'paused'), e('mercadolibre', 'https://ml/activa', 'published')], 'p1', 'mercadolibre')).toBe('https://ml/activa');
+    });
+
+    it('sin dirección, de otro producto o que no sea https devuelve null', () => {
+        expect(direccionDePublicacion([e('falabella', null)], 'p1', 'falabella')).toBeNull();
+        expect(direccionDePublicacion([e('falabella', 'https://f', 'published', 'otro')], 'p1', 'falabella')).toBeNull();
+        expect(direccionDePublicacion([e('falabella', 'javascript:alert(1)')], 'p1', 'falabella')).toBeNull();
+        expect(direccionDePublicacion([e('falabella', 'http://inseguro')], 'p1', 'falabella')).toBeNull();
     });
 });

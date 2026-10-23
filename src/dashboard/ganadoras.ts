@@ -69,3 +69,20 @@ export function agruparVentas(filas: FilaDeVenta[], tope = 10): VentaDeProducto[
     for (const v of [...porImporte, ...porUnidades]) elegidos.set(v.sku, v);
     return [...elegidos.values()].sort((a, b) => b.importe - a.importe || b.unidades - a.unidades);
 }
+
+export interface EnlaceDePublicacion {
+    productId: string;
+    marketplace: string;
+    permalink: string | null;
+    syncStatus: string;
+}
+
+/**
+ * La dirección de la publicación de un producto en un canal. Si hay varias cuentas, se prefiere la publicada; solo se
+ * devuelven direcciones web (https) para que el botón nunca lleve a otra cosa.
+ */
+export function direccionDePublicacion(enlaces: EnlaceDePublicacion[], productId: string, marketplace: string): string | null {
+    const candidatos = enlaces.filter((e) => e.productId === productId && e.marketplace === marketplace && /^https:\/\//i.test(String(e.permalink ?? '')));
+    const elegido = candidatos.find((e) => e.syncStatus === 'published') ?? candidatos[0];
+    return elegido ? String(elegido.permalink) : null;
+}
