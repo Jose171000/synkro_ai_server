@@ -1,3 +1,4 @@
+import { agruparVentas } from './ganadoras';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
@@ -161,9 +162,11 @@ export class DashboardInsightsService {
      * que más conviene reponer y no dejar de publicar.
      */
     private async ganadoras(scope: { userId: string; storeId: string }) {
-        const filas: { sku: string; title: string; unidades: string; importe: string }[] = await this.orders.query(
+        // Por SKU y canal: de ahí sale el canal donde más ingresó cada producto.
+        const crudas: { sku: string; title: string; marketplace: string; unidades: string; importe: string }[] = await this.orders.query(
             `SELECT it->>'sku' AS sku,
                     MAX(it->>'title') AS title,
+                    o.marketplace AS marketplace,
                     SUM(COALESCE((it->>'quantity')::numeric, 1)) AS unidades,
                     SUM(COALESCE((it->>'quantity')::numeric, 1) * COALESCE((it->>'unitPrice')::numeric, 0)) AS importe
                FROM marketplace_orders o,
@@ -171,12 +174,13 @@ export class DashboardInsightsService {
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '30 days'
                 AND COALESCE(it->>'sku', '') <> ''
-              GROUP BY it->>'sku'
-              ORDER BY unidades DESC, importe DESC
-              LIMIT 5`,
+              GROUP BY it->>'sku', o.marketplace`,
             [scope.storeId],
         );
-        if (!filas.length) return [];
+        // Los 10 que más ingresaron y los 10 que más unidades vendieron: la pantalla ordena por cualquiera de los dos.
+        const ventas = agruparVentas(crudas.map(f => ({ sku: f.sku, title: f.title, marketplace: f.marketplace, unidades: Number(f.unidades), importe: Number(f.importe) })), 10);
+        if (!ventas.length) return [];
+        const filas = ventas.map(v => ({ sku: v.sku, title: v.title, unidades: String(v.unidades), importe: String(v.importe), canal: v.canal, canales: v.canales }));
 
         const skus = filas.map(f => f.sku);
         const productos = await this.products.find({
@@ -203,6 +207,9 @@ export class DashboardInsightsService {
                 nombre: producto?.name ?? f.title,
                 unidades,
                 importe: redondear(Number(f.importe)),
+                /** Canal donde más ingresó este producto (con su porcentaje) y todos los canales donde se vendió. */
+                canal: f.canal,
+                canales: f.canales,
                 stock,
                 diasDeStock,
                 imagen: producto ? (fotoPorProducto.get(producto.id) ?? producto.images?.[0]?.url ?? null) : null,
