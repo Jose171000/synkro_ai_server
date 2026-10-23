@@ -152,3 +152,62 @@ describe('FalabellaVariantImportService', () => {
         expect(r.omitidos[0].motivo).toMatch(/menos de dos/);
     });
 });
+
+describe('agrupar a mano (último recurso)', () => {
+    function construir(productosEnTienda: any[]) {
+        const grupos: any[] = [];
+        const qb: any = {};
+        qb.where = jest.fn(() => qb);
+        qb.andWhere = jest.fn(() => qb);
+        qb.getMany = jest.fn(async () => productosEnTienda);
+        const productos: any = {
+            createQueryBuilder: jest.fn(() => qb),
+            find: jest.fn(async () => productosEnTienda.map((p) => ({ id: p.id, group: null }))),
+            update: jest.fn(async () => undefined),
+        };
+        const repoGrupos: any = {
+            find: jest.fn(async () => grupos),
+            create: jest.fn((d: any) => ({ ...d })),
+            save: jest.fn(async (g: any) => { if (!g.id) { g.id = 'g1'; grupos.push(g); } return g; }),
+        };
+        return { servicio: new FalabellaVariantImportService(productos, repoGrupos), productos, grupos };
+    }
+    const scope = { userId: 'u1', storeId: 's1' };
+    const enTienda = [{ id: 'p1', sku: 'CN-26-RO' }, { id: 'p2', sku: 'CN-26-UV' }];
+    const entrada = (over: any = {}) => ({
+        parentSku: 'CN-26', name: 'Edredón Importado', axes: ['Color'],
+        variants: [{ sellerSku: 'CN-26-RO', values: { Color: 'Rosa' } }, { sellerSku: 'CN-26-UV', values: { Color: 'Uva' } }],
+        ...over,
+    });
+
+    it('crea el grupo con el eje y los valores que definió la persona, sin tocar fotos ni precio', async () => {
+        const { servicio, productos, grupos } = construir(enTienda);
+        const r = await servicio.agruparManual(scope, entrada());
+        expect(r).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
+        expect(grupos[0]).toMatchObject({ name: 'Edredón Importado', parentSku: 'CN-26', axes: [{ name: 'Color', values: ['Rosa', 'Uva'] }] });
+        expect(productos.update).toHaveBeenCalledWith('p1', { group: { id: 'g1' }, variantValues: { Color: 'Rosa' } });
+        for (const [, datos] of productos.update.mock.calls) expect(Object.keys(datos).sort()).toEqual(['group', 'variantValues']);
+    });
+
+    it('rechaza dos variantes con la misma combinación', async () => {
+        const { servicio } = construir(enTienda);
+        await expect(servicio.agruparManual(scope, entrada({ variants: [{ sellerSku: 'CN-26-RO', values: { Color: 'Rosa' } }, { sellerSku: 'CN-26-UV', values: { Color: 'rosa' } }] }))).rejects.toThrow(/misma combinación/);
+    });
+
+    it('rechaza una variante sin valor en algún eje', async () => {
+        const { servicio } = construir(enTienda);
+        await expect(servicio.agruparManual(scope, entrada({ variants: [{ sellerSku: 'CN-26-RO', values: { Color: 'Rosa' } }, { sellerSku: 'CN-26-UV', values: {} }] }))).rejects.toThrow(/Falta un valor válido de "Color"/);
+    });
+
+    it('rechaza si algún SKU no está en la tienda y dice cuál', async () => {
+        const { servicio } = construir([enTienda[0]]);
+        await expect(servicio.agruparManual(scope, entrada())).rejects.toThrow(/CN-26-UV/);
+    });
+
+    it('rechaza ejes vacíos o repetidos y menos de dos variantes', async () => {
+        const { servicio } = construir(enTienda);
+        await expect(servicio.agruparManual(scope, entrada({ axes: [] }))).rejects.toThrow(/de 1 a 3 ejes/);
+        await expect(servicio.agruparManual(scope, entrada({ axes: ['Color', 'color'] }))).rejects.toThrow(/de 1 a 3 ejes/);
+        await expect(servicio.agruparManual(scope, entrada({ variants: [{ sellerSku: 'CN-26-RO', values: { Color: 'Rosa' } }] }))).rejects.toThrow(/al menos dos/);
+    });
+});

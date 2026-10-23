@@ -23,6 +23,8 @@ import { WebPriceDto } from './dto/web-price.dto';
 import { PromoDto } from './dto/promo.dto';
 import { ChannelActionDto } from './dto/channel-action.dto';
 import { ListingActionsService } from './listing-actions.service';
+import { FalabellaVariantImportService } from './falabella-variant-import.service';
+import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 
@@ -47,6 +49,7 @@ export class SyncController {
         private readonly ecommerce: EcommerceSyncService,
         private readonly sheets: ProductSheetService,
         private readonly listingActions: ListingActionsService,
+        private readonly variantImport: FalabellaVariantImportService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -332,6 +335,19 @@ export class SyncController {
         const result = await this.syncService.updateInventory(scopeOf(req), id, dto);
         if ('pending' in result) res.status(HttpStatus.ACCEPTED);
         return result;
+    }
+
+    @Post('falabella/variants/group')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
+    @ApiOperation({
+        summary: 'Agrupa a mano productos ya importados como variantes (nombre, ejes y valor de cada SKU)',
+        description: 'Último recurso cuando ni la página pública de Falabella ni la IA pudieron determinar los ejes. No toca fotos, precio ni stock.',
+    })
+    groupVariantsManually(@Body() dto: ManualVariantGroupDto, @Req() req) {
+        return this.variantImport.agruparManual(scopeOf(req), dto);
     }
 
     @Post('products/:id/channels/:action')
