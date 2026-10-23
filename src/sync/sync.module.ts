@@ -6,6 +6,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { SyncController } from './sync.controller';
 import { ListingActionsService } from './listing-actions.service';
 import { ProductOverviewService } from './product-overview.service';
+import { FalabellaVariantImportService } from './falabella-variant-import.service';
+import { ProductGroup } from '../products/entities/product-group.entity';
 import { StoreMember } from '../stores/entities/store-member.entity';
 import { SaleAlertsService } from './sale-alerts.service';
 import { ProductSheetService } from './product-sheet.service';
@@ -32,13 +34,13 @@ import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, User, Store, StoreMember]),
+        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, ProductGroup, User, Store, StoreMember]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
         NotificationsModule,
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService],
 })
 export class SyncModule { }

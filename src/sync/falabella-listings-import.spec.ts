@@ -350,4 +350,51 @@ describe('importFalabellaListings', () => {
 
         expect(repoProductos.update).toHaveBeenCalledWith('p-viejo', { store: { id: 'tienda-1' } });
     });
+
+    describe('variantes (mismo ParentSku)', () => {
+        const variantes = () => [
+            ficha({ SellerSku: 'SAB-BE', ShopSku: 'S1', Name: 'Sábanas Royal Beige', ParentSku: 'SAB-ROYAL', ProductData: { Color: 'Beige' }, MainImage: 'https://img/beige.jpg' }),
+            ficha({ SellerSku: 'SAB-BL', ShopSku: 'S2', Name: 'Sábanas Royal Blanco', ParentSku: 'SAB-ROYAL', ProductData: { Color: 'Blanco' }, MainImage: 'https://img/blanco.jpg' }),
+        ];
+
+        it('la vista previa cuenta los grupos y sus ejes sin crear nada', async () => {
+            await construir(variantes());
+            const aplicar = jest.fn();
+            (service as any).variantImport = { aplicar };
+
+            const resumen = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+            expect(resumen.variantes.grupos).toBe(1);
+            expect(resumen.variantes.variantes).toBe(2);
+            expect(resumen.variantes.ejemplos[0]).toMatchObject({ parentSku: 'SAB-ROYAL', variantes: 2, ejes: [{ name: 'Color', values: ['Beige', 'Blanco'] }] });
+            expect(aplicar).not.toHaveBeenCalled();
+            expect(productos).toHaveLength(0);
+        });
+
+        it('al importar de verdad, cada variante conserva su propia foto y se agrupan juntas', async () => {
+            await construir(variantes());
+            const aplicar = jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] }));
+            (service as any).variantImport = { aplicar };
+
+            const resumen = await service.importFalabellaListings(SCOPE, undefined);
+
+            expect(productos.map(p => [p.sku, p.images[0].url])).toEqual([['SAB-BE', 'https://img/beige.jpg'], ['SAB-BL', 'https://img/blanco.jpg']]);
+            expect(aplicar).toHaveBeenCalledTimes(1);
+            const [, grupos, porSku] = aplicar.mock.calls[0] as any[];
+            expect(grupos[0].variants.map((v: any) => v.sellerSku)).toEqual(['SAB-BE', 'SAB-BL']);
+            expect([...porSku.keys()]).toEqual(['SAB-BE', 'SAB-BL']);
+            expect(resumen.variantes.aplicado).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
+        });
+
+        it('productos sueltos no forman grupos y no se llama a agrupar', async () => {
+            await construir([ficha({ SellerSku: 'A', ParentSku: 'A' }), ficha({ SellerSku: 'B', ParentSku: 'B' })]);
+            const aplicar = jest.fn();
+            (service as any).variantImport = { aplicar };
+
+            const resumen = await service.importFalabellaListings(SCOPE, undefined);
+
+            expect(resumen.variantes.grupos).toBe(0);
+            expect(aplicar).not.toHaveBeenCalled();
+        });
+    });
 });

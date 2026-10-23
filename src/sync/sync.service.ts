@@ -1,6 +1,8 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
+import { planearGruposDeFalabella } from './falabella/variantes-falabella';
+import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -145,6 +147,7 @@ export class SyncService implements OnModuleInit {
         private readonly changeRequests: ChangeRequestsService,
         private readonly stores: StoresService,
         private readonly saleAlerts: SaleAlertsService,
+        @Optional() private readonly variantImport?: FalabellaVariantImportService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -673,6 +676,7 @@ export class SyncService implements OnModuleInit {
 
         let sumaNotas = 0;
         let conNota = 0;
+        const vinculados = new Map<string, Product>();
 
         const resumen = {
             total: productos.length,
@@ -682,6 +686,14 @@ export class SyncService implements OnModuleInit {
             /** Fichas cuyo SKU ya existe en otra tienda tuya: no se tocan. */
             enOtraTienda: 0,
             incompleto,
+            /** Fichas que son variantes de un mismo producto (mismo ParentSku): cómo quedarían agrupadas. */
+            variantes: {
+                grupos: 0,
+                variantes: 0,
+                ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
+                sinResolver: [] as { parentSku: string; skus: string[]; motivo: string }[],
+                aplicado: null as ResultadoDeAgrupar | null,
+            },
             porEstado: {} as Record<string, number>,
             /** Media de la nota de calidad que pone Falabella. */
             notaMedia: null as number | null,
@@ -801,7 +813,19 @@ export class SyncService implements OnModuleInit {
                 : null as any;
 
             await this.listingLinkRepository.save(enlace);
+            vinculados.set(sku, product);
             resumen.enlazadas++;
+        }
+
+        // Las fichas que son variantes de un mismo producto (mismo ParentSku) se agrupan con sus ejes; la vista previa
+        // (dryRun) solo cuenta cómo quedarían.
+        const plan = planearGruposDeFalabella(productos);
+        resumen.variantes.grupos = plan.grupos.length;
+        resumen.variantes.variantes = plan.grupos.reduce((n, g) => n + g.variants.length, 0);
+        resumen.variantes.sinResolver = plan.sinResolver;
+        resumen.variantes.ejemplos = plan.grupos.slice(0, 8).map(g => ({ parentSku: g.parentSku, nombre: g.name, ejes: g.axes, variantes: g.variants.length }));
+        if (!options.dryRun && this.variantImport && plan.grupos.length) {
+            resumen.variantes.aplicado = await this.variantImport.aplicar(scope, plan.grupos, vinculados);
         }
 
         resumen.notaMedia = conNota > 0 ? Math.round(sumaNotas / conNota) : null;
