@@ -480,7 +480,7 @@ describe('importFalabellaListings', () => {
                 expect(resumen.variantes.ia.resueltas).toBe(0);
                 const g = resumen.variantes.sinResolver[0];
                 expect(g.motivo).toMatch(/IA:.*no se puede comprobar/);
-                expect(g.fichas).toEqual([{ sku: 'S-ROSA', nombre: 'Sábana King Rosa Pastel' }, { sku: 'S-NEGRO', nombre: 'Sábana King Negro' }]);
+                expect(g.fichas).toEqual([{ sku: 'S-ROSA', nombre: 'Sábana King Rosa Pastel', imagen: null }, { sku: 'S-NEGRO', nombre: 'Sábana King Negro', imagen: null }]);
                 expect(g.sugerencia?.ejes).toEqual(['Color']);
             });
 

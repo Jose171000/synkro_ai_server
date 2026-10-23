@@ -4,7 +4,7 @@ import { createHash } from 'crypto';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina } from './falabella/pagina-publica';
-import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, validarPropuestaDeIA } from './falabella/ejes-ia';
+import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
@@ -897,7 +897,16 @@ export class SyncService implements OnModuleInit {
                 informe.resueltas++;
             } else {
                 grupo.motivo = `${grupo.motivo}. IA: ${r.motivo}`;
-                if (propuesta) grupo.sugerencia = { ejes: propuesta.ejes.map(e => e.nombre), valores: propuesta.valores, motivo: r.motivo ?? '' };
+                if (propuesta) {
+                    // Solo se sugiere lo que tiene respaldo en la ficha: un código del SKU («BGT») no sirve de punto de partida.
+                    const valores: Record<string, Record<string, string>> = {};
+                    for (const f of fichas) {
+                        for (const [eje, v] of Object.entries(propuesta.valores?.[f.sellerSku] ?? {})) {
+                            if (typeof v === 'string' && respaldado(v, f)) (valores[f.sellerSku] ??= {})[eje] = v;
+                        }
+                    }
+                    grupo.sugerencia = { ejes: propuesta.ejes.map(e => e.nombre), valores, motivo: r.motivo ?? '' };
+                }
             }
         };
         // Varias familias a la vez (la IA tarda unos segundos por familia), sin pasarse de unas pocas en paralelo.

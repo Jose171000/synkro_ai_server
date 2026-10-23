@@ -1,4 +1,4 @@
-import { FalabellaProduct } from './falabella-api.service';
+import { FalabellaProduct, imagenesDeFicha } from './falabella-api.service';
 import { EjeDeVariacion } from '../../products/entities/product-group.entity';
 import { MAX_EJES, MAX_VARIANTES, claveDeCombinacion, normalizar } from '../../products/variantes';
 
@@ -29,7 +29,7 @@ export interface GrupoSinResolver {
     /** Qué traen las primeras fichas (variación y atributos), para entender por qué no se pudo resolver. */
     pistas?: { sellerSku: string; variation: string | null; atributos: Record<string, string> }[];
     /** Las fichas de la familia (SKU y título), para estructurarlas a mano. */
-    fichas?: { sku: string; nombre: string }[];
+    fichas?: { sku: string; nombre: string; /** Foto principal de la ficha: ayuda a decidir el valor de cada variante. */ imagen: string | null }[];
     /** Lo que propuso la IA y no se pudo comprobar: sirve de sugerencia al estructurar a mano. */
     sugerencia?: { ejes: string[]; valores: Record<string, Record<string, string>>; motivo: string };
 }
@@ -43,7 +43,7 @@ function atributosCortos(f: FalabellaProduct): Record<string, string> {
     return salida;
 }
 
-export const fichasDe = (fichas: FalabellaProduct[]) => fichas.slice(0, 100).map((f) => ({ sku: String(f.SellerSku).trim(), nombre: String(f.Name ?? '').slice(0, 160) }));
+export const fichasDe = (fichas: FalabellaProduct[]) => fichas.slice(0, 100).map((f) => ({ sku: String(f.SellerSku).trim(), nombre: String(f.Name ?? '').slice(0, 160), imagen: imagenesDeFicha(f)[0] ?? null }));
 
 const pistasDe = (fichas: FalabellaProduct[]) =>
     fichas.slice(0, 3).map((f) => ({ sellerSku: String(f.SellerSku).trim(), variation: f.Variation ? String(f.Variation).slice(0, 60) : null, atributos: atributosCortos(f) }));

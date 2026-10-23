@@ -44,7 +44,7 @@ function esValorDeColor(valor: string): boolean {
 }
 
 /** El valor está escrito en los datos de la ficha (título, variación, atributos o SKU). */
-function respaldado(valor: string, ficha: FichaParaIA): boolean {
+export function respaldado(valor: string, ficha: FichaParaIA): boolean {
     const v = sinSeparadores(valor);
     if (!v) return false;
     const textos = [ficha.nombre, ficha.variation ?? '', ...Object.values(ficha.atributos ?? {})].map(String);
