@@ -47,7 +47,9 @@ export function planearGruposDeMeli(items: any[]): { grupos: PlanDeGrupo[]; sinR
             sinResolver.push({
                 parentSku: String(item.id),
                 skus: filas.map((f) => f.sku),
-                motivo: `la publicación tiene ${variaciones.length} variaciones pero solo ${filas.length} con SKU: ponles un SKU a cada una en Mercado Libre para poder agruparlas`,
+                motivo: `tiene ${variaciones.length} variaciones pero solo ${filas.length} con SKU: ponles un SKU a cada una en Mercado Libre para poder agruparlas`,
+                enlace: texto(item.permalink),
+                titulo: String(item.title ?? '').slice(0, 120),
             });
             continue;
         }

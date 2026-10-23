@@ -30,6 +30,10 @@ export interface GrupoSinResolver {
     pistas?: { sellerSku: string; variation: string | null; atributos: Record<string, string> }[];
     /** Las fichas de la familia (SKU y título), para estructurarlas a mano. */
     fichas?: { sku: string; nombre: string; /** Foto principal de la ficha: ayuda a decidir el valor de cada variante. */ imagen: string | null }[];
+    /** Dirección de la publicación en el canal, para abrirla y corregirla allí (cuando no hay nada que estructurar aquí). */
+    enlace?: string | null;
+    /** Título de la publicación. */
+    titulo?: string;
     /** Lo que propuso la IA y no se pudo comprobar: sirve de sugerencia al estructurar a mano. */
     sugerencia?: { ejes: string[]; valores: Record<string, Record<string, string>>; motivo: string };
 }
