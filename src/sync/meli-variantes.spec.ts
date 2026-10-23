@@ -53,9 +53,11 @@ describe('planearGruposDeMeli', () => {
         expect(planearGruposDeMeli([item([]), item([variacion(1, 'A', [['Color', 'Rojo']])])]).grupos).toEqual([]);
     });
 
-    it('las variaciones sin SKU no cuentan; con menos de dos con SKU no hay grupo', () => {
-        const { grupos } = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, '', [['Color', 'Azul']])])]);
+    it('las variaciones sin SKU no cuentan; con menos de dos con SKU no hay grupo y se avisa', () => {
+        const { grupos, sinResolver } = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, '', [['Color', 'Azul']])])]);
         expect(grupos).toEqual([]);
+        expect(sinResolver[0]).toMatchObject({ parentSku: 'MPE900' });
+        expect(sinResolver[0].motivo).toMatch(/2 variaciones pero solo 1 con SKU/);
         const dos = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, 'B', [['Color', 'Azul']]), variacion(3, '', [['Color', 'Verde']])])]);
         expect(dos.grupos[0].variants.map((v) => v.sellerSku)).toEqual(['A', 'B']);
     });

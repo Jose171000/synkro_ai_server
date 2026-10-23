@@ -42,7 +42,15 @@ export function planearGruposDeMeli(items: any[]): { grupos: PlanDeGrupo[]; sinR
         const filas: (MeliListingRow & { valores: Record<string, string> })[] = rows
             .filter((r) => r.variationId)
             .map((r) => ({ ...r, valores: valoresPorVariacion.get(String(r.variationId)) ?? {} }));
-        if (filas.length < 2) continue; // las variaciones sin SKU no se pueden enlazar
+        if (filas.length < 2) {
+            // Las variaciones sin SKU no se pueden enlazar con un producto de Synkro: se avisa en vez de ignorarlas.
+            sinResolver.push({
+                parentSku: String(item.id),
+                skus: filas.map((f) => f.sku),
+                motivo: `la publicación tiene ${variaciones.length} variaciones pero solo ${filas.length} con SKU: ponles un SKU a cada una en Mercado Libre para poder agruparlas`,
+            });
+            continue;
+        }
 
         const parentSku = String(item.id);
         const falla = (motivo: string) => sinResolver.push({
