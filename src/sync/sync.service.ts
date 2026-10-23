@@ -3201,6 +3201,8 @@ export class SyncService implements OnModuleInit {
                 ejemplos: [] as { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[],
                 sinResolver: [] as GrupoSinResolver[],
                 aplicado: null as ResultadoDeAgrupar | null,
+                /** Qué campos de familia o de variación traen las publicaciones (para decidir cómo agruparlas). */
+                diagnostico: null as any,
             },
         };
         const vinculadosMeli = new Map<string, Product>();
@@ -3256,6 +3258,28 @@ export class SyncService implements OnModuleInit {
 
         // Las publicaciones con variaciones se agrupan con el eje y el valor que Mercado Libre da a cada una.
         const planMeli = planearGruposDeMeli(items);
+        {
+            const claves = new Map<string, number>();
+            const familias = new Map<string, { n: number; titulos: string[]; skus: string[] }>();
+            for (const it of items as any[]) {
+                for (const k of Object.keys(it ?? {})) if (/family|user_product|variation|catalog|parent/i.test(k) && it[k] !== null && it[k] !== undefined && it[k] !== '' && !(Array.isArray(it[k]) && !it[k].length)) claves.set(k, (claves.get(k) ?? 0) + 1);
+                const fam = it?.family_id ?? it?.family_name ?? it?.user_product_id;
+                if (fam) {
+                    const f = familias.get(String(fam)) ?? { n: 0, titulos: [], skus: [] };
+                    f.n++; if (f.titulos.length < 3) f.titulos.push(String(it.title ?? '').slice(0, 70));
+                    const sku = it?.seller_custom_field ?? (it?.attributes ?? []).find((a: any) => a?.id === 'SELLER_SKU')?.value_name;
+                    if (sku && f.skus.length < 4) f.skus.push(String(sku));
+                    familias.set(String(fam), f);
+                }
+            }
+            resumen.variantes.diagnostico = {
+                publicaciones: (items as any[]).length,
+                camposPresentes: Object.fromEntries(claves),
+                familiasConVarias: [...familias.entries()].filter(([, f]) => f.n >= 2).length,
+                muestraDeFamilias: [...familias.entries()].filter(([, f]) => f.n >= 2).slice(0, 5).map(([id, f]) => ({ id, ...f })),
+                muestraDeCampos: (items as any[]).slice(0, 1).map((it) => Object.keys(it ?? {}).filter((k) => /family|user_product|catalog|parent|domain|tags/i.test(k))),
+            };
+        }
         resumen.variantes.grupos = planMeli.grupos.length;
         resumen.variantes.variantes = planMeli.grupos.reduce((n, g) => n + g.variants.length, 0);
         resumen.variantes.sinResolver = planMeli.sinResolver;
