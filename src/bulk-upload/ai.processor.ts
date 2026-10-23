@@ -6,6 +6,7 @@ import { SyncService } from '../sync/sync.service';
 import { FalabellaAutoPrepService } from '../ai/falabella-auto-prep.service';
 import { InternalServerErrorException } from '@nestjs/common';
 import { BatchNotificationService, BatchMeta } from './batch-notification.service';
+import { CuentasElegidas, cuentasParaPublicar, leerCuentasElegidas } from '../sync/cuentas-elegidas';
 
 @Processor('generate-listings-queue')
 export class AiProcessor extends WorkerHost {
@@ -26,6 +27,7 @@ export class AiProcessor extends WorkerHost {
         // Varias fotos por producto; los trabajos anteriores traían una sola.
         const imagenes: string[] = job.data.imageUrls ?? (imageUrl ? [imageUrl] : []);
         const publishTo: string[] = job.data.publishTo ?? [];
+        const cuentas = leerCuentasElegidas(job.data.cuentas);
 
         const batchMeta: BatchMeta | undefined = job.data.batchId ? {
             batchId:    job.data.batchId,
@@ -75,12 +77,12 @@ export class AiProcessor extends WorkerHost {
             console.log(`[AiProcessor] ✓ Job ${job.id} done -> Product ${updatedProduct.id}`);
 
             // 4. Publicación automática en los canales conectados (los errores no tumban el producto).
-            await this.publicar(updatedProduct.id, publishTo, { userId, storeId }, batchMeta?.batchId);
+            await this.publicar(updatedProduct.id, publishTo, { userId, storeId }, batchMeta?.batchId, cuentas);
 
             // Track batch progress — notify user when all jobs in this upload are done
             if (batchMeta) {
                 const terminado = await this.batchNotification.trackAndNotify(batchMeta, true);
-                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId });
+                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId }, cuentas);
             }
 
             return { status: 'completed', productId: updatedProduct.id };
@@ -91,7 +93,7 @@ export class AiProcessor extends WorkerHost {
             // Track failed job too — batch must still complete
             if (batchMeta) {
                 const terminado = await this.batchNotification.trackAndNotify(batchMeta, false);
-                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId });
+                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId }, cuentas);
             }
 
             throw new InternalServerErrorException('Error processing AI background job');
@@ -109,7 +111,7 @@ export class AiProcessor extends WorkerHost {
      * publicación (50 seguidas y luego 2 minutos entre cada una), así que sus productos se anotan
      * y se mandan juntos, en un solo envío, cuando el lote termina.
      */
-    private async publicar(productId: string, canales: string[], scope: { userId: string; storeId?: string }, batchId?: string) {
+    private async publicar(productId: string, canales: string[], scope: { userId: string; storeId?: string }, batchId?: string, elegidas: CuentasElegidas = {}) {
         if (!scope.storeId || !canales.length) return;
         for (const canal of canales) {
             try {
@@ -117,7 +119,7 @@ export class AiProcessor extends WorkerHost {
                     await this.batchNotification.deferPublish(batchId, 'falabella', productId);
                     continue;
                 }
-                for (const connectionId of await this.cuentasDe(scope.storeId, canal)) {
+                for (const connectionId of cuentasParaPublicar(await this.cuentasDe(scope.storeId, canal), elegidas[canal])) {
                     await this.syncService.enqueuePublish({ userId: scope.userId, storeId: scope.storeId }, productId, [canal], { [canal]: connectionId });
                 }
             } catch (error: any) {
@@ -127,12 +129,13 @@ export class AiProcessor extends WorkerHost {
     }
 
     /** Un solo envío a Falabella con todo lo del lote. Lo hace quien cierra el lote. */
-    private async publicarFalabellaDelLote(batchId: string, canales: string[], scope: { userId: string; storeId?: string }) {
+    private async publicarFalabellaDelLote(batchId: string, canales: string[], scope: { userId: string; storeId?: string }, elegidas: CuentasElegidas = {}) {
         if (!scope.storeId || !canales.includes('falabella')) return;
         try {
             const ids = await this.batchNotification.takeDeferred(batchId, 'falabella');
             if (!ids.length) return;
-            const cuentas = await this.cuentasDe(scope.storeId, 'falabella');
+            const cuentas = cuentasParaPublicar(await this.cuentasDe(scope.storeId, 'falabella'), elegidas['falabella']);
+            if (!cuentas.length) return;
             // Cada producto se deja listo para Falabella (marca contra su catálogo, atributos, medidas, descripción HTML)
             // antes de enviar el lote; si uno falla se envía igual y el motivo queda en su ficha.
             // De a 4 a la vez: son varias llamadas a la IA por producto y un lote grande tardaría demasiado de a uno.

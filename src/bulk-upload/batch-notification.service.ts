@@ -21,6 +21,27 @@ export class BatchNotificationService {
         private readonly mailService: MailService,
     ) {}
 
+    /** Anota un lote nuevo: quién lo subió y cuántos productos lleva, para poder mostrar su avance. */
+    async iniciar(batchId: string, total: number, userId: string): Promise<void> {
+        const key = `batch:${batchId}`;
+        await this.redis.hsetnx(key, 'total', String(total));
+        await this.redis.hsetnx(key, 'processed', '0');
+        await this.redis.hsetnx(key, 'failed', '0');
+        await this.redis.hsetnx(key, 'owner', userId);
+        await this.redis.expire(key, this.TTL_SECONDS);
+    }
+
+    /** Avance de un lote (solo para quien lo subió). null si no existe o ya caducó. */
+    async progreso(batchId: string, userId: string): Promise<{ total: number; processed: number; failed: number; terminado: boolean } | null> {
+        const datos = await this.redis.hgetall(`batch:${batchId}`);
+        if (!datos || !datos.total) return null;
+        if (datos.owner && datos.owner !== userId) return null;
+        const total = Number(datos.total);
+        const processed = Number(datos.processed ?? 0);
+        const failed = Number(datos.failed ?? 0);
+        return { total, processed, failed, terminado: processed + failed >= total };
+    }
+
     /**
      * Called by a processor after each job completes (success or failure).
      * Increments the batch counter and fires an email when the batch is done.
@@ -62,7 +83,8 @@ export class BatchNotificationService {
         // Batch complete — send email and cleanup
         const completo = processedN + failedN >= totalN;
         if (completo) {
-            await this.redis.del(key);
+            // Se conserva una hora (no se borra): la pantalla todavía puede mostrar el resultado final.
+            await this.redis.expire(key, 3600);
 
             try {
                 await this.mailService.sendJobCompleted(

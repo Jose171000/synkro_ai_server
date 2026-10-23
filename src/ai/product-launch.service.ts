@@ -3,6 +3,7 @@ import { SyncScope, SyncService } from '../sync/sync.service';
 import { FalabellaAutoPrepService, FalabellaPrepReport } from './falabella-auto-prep.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
+import { CuentasElegidas, cuentasParaPublicar } from '../sync/cuentas-elegidas';
 
 export interface LaunchChannelResult {
     marketplace: string;
@@ -39,14 +40,21 @@ export class ProductLaunchService {
         private readonly canales: ChannelAttributesService,
     ) { }
 
-    async lanzar(scope: SyncScope, productId: string, marketplaces: string[]): Promise<LaunchReport> {
+    /** `elegidas`: las cuentas de cada canal donde la persona quiere publicar; sin ella se usan todas las activas. */
+    async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}): Promise<LaunchReport> {
         const pedidos = [...new Set(marketplaces.map((m) => m.toLowerCase()))].filter((m) => CANALES.includes(m));
         const reporte: LaunchReport = { channels: [], estimatedMeli: [] };
 
         const cuentas = (await this.sync.getConnections(scope.storeId)).filter((c: any) => c.status === 'active');
 
         for (const canal of pedidos) {
-            const delCanal = cuentas.filter((c: any) => c.marketplace === canal);
+            const activasDelCanal = cuentas.filter((c: any) => c.marketplace === canal);
+            const idsAElegir = cuentasParaPublicar(activasDelCanal.map((c: any) => c.id), elegidas[canal]);
+            const delCanal = activasDelCanal.filter((c: any) => idsAElegir.includes(c.id));
+            if (activasDelCanal.length && !delCanal.length) {
+                reporte.channels.push({ marketplace: canal, accounts: 0, status: 'omitido', message: `La cuenta elegida de ${NOMBRE[canal]} ya no está activa: elige otra.` });
+                continue;
+            }
             if (!delCanal.length) {
                 reporte.channels.push({ marketplace: canal, accounts: 0, status: 'omitido', message: `Esta tienda no tiene una cuenta activa de ${NOMBRE[canal]}.` });
                 continue;

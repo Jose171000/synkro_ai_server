@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsBoolean, IsObject, IsOptional, IsString } from 'class-validator';
+import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
@@ -31,6 +32,11 @@ class LaunchDto {
     @ArrayNotEmpty()
     @IsString({ each: true })
     marketplaces: string[];
+
+    /** Cuentas elegidas por canal: { mercadolibre: [idCuenta, …] }. Sin ella se publica en todas las cuentas activas. */
+    @IsOptional()
+    @IsObject()
+    connectionIds?: Record<string, string[]>;
 }
 
 @ApiTags('ai')
@@ -83,7 +89,7 @@ export class FalabellaPrepController {
             'Lo que la IA estimó queda marcado para revisarlo desde la ficha.',
     })
     launchProduct(@Param('id') id: string, @Body() dto: LaunchDto, @Req() req) {
-        return this.launch.lanzar({ userId: req.user.id, storeId: req.store.storeId }, id, dto.marketplaces);
+        return this.launch.lanzar({ userId: req.user.id, storeId: req.store.storeId }, id, dto.marketplaces, leerCuentasElegidas(dto.connectionIds));
     }
 
     @Post('products/:id/update-falabella')

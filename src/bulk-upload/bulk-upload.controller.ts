@@ -1,7 +1,7 @@
 import {
     Controller, Post, Get,
     UseInterceptors, UploadedFile, UploadedFiles, Res,
-    BadRequestException,
+    BadRequestException, NotFoundException, Param,
     HttpCode, HttpStatus, UseGuards, Req,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/platform-express';
@@ -24,6 +24,8 @@ import { SyncService } from '../sync/sync.service';
 import { ProductsService } from '../products/products.service';
 import { SkuGeneratorService } from '../products/sku-generator.service';
 import { StoresService } from '../stores/stores.service';
+import { BatchNotificationService } from './batch-notification.service';
+import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
 /** Canales donde la carga masiva puede publicar sola. */
@@ -45,6 +47,7 @@ export class BulkUploadController {
         private readonly productsService: ProductsService,
         private readonly stores: StoresService,
         private readonly skuGenerator: SkuGeneratorService,
+        private readonly batchNotification: BatchNotificationService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -248,6 +251,9 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             // 3) A la cola. El total del lote se calcula antes: todos los trabajos conocen el mismo valor.
             const batchId = randomUUID();
             const batchTotal = listas.length;
+            if (batchTotal) await this.batchNotification.iniciar(batchId, batchTotal, req.user.id);
+            // Cuentas elegidas por canal (si la tienda tiene varias): { mercadolibre: [idCuenta] }. Sin elección, todas las activas.
+            const cuentas = leerCuentasElegidas(req.body?.cuentas);
             for (const { fila, urls } of listas) {
                 await this.listingsQueue.add('process-product', {
                     sku: fila.sku,
@@ -261,6 +267,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                     targetMarketplaces: fila.canales,
                     // Se publica solo donde la tienda tiene cuenta conectada.
                     publishTo: fila.canales.filter(t => conectados.includes(t)),
+                    cuentas,
                     storeId,
                     userId:     req.user.id,
                     userEmail:  req.user.email,
@@ -276,6 +283,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
 
             return {
                 message: `${batchTotal} productos encolados. ${rows.length - batchTotal} filas rechazadas.`,
+                batchId: batchTotal ? batchId : undefined,
                 totalQueued: batchTotal,
                 totalSkipped: rows.length - batchTotal,
                 zipImagesLoaded: zipEntries.size,
@@ -291,6 +299,14 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     // ─────────────────────────────────────────────────────────────
     // POST /bulk-upload/products/edit — Bulk EDIT own products
     // ─────────────────────────────────────────────────────────────
+    @Get('products/progress/:batchId')
+    @ApiOperation({ summary: 'Avance de una carga masiva de productos (cuántos van listos y cuántos fallaron)' })
+    async progresoDeLaCarga(@Param('batchId') batchId: string, @Req() req) {
+        const p = await this.batchNotification.progreso(batchId, req.user.id);
+        if (!p) throw new NotFoundException('No se encontró esa carga (puede haber caducado).');
+        return p;
+    }
+
     @Post('products/edit')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiOperation({
