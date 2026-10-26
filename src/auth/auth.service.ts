@@ -44,6 +44,15 @@ export class AuthService {
       throw new ConflictException('El email ya está registrado');
     }
 
+    // Con código de invitación el registro es el de una persona del equipo de una tienda, no el de una empresa nueva.
+    let invitacion: Awaited<ReturnType<StoresService['invitacionParaRegistro']>> = null;
+    if (registerDto.invitationToken) {
+      invitacion = await this.storesService.invitacionParaRegistro(registerDto.invitationToken, email);
+      if (!invitacion) {
+        throw new BadRequestException('La invitación no es válida, ya caducó o es para otro correo. Pide una nueva al dueño de la tienda.');
+      }
+    }
+
     // El rol nunca viene del cliente. Solo los correos declarados en
     // ADMIN_EMAILS nacen como admin; el resto son usuarios normales.
     const adminEmails = (process.env.ADMIN_EMAILS || '')
@@ -59,15 +68,16 @@ export class AuthService {
       lastName: registerDto.lastName,
       email,
       password: registerDto.password,
-      nameCompany: registerDto.nameCompany,
+      nameCompany: invitacion ? invitacion.store.name : registerDto.nameCompany,
       cellPhone: registerDto.cellPhone,
       country: registerDto.country,
       url: registerDto.url,
       role,
-    }, esAdmin ? { approvalStatus: 'approved', approvedAt: new Date() } : { approvalStatus: 'pending' });
+    }, esAdmin || invitacion ? { approvalStatus: 'approved', approvedAt: new Date() } : { approvalStatus: 'pending' });
 
-    // Datos de la empresa: quedan en su perfil comercial para revisarlos al aprobar.
-    await this.profileRepository.save(this.profileRepository.create({
+    // Datos de la empresa: quedan en su perfil comercial para revisarlos al aprobar. Una persona invitada es del equipo
+    // de una tienda que ya existe: no es un cliente nuevo y no se le crea perfil de empresa.
+    if (!invitacion) await this.profileRepository.save(this.profileRepository.create({
       user: { id: user.id } as any,
       ruc: registerDto.ruc,
       businessName: registerDto.businessName,
@@ -77,17 +87,20 @@ export class AuthService {
       status: 'activo',
     })).catch(err => console.error('[AuthService] No se pudo guardar el perfil de la empresa:', err.message));
 
-    // Si su correo tenía una invitación a una tienda, la cuenta nace «por
-    // invitación»: entra a esa tienda pero no puede crear tiendas propias, y
-    // como la invitó el dueño de una tienda no espera aprobación.
+    // Si su correo tenía una invitación a una tienda la cuenta nace «por invitación» (no puede crear tiendas propias).
+    // Saltarse la aprobación manual exige el código de la invitación (arriba); el correo solo no basta.
     // No debe impedir el registro si esta comprobación falla.
-    const invitado = await this.storesService.flagIfInvited(user.id, user.email).catch(err => {
+    await this.storesService.flagIfInvited(user.id, user.email).catch(err => {
       console.error('[AuthService] No se pudo comprobar la invitación:', err.message);
-      return false;
     });
-    if (invitado && user.approvalStatus === 'pending') {
-      await this.userService.setApproval(user.id, 'approved');
-      user.approvalStatus = 'approved';
+
+    // La invitación se acepta aquí mismo: la persona entra ya con la tienda activa.
+    let tiendaInvitada: { storeId: string; name: string; role: string } | null = null;
+    if (invitacion && registerDto.invitationToken) {
+      tiendaInvitada = await this.storesService.acceptInvitation(user.id, registerDto.invitationToken).catch(err => {
+        console.error('[AuthService] No se pudo aceptar la invitación al registrarse:', err.message);
+        return null;
+      });
     }
 
     if (user.approvalStatus === 'pending') {
@@ -122,6 +135,7 @@ export class AuthService {
     return {
       user: this.sanitizeUser(user),
       ...tokens,
+      ...(tiendaInvitada ? { invitedStore: tiendaInvitada } : {}),
     };
   }
 

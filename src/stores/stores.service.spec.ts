@@ -189,6 +189,30 @@ describe('invitaciones', () => {
         expect(repoMiembros.save).not.toHaveBeenCalled();
     });
 
+    it('quien abre el enlace sin cuenta ve la tienda, el rol, quién invita y el correo a usar', async () => {
+        const { service } = construir({ ...base, invitaciones: [invitacion({ invitedBy: { name: 'Ana', lastName: 'Ríos' } })] });
+        await expect(service.describirInvitacion('codigo-largo-de-prueba-1234')).resolves.toMatchObject({
+            storeName: 'Tienda A', role: 'editor', inviterName: 'Ana Ríos', email: 'luz@x.com',
+        });
+    });
+
+    it('un código inventado, caducado o usado no revela nada', async () => {
+        const { service } = construir({ ...base, invitaciones: [invitacion()] });
+        await expect(service.describirInvitacion('otro-codigo-cualquiera-12345')).rejects.toBeInstanceOf(NotFoundException);
+        const vencida = construir({ ...base, invitaciones: [invitacion({ expiresAt: new Date(Date.now() - 1000) })] });
+        await expect(vencida.service.describirInvitacion('codigo-largo-de-prueba-1234')).rejects.toBeInstanceOf(NotFoundException);
+        const usada = construir({ ...base, invitaciones: [invitacion({ acceptedAt: new Date() })] });
+        await expect(usada.service.describirInvitacion('codigo-largo-de-prueba-1234')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('el registro de invitado solo vale con el código y el correo invitado', async () => {
+        const { service } = construir({ ...base, invitaciones: [invitacion()] });
+        await expect(service.invitacionParaRegistro('codigo-largo-de-prueba-1234', ' LUZ@x.com ')).resolves.toMatchObject({ role: 'editor' });
+        await expect(service.invitacionParaRegistro('codigo-largo-de-prueba-1234', 'otra@x.com')).resolves.toBeNull();
+        await expect(service.invitacionParaRegistro('codigo-incorrecto', 'luz@x.com')).resolves.toBeNull();
+        await expect(service.invitacionParaRegistro('', 'luz@x.com')).resolves.toBeNull();
+    });
+
     it('un código inventado no sirve', async () => {
         const { service } = construir({ ...base, invitaciones: [invitacion()] });
         await expect(service.acceptInvitation('luz', 'otro-codigo-cualquiera-12345')).rejects.toBeInstanceOf(BadRequestException);

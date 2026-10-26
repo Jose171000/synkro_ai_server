@@ -85,6 +85,12 @@ export class StoresController {
 export class PublicStoresController {
     constructor(private readonly stores: StoresService) { }
 
+    @Get('invitations/:token')
+    @ApiOperation({ summary: 'Datos de una invitación (tienda, rol, quién invita y correo) para quien aún no tiene cuenta' })
+    invitation(@Param('token') token: string) {
+        return this.stores.describirInvitacion(token);
+    }
+
     @Get(':token')
     @ApiOperation({ summary: 'Información general de una tienda por su enlace público (sin login)' })
     summary(@Param('token') token: string) {

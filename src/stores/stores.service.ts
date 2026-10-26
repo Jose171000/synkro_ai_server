@@ -327,6 +327,44 @@ export class StoresService {
      * Acepta una invitación. Solo sirve para el correo al que se envió: si el
      * enlace se reenvía a otra persona, esa persona no entra.
      */
+    /** La invitación vigente (sin aceptar y sin caducar) de ese código, o null. */
+    private async invitacionVigente(token: string): Promise<StoreInvitation | null> {
+        if (!token) return null;
+        const invitation = await this.invitations.findOne({
+            where: { tokenHash: sha256(token) },
+            relations: { store: true, invitedBy: true },
+        });
+        if (!invitation || invitation.acceptedAt || invitation.expiresAt < new Date()) return null;
+        return invitation;
+    }
+
+    /**
+     * Lo que ve quien abre el enlace de invitación antes de tener cuenta: a qué tienda, con qué rol, quién lo invitó y con
+     * qué correo debe registrarse. Quien tiene el código es quien recibió el correo, así que se le muestra su propio correo.
+     */
+    async describirInvitacion(token: string) {
+        const invitation = await this.invitacionVigente(token);
+        if (!invitation) throw new NotFoundException('La invitación no es válida o ya caducó. Pide una nueva al dueño de la tienda.');
+        const quien = invitation.invitedBy;
+        return {
+            storeName: invitation.store.name,
+            role: invitation.role,
+            inviterName: [quien?.name, quien?.lastName].filter(Boolean).join(' ') || null,
+            email: invitation.email,
+            expiresAt: invitation.expiresAt,
+        };
+    }
+
+    /**
+     * Para el registro de una persona invitada: devuelve la invitación si el código es vigente y el correo es el invitado.
+     * Es la única prueba que salta la aprobación manual de cuentas (el correo solo no basta).
+     */
+    async invitacionParaRegistro(token: string, email: string): Promise<StoreInvitation | null> {
+        const invitation = await this.invitacionVigente(token);
+        if (!invitation || invitation.email !== (email ?? '').trim().toLowerCase()) return null;
+        return invitation;
+    }
+
     async acceptInvitation(userId: string, token: string) {
         const invitation = await this.invitations.findOne({
             where: { tokenHash: sha256(token ?? '') },
