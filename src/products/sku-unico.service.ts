@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 export const INDICE_SKU_POR_TIENDA = 'UQ_product_sku_store';
 export const INDICE_SKU_SIN_TIENDA = 'UQ_product_sku_owner_sin_tienda';
 const RESTRICCION_ANTIGUA = 'UQ_product_sku_owner';
+export const RESTRICCION_SKU_NO_VACIO = 'CHK_product_sku_no_vacio';
 
 /**
  * Garantiza en la base de datos que un SKU no se repite dentro de una tienda, sin distinguir mayúsculas ni espacios
@@ -27,6 +28,7 @@ export class SkuUnicoService implements OnApplicationBootstrap {
     async onApplicationBootstrap(): Promise<void> {
         try {
             await this.aplicar();
+            await this.aplicarNoVacio();
         } catch (error: any) {
             // Nunca debe impedir que el servidor arranque.
             this.logger.warn(`No se pudo comprobar la unicidad del SKU: ${error?.message}`);
@@ -53,6 +55,31 @@ export class SkuUnicoService implements OnApplicationBootstrap {
         await this.dataSource.query(`ALTER TABLE "products" DROP CONSTRAINT IF EXISTS "${RESTRICCION_ANTIGUA}"`);
         this.logger.log('Unicidad del SKU garantizada por tienda en la base de datos.');
         return { aplicado: true, repetidos: [] };
+    }
+
+    /**
+     * Un producto no puede tener el SKU vacío (sin SKU no se enlaza con ningún canal). La regla se crea en la base solo
+     * cuando ya no queda ninguno así: con una restricción activa, cualquier actualización de un producto sin SKU (su stock,
+     * por ejemplo) sería rechazada. Mientras haya alguno se avisa en el registro con sus nombres y se reintenta al arrancar.
+     */
+    async aplicarNoVacio(): Promise<{ aplicado: boolean; sinSku: { id: string; name: string }[] }> {
+        const sinSku: { id: string; name: string }[] = await this.dataSource.query(
+            `SELECT "id", "name" FROM "products" WHERE btrim("sku") = '' OR "sku" IS NULL ORDER BY "name" LIMIT 50`,
+        );
+        if (sinSku.length) {
+            const nombres = sinSku.slice(0, 10).map(p => `${p.name} [${p.id}]`).join(', ');
+            this.logger.warn(
+                `Hay productos sin SKU (${sinSku.length}): ${nombres}. ` +
+                `Ponles un SKU y reinicia el servidor para activar la regla de SKU no vacío.`,
+            );
+            return { aplicado: false, sinSku };
+        }
+        const existe: unknown[] = await this.dataSource.query(`SELECT 1 FROM pg_constraint WHERE conname = $1`, [RESTRICCION_SKU_NO_VACIO]);
+        if (!existe.length) {
+            await this.dataSource.query(`ALTER TABLE "products" ADD CONSTRAINT "${RESTRICCION_SKU_NO_VACIO}" CHECK (btrim("sku") <> '')`);
+            this.logger.log('Regla de SKU no vacío activada en la base de datos.');
+        }
+        return { aplicado: true, sinSku: [] };
     }
 
     /** SKU que se repiten dentro de su ámbito: la tienda, o el dueño para los productos sin tienda. */
