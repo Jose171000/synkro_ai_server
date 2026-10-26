@@ -1,7 +1,7 @@
 import { EjeDeVariacion } from '../../products/entities/product-group.entity';
 import { MAX_EJES, MAX_VARIANTES, claveDeCombinacion, normalizar } from '../../products/variantes';
 import { GrupoSinResolver, PlanDeGrupo } from '../falabella/variantes-falabella';
-import { filasDeItemMeli, MeliListingRow } from './meli-listings';
+import { filasDeItemMeli, MeliListingRow, OpcionesDeFilasMeli } from './meli-listings';
 
 /**
  * Cómo se agrupan en Synkro las variaciones de una publicación de Mercado Libre.
@@ -29,7 +29,7 @@ export function valoresDeVariacion(variacion: any): Record<string, string> {
     return salida;
 }
 
-export function planearGruposDeMeli(items: any[]): { grupos: PlanDeGrupo[]; sinResolver: GrupoSinResolver[] } {
+export function planearGruposDeMeli(items: any[], opciones: OpcionesDeFilasMeli = {}): { grupos: PlanDeGrupo[]; sinResolver: GrupoSinResolver[] } {
     const grupos: PlanDeGrupo[] = [];
     const sinResolver: GrupoSinResolver[] = [];
 
@@ -37,17 +37,17 @@ export function planearGruposDeMeli(items: any[]): { grupos: PlanDeGrupo[]; sinR
         const variaciones: any[] = Array.isArray(item?.variations) ? item.variations : [];
         if (variaciones.length < 2) continue; // sin variaciones es un producto simple
 
-        const { rows } = filasDeItemMeli(item);
+        const { rows } = filasDeItemMeli(item, opciones);
         const valoresPorVariacion = new Map(variaciones.map((v) => [String(v?.id), valoresDeVariacion(v)]));
         const filas: (MeliListingRow & { valores: Record<string, string> })[] = rows
             .filter((r) => r.variationId)
             .map((r) => ({ ...r, valores: valoresPorVariacion.get(String(r.variationId)) ?? {} }));
-        if (filas.length < 2) {
-            // Las variaciones sin SKU no se pueden enlazar con un producto de Synkro: se avisa en vez de ignorarlas.
+        if (filas.length < variaciones.length) {
+            // Lo que no tiene SKU no se importa, y un producto con variantes a medias engaña: se agrupa solo si están todas.
             sinResolver.push({
                 parentSku: String(item.id),
                 skus: filas.map((f) => f.sku),
-                motivo: `tiene ${variaciones.length} variaciones pero solo ${filas.length} con SKU: ponles un SKU a cada una en Mercado Libre para poder agruparlas`,
+                motivo: `${variaciones.length - filas.length} de sus ${variaciones.length} variaciones no tienen SKU: ponles un SKU a cada una en Mercado Libre, o importa pidiendo que Synkro los genere`,
                 enlace: texto(item.permalink),
                 titulo: String(item.title ?? '').slice(0, 120),
             });

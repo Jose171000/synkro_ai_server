@@ -557,8 +557,9 @@ export class SyncController {
     })
     @ApiQuery({ name: 'dryRun', required: false, type: Boolean })
     @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta de Mercado Libre; obligatoria si la tienda tiene varias.' })
-    importMeliListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string) {
-        return this.syncService.importMeliListings(scopeOf(req), connectionId, { dryRun: dryRun === 'true' });
+    @ApiQuery({ name: 'generarSku', required: false, type: Boolean, description: 'Synkro da un SKU propio a lo que no tiene en Mercado Libre (sin esto, lo que no tiene SKU no se importa). No cambia nada en Mercado Libre.' })
+    importMeliListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string, @Query('generarSku') generarSku?: string) {
+        return this.syncService.importMeliListings(scopeOf(req), connectionId, { dryRun: dryRun === 'true', generarSku: generarSku === 'true' });
     }
 
     @Post('listings/refresh')

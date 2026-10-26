@@ -33,6 +33,43 @@ export interface MeliListingRow {
     tipo?: string | null;
     sincronizadaCon?: string | null;
     currency: string | null;
+    /** El SKU no venía de Mercado Libre: lo generó Synkro porque la persona lo pidió al importar. */
+    skuGenerado?: boolean;
+}
+
+export interface OpcionesDeFilasMeli {
+    /** Da un SKU propio a lo que no lo tiene en Mercado Libre. Por defecto no: lo que no tiene SKU no se importa. */
+    generarSku?: boolean;
+}
+
+/** SKU que Synkro asigna a una publicación (o variación) sin SKU: siempre el mismo, para que importar de nuevo no cree duplicados. */
+export function skuGeneradoMeli(externalId: string, variationId?: string | null): string {
+    return variationId ? `${externalId}-${variationId}` : externalId;
+}
+
+export interface PublicacionSinSku {
+    externalId: string;
+    titulo: string;
+    enlace: string | null;
+    /** Cuántas variaciones (o 1 si es una publicación simple) no tienen SKU. */
+    sinSku: number;
+    /** Cuántas variaciones tiene en total (1 si es simple). */
+    total: number;
+}
+
+/** Las publicaciones que tienen algo sin SKU, para que la persona sepa exactamente cuáles corregir en Mercado Libre. */
+export function publicacionesSinSku(items: any[]): PublicacionSinSku[] {
+    const salida: PublicacionSinSku[] = [];
+    for (const item of items ?? []) {
+        const externalId = texto(item?.id);
+        if (!externalId) continue;
+        const variaciones: any[] = Array.isArray(item?.variations) ? item.variations : [];
+        const total = variaciones.length || 1;
+        const sinSku = variaciones.length ? variaciones.filter((v) => !skuDe(v)).length : (skuDe(item) ? 0 : 1);
+        if (!sinSku) continue;
+        salida.push({ externalId, titulo: (texto(item?.title) ?? externalId).slice(0, 120), enlace: texto(item?.permalink), sinSku, total });
+    }
+    return salida;
 }
 
 const texto = (v: any): string | null => {
@@ -76,7 +113,7 @@ export function estadoDeItemMeli(item: any): MeliListingRow['status'] {
     return 'pending'; // under_review, payment_required...
 }
 
-export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: number } {
+export function filasDeItemMeli(item: any, opciones: OpcionesDeFilasMeli = {}): { rows: MeliListingRow[]; sinSku: number } {
     const externalId = texto(item?.id);
     if (!externalId) return { rows: [], sinSku: 0 };
 
@@ -113,13 +150,15 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
 
     const variantes: any[] = Array.isArray(item?.variations) ? item.variations : [];
     if (!variantes.length) {
-        const sku = skuDe(item);
-        if (!sku) return { rows: [], sinSku: 1 };
+        const propio = skuDe(item);
+        if (!propio && !opciones.generarSku) return { rows: [], sinSku: 1 };
+        const sku = propio ?? skuGeneradoMeli(externalId);
         return {
             sinSku: 0,
             rows: [{
                 ...base,
                 sku,
+                skuGenerado: !propio,
                 variationId: null,
                 variation: null,
                 regularPrice: enOferta ? original : precio,
@@ -135,8 +174,9 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
     const rows: MeliListingRow[] = [];
     let sinSku = 0;
     for (const v of variantes) {
-        const sku = skuDe(v);
-        if (!sku) { sinSku++; continue; }
+        const propio = skuDe(v);
+        if (!propio && !opciones.generarSku) { sinSku++; continue; }
+        const sku = propio ?? skuGeneradoMeli(externalId, texto(v?.id));
 
         const propias = (Array.isArray(v?.picture_ids) ? v.picture_ids : [])
             .map((id: any) => porId.get(String(id)))
@@ -153,6 +193,7 @@ export function filasDeItemMeli(item: any): { rows: MeliListingRow[]; sinSku: nu
         rows.push({
             ...base,
             sku,
+            skuGenerado: !propio,
             variationId: texto(v?.id),
             variation: descripcion,
             regularPrice: ofertaVar ? originalVar : precioVar,

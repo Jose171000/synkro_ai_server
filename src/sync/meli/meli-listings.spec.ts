@@ -1,4 +1,4 @@
-import { estadoDeItemMeli, filasDeItemMeli, limpiarSkuMeli } from './meli-listings';
+import { estadoDeItemMeli, filasDeItemMeli, publicacionesSinSku, limpiarSkuMeli } from './meli-listings';
 
 /**
  * Las publicaciones de Mercado Libre se leen «una fila por SKU». Lo que se
@@ -34,6 +34,31 @@ describe('publicación sin variantes', () => {
         const r = filasDeItemMeli({ ...simple, seller_custom_field: null, attributes: [] });
         expect(r.rows).toEqual([]);
         expect(r.sinSku).toBe(1);
+    });
+
+    it('si se pide, Synkro genera el SKU de una publicación simple y lo marca como generado', () => {
+        const r = filasDeItemMeli({ ...simple, seller_custom_field: null, attributes: [] }, { generarSku: true });
+        expect(r.sinSku).toBe(0);
+        expect(r.rows[0]).toMatchObject({ sku: simple.id, skuGenerado: true });
+    });
+
+    it('el SKU generado de una variación incluye su id y es siempre el mismo', () => {
+        const item = { ...simple, seller_custom_field: null, variations: [{ id: 77, attribute_combinations: [] }, { id: 78, seller_custom_field: 'PROPIO', attribute_combinations: [] }] };
+        const a = filasDeItemMeli(item, { generarSku: true }).rows;
+        const b = filasDeItemMeli(item, { generarSku: true }).rows;
+        expect(a.map((f) => f.sku)).toEqual([`${simple.id}-77`, 'PROPIO']);
+        expect(a.map((f) => f.skuGenerado)).toEqual([true, false]);
+        expect(b.map((f) => f.sku)).toEqual(a.map((f) => f.sku));
+    });
+
+    it('lista qué publicaciones tienen algo sin SKU y cuántas variaciones', () => {
+        const conVariaciones = { ...simple, id: 'MPE2', seller_custom_field: null, variations: [{ id: 1, seller_custom_field: 'X' }, { id: 2 }, { id: 3 }] };
+        const sinNada = { ...simple, id: 'MPE3', seller_custom_field: null, attributes: [] };
+        const completa = { ...simple, id: 'MPE4' };
+        expect(publicacionesSinSku([conVariaciones, sinNada, completa])).toEqual([
+            expect.objectContaining({ externalId: 'MPE2', sinSku: 2, total: 3 }),
+            expect.objectContaining({ externalId: 'MPE3', sinSku: 1, total: 1 }),
+        ]);
     });
 
     it('con promoción, el precio de lista es el regular y el que se cobra es el descuento', () => {

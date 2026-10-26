@@ -2,7 +2,7 @@ import { EjeDeVariacion } from '../../products/entities/product-group.entity';
 import { MAX_EJES, MAX_VARIANTES, claveDeCombinacion, normalizar } from '../../products/variantes';
 import { GrupoSinResolver, PlanDeGrupo } from '../falabella/variantes-falabella';
 import { FalabellaProduct } from '../falabella/falabella-api.service';
-import { filasDeItemMeli } from './meli-listings';
+import { filasDeItemMeli, OpcionesDeFilasMeli } from './meli-listings';
 
 /**
  * Familias de Mercado Libre: en su modelo nuevo cada color o talla es una publicación aparte, y las publicaciones que son
@@ -48,7 +48,7 @@ export interface ResultadoDeFamilias {
 /**
  * @param variacionPorCategoria  por cada categoría, los atributos que Mercado Libre admite como variación (si se conocen).
  */
-export function planearFamiliasDeMeli(items: any[], variacionPorCategoria: Map<string, Set<string>> = new Map()): ResultadoDeFamilias {
+export function planearFamiliasDeMeli(items: any[], variacionPorCategoria: Map<string, Set<string>> = new Map(), opciones: OpcionesDeFilasMeli = {}): ResultadoDeFamilias {
     const grupos: PlanDeGrupo[] = [];
     const sinResolver: GrupoSinResolver[] = [];
     const paraLaIA: FalabellaProduct[] = [];
@@ -66,7 +66,7 @@ export function planearFamiliasDeMeli(items: any[], variacionPorCategoria: Map<s
     for (const [familiaId, fam] of familias) {
         // Una fila por publicación, con su SKU limpio y su foto; las que no tienen SKU no se pueden enlazar.
         const filas = fam.items
-            .map((item) => ({ item, fila: filasDeItemMeli(item).rows[0], atributos: atributosDe(item) }))
+            .map((item) => ({ item, fila: filasDeItemMeli(item, opciones).rows[0], atributos: atributosDe(item) }))
             .filter((x) => !!x.fila);
         if (filas.length < 2) continue;
 

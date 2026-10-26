@@ -33,7 +33,7 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
 import { importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
-import { filasDeItemMeli, MeliListingRow } from './meli/meli-listings';
+import { filasDeItemMeli, MeliListingRow, publicacionesSinSku, PublicacionSinSku } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
 /**
@@ -3218,9 +3218,11 @@ export class SyncService implements OnModuleInit {
     async importMeliListings(
         scope: SyncScope,
         connectionId: string | undefined,
-        options: { dryRun?: boolean } = {},
+        options: { dryRun?: boolean; generarSku?: boolean } = {},
     ) {
         const userId = scope.userId;
+        // Por defecto, lo que no tiene SKU en Mercado Libre no se importa; con generarSku, Synkro le da uno propio (solo en Synkro).
+        const filasOpciones = { generarSku: !!options.generarSku };
         const connection = await this.resolveConnection(scope.storeId, 'mercadolibre', connectionId);
         const { ids, incompleto } = await this.meliApi.listSellerItemIds(connection.accessToken, connection.externalUserId);
         const { items } = await this.meliApi.getItems(connection.accessToken, ids);
@@ -3235,6 +3237,9 @@ export class SyncService implements OnModuleInit {
             enlazadas: 0,
             enOtraTienda: 0,
             sinSku: 0,
+            /** Qué publicaciones tienen algo sin SKU (para corregirlo en Mercado Libre) y cuántos SKU generó Synkro si se pidió. */
+            sinSkuDetalle: [] as PublicacionSinSku[],
+            skuGenerados: 0,
             /** Publicaciones repetidas (mismo SKU en la misma cuenta): no son variantes; solo se enlaza la principal. */
             duplicadas: 0,
             duplicados: [] as DuplicadoMeli[],
@@ -3261,17 +3266,19 @@ export class SyncService implements OnModuleInit {
 
         // Dos publicaciones con el mismo SKU no son variantes: son la misma cosa publicada dos veces. Se enlaza la principal
         // (activa y con más ventas) y las demás se informan para que la persona decida.
-        const detectadas = detectarDuplicados((items as any[]).flatMap(i => filasDeItemMeli(i).rows));
+        const detectadas = detectarDuplicados((items as any[]).flatMap(i => filasDeItemMeli(i, filasOpciones).rows));
+        resumen.sinSkuDetalle = options.generarSku ? [] : publicacionesSinSku(items as any[]).slice(0, 200);
         resumen.duplicados = detectadas.duplicados.slice(0, 100);
         resumen.duplicadas = detectadas.secundarias.size;
 
         for (const item of items) {
-            const { rows, sinSku } = filasDeItemMeli(item);
+            const { rows, sinSku } = filasDeItemMeli(item, filasOpciones);
             resumen.sinSku += sinSku;
 
             for (const fila of rows) {
                 if (detectadas.secundarias.has(claveDeFilaMeli(fila))) continue;
                 resumen.total++;
+                if (fila.skuGenerado) resumen.skuGenerados++;
                 resumen.porEstado[fila.status] = (resumen.porEstado[fila.status] ?? 0) + 1;
                 if (fila.quality !== null) { sumaNotas += fila.quality; conNota++; }
 
@@ -3317,12 +3324,12 @@ export class SyncService implements OnModuleInit {
 
         // Las publicaciones con variaciones se agrupan con el eje y el valor que Mercado Libre da a cada una.
         // Las duplicadas no cuentan para las familias ni para las variaciones: ya se informaron aparte.
-        const itemsSinDuplicadas = (items as any[]).filter(i => !filasDeItemMeli(i).rows.some(r => detectadas.secundarias.has(claveDeFilaMeli(r))));
-        const planMeli = planearGruposDeMeli(itemsSinDuplicadas);
+        const itemsSinDuplicadas = (items as any[]).filter(i => !filasDeItemMeli(i, filasOpciones).rows.some(r => detectadas.secundarias.has(claveDeFilaMeli(r))));
+        const planMeli = planearGruposDeMeli(itemsSinDuplicadas, filasOpciones);
         // Familias de Mercado Libre (publicaciones separadas que comparten family_id): se agrupan por sus atributos; lo que
         // no se pueda decidir pasa a la IA y, por último, a la revisión manual.
         const variacionPorCategoria = await this.atributosDeVariacionMeli(itemsSinDuplicadas);
-        const familias = planearFamiliasDeMeli(itemsSinDuplicadas, variacionPorCategoria);
+        const familias = planearFamiliasDeMeli(itemsSinDuplicadas, variacionPorCategoria, filasOpciones);
         planMeli.grupos.push(...familias.grupos);
         planMeli.sinResolver.push(...familias.sinResolver);
         resumen.variantes.yaAgrupadas = await this.quitarYaAgrupadas(scope, planMeli);
@@ -3382,7 +3389,8 @@ export class SyncService implements OnModuleInit {
                 title: `Mercado Libre: ${resumen.enlazadas} publicaciones importadas`,
                 body:
                     `${resumen.yaEnCatalogo} ya estaban en tu catálogo y ${resumen.nuevas} se crearon como borrador.` +
-                    (resumen.sinSku ? ` ${resumen.sinSku} no tienen SKU y no se pudieron enlazar.` : '') +
+                    (resumen.sinSku ? ` ${resumen.sinSku} no tienen SKU y no se importaron: ponles un SKU en Mercado Libre o importa pidiendo que Synkro lo genere.` : '') +
+                    (resumen.skuGenerados ? ` Synkro generó el SKU de ${resumen.skuGenerados}.` : '') +
                     (incompleto ? ' El catálogo es muy grande y quedaron publicaciones sin leer.' : ''),
                 marketplace: 'mercadolibre',
                 meta: { total: resumen.total, porEstado: resumen.porEstado, sinSku: resumen.sinSku },

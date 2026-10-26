@@ -53,13 +53,20 @@ describe('planearGruposDeMeli', () => {
         expect(planearGruposDeMeli([item([]), item([variacion(1, 'A', [['Color', 'Rojo']])])]).grupos).toEqual([]);
     });
 
-    it('las variaciones sin SKU no cuentan; con menos de dos con SKU no hay grupo y se avisa', () => {
-        const { grupos, sinResolver } = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, '', [['Color', 'Azul']])])]);
+    it('si alguna variación no tiene SKU no se agrupa a medias y se avisa cuántas faltan', () => {
+        const { grupos, sinResolver } = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, 'B', [['Color', 'Azul']]), variacion(3, '', [['Color', 'Verde']])])]);
         expect(grupos).toEqual([]);
         expect(sinResolver[0]).toMatchObject({ parentSku: 'MPE900' });
-        expect(sinResolver[0].motivo).toMatch(/2 variaciones pero solo 1 con SKU/);
-        const dos = planearGruposDeMeli([item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, 'B', [['Color', 'Azul']]), variacion(3, '', [['Color', 'Verde']])])]);
-        expect(dos.grupos[0].variants.map((v) => v.sellerSku)).toEqual(['A', 'B']);
+        expect(sinResolver[0].motivo).toMatch(/1 de sus 3 variaciones no tienen SKU/);
+    });
+
+    it('si se pide que Synkro genere los SKU que faltan, todas las variaciones se agrupan', () => {
+        const { grupos, sinResolver } = planearGruposDeMeli(
+            [item([variacion(1, 'A', [['Color', 'Rojo']]), variacion(2, 'B', [['Color', 'Azul']]), variacion(3, '', [['Color', 'Verde']])])],
+            { generarSku: true },
+        );
+        expect(sinResolver).toEqual([]);
+        expect(grupos[0].variants.map((v) => v.sellerSku)).toEqual(['A', 'B', 'MPE900-3']);
     });
 
     it('si las variaciones no traen atributos, no se agrupa y se explica, con las fichas para estructurarlas a mano', () => {
