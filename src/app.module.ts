@@ -1,3 +1,4 @@
+import { QueueMaintenanceService } from './common/queue-maintenance.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -121,6 +122,11 @@ import { DashboardModule } from './dashboard/dashboard.module';
         port: parseInt(process.env.REDIS_PORT || '6379'),
         password: process.env.REDIS_PASSWORD || "",
       },
+      // Sin esto BullMQ guarda en Redis el historial de TODOS los trabajos terminados, para siempre, hasta llenar el disco.
+      defaultJobOptions: {
+        removeOnComplete: { age: 3600, count: 500 },
+        removeOnFail: { age: 3 * 24 * 3600, count: 1000 },
+      },
     }),
     BulkUploadModule,
     RedisModule,
@@ -137,6 +143,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    QueueMaintenanceService,
   ],
 })
 export class AppModule { }
