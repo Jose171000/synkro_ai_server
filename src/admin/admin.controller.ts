@@ -12,6 +12,10 @@ import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateAccessDto, ResetClientPasswordDto } from './dto/update-access.dto';
 import { SignupsService } from './signups.service';
+import { Inject } from '@nestjs/common';
+import type Redis from 'ioredis';
+import { REDIS_CLIENT } from '../redis/redis.constants';
+import { diagnosticarRedis } from '../common/redis-diagnostico';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -23,7 +27,14 @@ export class AdminController {
         private readonly adminService: AdminService,
         private readonly reportsService: ReportsService,
         private readonly signups: SignupsService,
+        @Inject(REDIS_CLIENT) private readonly redis: Redis,
     ) { }
+
+    @Get('redis')
+    @ApiOperation({ summary: 'Qué ocupa Redis: memoria, copias en disco, trabajos por cola y reparto por tipo de dato (solo lectura, solo admin)' })
+    redisDiagnostico() {
+        return diagnosticarRedis(this.redis);
+    }
 
     @Get('sections')
     @ApiOperation({

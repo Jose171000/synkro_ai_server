@@ -1,3 +1,4 @@
+import { RedisModule } from '../redis/redis.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
@@ -31,6 +32,7 @@ import { SignupsService } from './signups.service';
             Store,
         ]),
         ReportsModule,
+        RedisModule,
         StoresModule,
     ],
     controllers: [AdminController, BillingController],
