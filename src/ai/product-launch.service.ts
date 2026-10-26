@@ -60,6 +60,13 @@ export class ProductLaunchService {
                 continue;
             }
 
+            // Los canales rechazan una publicación sin precio: se dice antes de gastar IA y de encolar algo que va a fallar.
+            const producto = await this.sync.findScopedProduct(scope, productId);
+            if (!(Number(producto.price) > 0)) {
+                reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: `${NOMBRE[canal]} exige precio: este producto no tiene. Edita el producto, ponle precio y vuelve a pulsar Publicar.` });
+                continue;
+            }
+
             try {
                 // Preparación propia de cada canal
                 if (canal === 'falabella') reporte.falabella = await this.falabellaPrep.preparar(scope, productId, delCanal[0].id);

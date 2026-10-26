@@ -2,7 +2,7 @@ import { ProductLaunchService } from './product-launch.service';
 
 function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: any } = {}) {
     const producto = opts.producto ?? {
-        id: 'p1', name: 'Torre', aiTitle: 'Torre Montessori', description: 'texto', aiDescription: 'desc',
+        id: 'p1', price: 99, name: 'Torre', aiTitle: 'Torre Montessori', description: 'texto', aiDescription: 'desc',
         marketplaceIds: { mercadolibre_category_id: 'MPE1' }, aiAttributes: { brand: 'GENERICO', mercadolibre_attributes: { COLOR: 'Azul' } },
     };
     const sync: any = {
@@ -84,5 +84,15 @@ describe('lanzar un producto en un paso', () => {
         expect(sync.enqueuePublish).toHaveBeenCalledTimes(1);
         expect(r.channels[0].status).toBe('encolado');
         expect(r.falabella).toBeUndefined();
+    });
+});
+
+describe('lanzar un producto sin precio', () => {
+    it('no encola ni gasta IA: dice que el canal exige precio', async () => {
+        const { service, sync, ai } = construir({ producto: { id: 'p1', price: 0, name: 'Disco', marketplaceIds: {}, aiAttributes: {} } });
+        const r = await service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+        expect(r.channels[0]).toMatchObject({ marketplace: 'mercadolibre', status: 'error', message: expect.stringContaining('exige precio') });
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(ai.completarAtributos).not.toHaveBeenCalled();
     });
 });
