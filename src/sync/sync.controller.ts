@@ -23,6 +23,7 @@ import { WebPriceDto } from './dto/web-price.dto';
 import { PromoDto } from './dto/promo.dto';
 import { ChannelActionDto } from './dto/channel-action.dto';
 import { ListingActionsService } from './listing-actions.service';
+import { DuplicatesActionDto } from './dto/duplicates-action.dto';
 import { FalabellaVariantImportService } from './falabella-variant-import.service';
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ChangeRequestsService } from './change-requests.service';
@@ -348,6 +349,20 @@ export class SyncController {
     })
     groupVariantsManually(@Body() dto: ManualVariantGroupDto, @Req() req) {
         return this.variantImport.agruparManual(scopeOf(req), dto);
+    }
+
+    @Post('mercadolibre/duplicates/:action')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Pausa o cierra publicaciones repetidas de Mercado Libre (mismo SKU en una cuenta)',
+        description: 'action = pause | close. Solo actúa sobre publicaciones que el servidor detecta como repetidas y que no son la principal de un SKU. Cerrar es definitivo en Mercado Libre.',
+    })
+    duplicatesAction(@Req() req, @Param('action') action: string, @Body() dto: DuplicatesActionDto) {
+        if (action !== 'pause' && action !== 'close') throw new BadRequestException('La acción debe ser pause o close.');
+        return this.listingActions.duplicadasMeli(scopeOf(req), dto.connectionId, action, dto.externalIds);
     }
 
     @Post('products/:id/channels/:action')

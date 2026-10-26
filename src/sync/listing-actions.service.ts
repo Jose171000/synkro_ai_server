@@ -5,6 +5,8 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MeliApiService } from './meli/meli-api.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
+import { detectarDuplicados, elegirDuplicadasAfectables } from './meli/duplicados-meli';
+import { filasDeItemMeli } from './meli/meli-listings';
 
 export type AccionDeCanal = 'pause' | 'resume' | 'remove';
 
@@ -84,6 +86,43 @@ export class ListingActionsService {
                 ? `${verbo} en ${resultados.map(r => this.etiqueta(r)).join(', ')}.`
                 : `${verbo} en ${bien} de ${resultados.length} canales. Revisa el detalle: ${resultados.filter(r => !r.ok).map(r => `${this.etiqueta(r)}: ${r.message}`).join(' — ')}`,
         };
+    }
+
+    /**
+     * Pausa o cierra publicaciones REPETIDAS de Mercado Libre (mismo SKU en la misma cuenta). Los duplicados se vuelven a
+     * detectar aquí con los datos actuales: lo que mande el navegador solo indica cuáles; nunca se toca la principal de un
+     * SKU ni una publicación con variaciones que no sean repetidas. Cerrar es definitivo en Mercado Libre.
+     */
+    async duplicadasMeli(
+        scope: SyncScope,
+        connectionId: string | undefined,
+        accion: 'pause' | 'close',
+        externalIds: string[],
+    ): Promise<{ results: { externalId: string; ok: boolean; message: string }[]; message: string }> {
+        const conexion = await this.sync.resolveConnection(scope.storeId, 'mercadolibre', connectionId);
+        const { ids } = await this.meliApi.listSellerItemIds(conexion.accessToken, conexion.externalUserId);
+        const { items } = await this.meliApi.getItems(conexion.accessToken, ids);
+        const filas = (items as any[]).flatMap((i) => filasDeItemMeli(i).rows);
+        const { secundarias } = detectarDuplicados(filas);
+        const { aplicables, rechazadas } = elegirDuplicadasAfectables(filas, secundarias, externalIds);
+
+        const results: { externalId: string; ok: boolean; message: string }[] = rechazadas.map((r) => ({ externalId: r.externalId, ok: false, message: r.motivo }));
+        for (const externalId of aplicables) {
+            try {
+                await this.meliApi.setItemStatus(conexion.accessToken, externalId, accion === 'pause' ? 'paused' : 'closed');
+                // Si por alguna razón estaba enlazada a un producto de Synkro, el enlace queda marcado igual.
+                const enlaces = await this.listingLinkRepository.find({ where: { externalId, connection: { id: conexion.id } } });
+                for (const e of enlaces) { this.marcar(e, accion === 'pause' ? 'pause' : 'remove'); await this.listingLinkRepository.save(e); }
+                results.push({ externalId, ok: true, message: accion === 'pause' ? 'Pausada' : 'Cerrada' });
+            } catch (error: any) {
+                const detalle = error?.response?.data?.message ?? error?.message ?? 'error desconocido';
+                this.logger.warn(`No se pudo ${accion} la duplicada ${externalId}: ${detalle}`);
+                results.push({ externalId, ok: false, message: String(detalle).slice(0, 300) });
+            }
+        }
+        const bien = results.filter((r) => r.ok).length;
+        const verbo = accion === 'pause' ? 'pausadas' : 'cerradas';
+        return { results, message: `${bien} de ${results.length} publicaciones repetidas ${verbo}.` };
     }
 
     private estadoEfectivo(enlace: ListingLink): ListingLink['syncStatus'] {

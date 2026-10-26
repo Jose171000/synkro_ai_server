@@ -75,3 +75,28 @@ export function detectarDuplicados(filas: MeliListingRow[]): { duplicados: Dupli
     }
     return { duplicados, secundarias };
 }
+
+/**
+ * De las publicaciones que la persona pidió pausar o cerrar, cuáles se pueden tocar sin riesgo. Se decide con los datos de
+ * Mercado Libre de este momento, nunca con lo que mande el navegador: solo vale una publicación repetida que NO es la
+ * principal de ningún SKU y cuyas filas (todas sus variaciones) son repetidas; si no, se rechaza y se dice por qué.
+ */
+export function elegirDuplicadasAfectables(
+    filas: MeliListingRow[],
+    secundarias: Set<string>,
+    solicitadas: string[],
+): { aplicables: string[]; rechazadas: { externalId: string; motivo: string }[] } {
+    const aplicables: string[] = [];
+    const rechazadas: { externalId: string; motivo: string }[] = [];
+    for (const externalId of [...new Set(solicitadas)]) {
+        const propias = filas.filter((f) => f.externalId === externalId);
+        if (!propias.length) { rechazadas.push({ externalId, motivo: 'no se encontró entre las publicaciones de la cuenta' }); continue; }
+        if (propias.some((f) => !secundarias.has(claveDeFilaMeli(f)))) {
+            rechazadas.push({ externalId, motivo: 'es la principal de un SKU o tiene variaciones que no son repetidas: no se toca' });
+            continue;
+        }
+        if (propias.every((f) => f.status === 'error')) { rechazadas.push({ externalId, motivo: 'Mercado Libre la tiene bloqueada o en revisión' }); continue; }
+        aplicables.push(externalId);
+    }
+    return { aplicables, rechazadas };
+}
