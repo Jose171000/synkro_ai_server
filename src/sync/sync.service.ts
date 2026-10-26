@@ -1169,7 +1169,7 @@ export class SyncService implements OnModuleInit {
      * another site (e.g. demo seeds with MLA ids), falls back to Mercado
      * Libre's official category predictor based on the listing title.
      */
-    private async resolveMeliCategory(product: Product, accessToken: string): Promise<string> {
+    async resolveMeliCategory(product: Product, accessToken?: string): Promise<string> {
         const site = process.env.MELI_SITE_ID || 'MPE';
         const stored: string | undefined =
             (product.marketplaceIds as any)?.mercadolibre_category_id ||

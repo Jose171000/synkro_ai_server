@@ -104,8 +104,16 @@ export class ProductLaunchService {
     private async completarMeli(scope: SyncScope, productId: string): Promise<string[]> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
-        const categoria = (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id;
-        if (!categoria) return [];
+        let categoria = (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id;
+        if (!categoria) {
+            // Sin categoría guardada, Mercado Libre la predice por el título al publicar y rechaza si faltan sus obligatorios:
+            // se predice ahora, se guarda y se completan los atributos de esa categoría.
+            categoria = await this.sync.resolveMeliCategory(product).catch(() => null);
+            if (!categoria) return [];
+            attrs.mercadolibre_category_id = categoria;
+            product.aiAttributes = attrs;
+            await this.sync.saveProduct(product);
+        }
 
         const requisitos = await this.canales.requisitos('mercadolibre', String(categoria));
         const actuales: Record<string, string> = { ...(attrs.mercadolibre_attributes ?? {}) };
