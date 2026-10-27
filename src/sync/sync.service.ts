@@ -1675,7 +1675,10 @@ export class SyncService implements OnModuleInit {
                 // Las categorías con campos «…Variant» obligatorios agrupan sus fichas por ParentSku: Falabella rechazaba esos campos
                 // como vacíos aunque iban con valor. Una ficha suelta es su propio grupo (ParentSku = su SKU), salvo que Falabella ya
                 // haya dicho que ParentSku no aplica a su categoría.
-                parentSku: !noAplican.has('parentsku') && categoryAttributes.some(a => a.isMandatory && /variant$/i.test(a.feedName ?? '')) ? product.sku : undefined,
+                // Una variante de un producto con variantes lleva el código de su grupo (así Falabella las junta); una ficha suelta, su propio SKU.
+                parentSku: noAplican.has('parentsku') ? undefined
+                    : (product as any).group?.parentSku
+                        ?? (categoryAttributes.some(a => a.isMandatory && /variant$/i.test(a.feedName ?? '')) ? product.sku : undefined),
                 extraAttributes: propios,
             },
         };
@@ -1746,7 +1749,7 @@ export class SyncService implements OnModuleInit {
                 { id, store: { id: scope.storeId } },
                 { id, store: IsNull(), owner: { id: userId } },
             ]) as any,
-            relations: { store: true },
+            relations: { store: true, group: true },
         });
         if (!products.length) {
             throw new NotFoundException('No se encontraron productos que publicar.');
