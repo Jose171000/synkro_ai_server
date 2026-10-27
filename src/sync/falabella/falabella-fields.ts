@@ -77,6 +77,15 @@ export function categoriaAdmiteVariantes(atributos: { feedName?: string; name?: 
     return camposDeVariacion(atributos).length > 0;
 }
 
+/**
+ * Ropa y calzado no traen campos «…Variant»: varían por «talla» (o «size») y «color». Es probable que admitan variantes,
+ * pero no está comprobado con Falabella, así que solo se informa (no cambia cómo se publica).
+ */
+export function variacionPorTallaYColor(atributos: { feedName?: string; name?: string }[] | null | undefined): boolean {
+    const claves = (atributos ?? []).map((a) => claveDeAtributo(String(a?.name ?? a?.feedName ?? '')));
+    return claves.includes('color') && (claves.includes('talla') || claves.includes('size'));
+}
+
 /** ¿Falabella pide un número en este campo? (su tipo de entrada es «numberfield», «numeric»…) */
 export function esCampoNumerico(inputType: string | null | undefined): boolean {
     return /number|numeric|integer|decimal/i.test(String(inputType ?? ''));

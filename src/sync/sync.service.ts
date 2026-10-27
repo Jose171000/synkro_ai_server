@@ -11,7 +11,7 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, variacionPorTallaYColor, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1276,9 +1276,12 @@ export class SyncService implements OnModuleInit {
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const attributes = await this.falabellaApi.getCategoryAttributes(this.credentialsOf(connection), categoryId);
         const campos = camposDeVariacion(attributes);
+        const porTallaYColor = campos.length === 0 && variacionPorTallaYColor(attributes);
         return {
             categoryId,
             admiteVariantes: campos.length > 0,
+            // Ropa y calzado: varían por talla y color sin campos «…Variant». Probable, sin comprobar: hoy se publican como productos sueltos.
+            probablePorTallaYColor: porTallaYColor,
             camposDeVariacion: campos.map(c => ({ name: c.name, label: c.label || c.name, required: c.isMandatory, options: c.options })),
             publicacion: campos.length > 0
                 ? 'Las variantes de un grupo se publican juntas bajo un mismo ParentSku.'

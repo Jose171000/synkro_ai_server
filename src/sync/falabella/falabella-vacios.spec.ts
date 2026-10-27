@@ -53,3 +53,18 @@ describe('¿la categoría admite variantes?', () => {
         expect(categoriaAdmiteVariantes(null)).toBe(false);
     });
 });
+
+import { variacionPorTallaYColor } from './falabella-fields';
+
+describe('ropa y calzado: variación por talla y color', () => {
+    it('la reconoce cuando la categoría trae color y talla', () => {
+        expect(variacionPorTallaYColor([{ name: 'color' }, { name: 'talla' }, { name: 'genero' }])).toBe(true);
+        expect(variacionPorTallaYColor([{ name: 'Color' }, { feedName: 'Size' }])).toBe(true);
+    });
+
+    it('no si falta uno de los dos', () => {
+        expect(variacionPorTallaYColor([{ name: 'color' }])).toBe(false);
+        expect(variacionPorTallaYColor([{ name: 'talla' }])).toBe(false);
+        expect(variacionPorTallaYColor([])).toBe(false);
+    });
+});
