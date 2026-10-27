@@ -65,6 +65,31 @@ export function leerAtributosNoAplicables(mensaje: string | null | undefined): s
     return m[1].split(',').map((t) => t.trim()).filter(Boolean);
 }
 
+/** Falabella devuelve sus mensajes con entidades HTML («&#039;»): se pasan a texto normal para mostrarlos y analizarlos. */
+export function decodificarEntidades(texto: string | null | undefined): string {
+    return String(texto ?? '')
+        .replace(/&#0*39;|&apos;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+}
+
+/** De «3: Field 'TamanoCamaVariant' cannot be empty» → ['TamanoCamaVariant']: datos que Falabella exige aunque su ficha de la categoría no los marque obligatorios. */
+export function leerAtributosVacios(mensaje: string | null | undefined): string[] {
+    const salida: string[] = [];
+    const re = /Field\s+'([^']+)'\s+cannot be empty/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(decodificarEntidades(mensaje))) !== null) salida.push(m[1]);
+    return salida;
+}
+
+/** Atributos que Falabella ya rechazó por vacíos en este producto: desde entonces se tratan como obligatorios. */
+export function atributosObligatoriosAprendidos(aiAttributes: Record<string, any> | null | undefined): Set<string> {
+    const lista = (aiAttributes as any)?._obligatorios;
+    return new Set(Array.isArray(lista) ? lista.map(claveDeAtributo) : []);
+}
+
 /**
  * Límites de longitud de atributos de texto que Falabella rechaza al pasarse («'…' is more than 172 characters long»).
  * Se conocen algunos de antemano y el resto se aprende del mensaje de error (ver leerLimitesDeLongitud).

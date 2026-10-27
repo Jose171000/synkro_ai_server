@@ -11,7 +11,7 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, decodificarEntidades, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1609,6 +1609,7 @@ export class SyncService implements OnModuleInit {
         const propios: Record<string, string> = {};
 
         const noAplican = atributosQueNoAplican(attributes);
+        const aprendidos = atributosObligatoriosAprendidos(attributes);
         for (const attribute of categoryAttributes) {
             if (esAtributoDeSistema(attribute)) continue;
             // Falabella ya respondió que este no aplica a la categoría de este producto.
@@ -1622,7 +1623,9 @@ export class SyncService implements OnModuleInit {
             const maximo = valor !== undefined ? limiteDeLongitud(attribute, attributes) : undefined;
             if (valor !== undefined && maximo && valor.length > maximo) valor = recortarTexto(valor, maximo);
 
-            if (attribute.isMandatory && valor === undefined) {
+            // Obligatorio por la categoría o porque Falabella ya rechazó este producto por dejarlo vacío.
+            const obligatorio = attribute.isMandatory || aprendidos.has(claveDeAtributo(attribute.feedName)) || aprendidos.has(claveDeAtributo(attribute.name));
+            if (obligatorio && valor === undefined) {
                 faltantes.push(hayValor ? `${attribute.label || attribute.feedName} (valor no válido)` : (attribute.label || attribute.feedName));
                 continue;
             }
@@ -2083,7 +2086,7 @@ export class SyncService implements OnModuleInit {
             });
             if (!link) continue;
 
-            let error = erroresPorSku.get(sku);
+            let error = erroresPorSku.get(sku) ? decodificarEntidades(erroresPorSku.get(sku)) : erroresPorSku.get(sku);
             // «SKU already used by another product»: ya está en Falabella, no es un fallo. Se comprueba y se vincula.
             if (error && /already used|already exists|ya existe|ya está en uso/i.test(error)) {
                 const fichas = await this.falabellaApi.getProductsBySku(credentials, [sku]).catch(() => []);
@@ -2109,12 +2112,22 @@ export class SyncService implements OnModuleInit {
                     aiAttributes: { ...((link.product.aiAttributes as any) || {}), _noAplica: [...new Set([...previos, ...noAplican])] },
                 } as any);
             }
+            // «Field 'X' cannot be empty»: la categoría no lo marca obligatorio pero Falabella lo exige; el siguiente intento lo pide antes de enviar.
+            const vacios = link.product ? leerAtributosVacios(error) : [];
+            if (vacios.length && link.product) {
+                const actuales = { ...((link.product.aiAttributes as any) || {}) };
+                const previos: string[] = actuales._obligatorios ?? [];
+                const nuevos = { ...actuales, _obligatorios: [...new Set([...previos, ...vacios])] };
+                await this.productRepository.update(link.product.id, { aiAttributes: nuevos } as any);
+                link.product.aiAttributes = nuevos as any;
+            }
             const categoriaMala = !!error && !!link.product && esCategoriaEquivocada(error);
             if (categoriaMala) await this.descartarCategoria(link.product);
             if (error) {
                 link.syncStatus = 'error';
                 link.lastError = noAplican.length
                     ? `${error} — se quitaron esos datos: vuelve a publicar.`
+                    : vacios.length ? `${error} — ahora se pide como obligatorio: complétalo en «Revisar y editar los datos» (elige una opción de la lista) y vuelve a publicar.`
                     : categoriaMala ? `${error} — Synkro descartó esa categoría: al pulsar Publicar de nuevo elegirá otra.` : error;
             } else {
                 link.syncStatus = 'published';

@@ -7,7 +7,7 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { SaveSheetDto } from './dto/save-sheet.dto';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, atributosObligatoriosAprendidos, claveDeAtributo, esAtributoDeSistema } from './falabella/falabella-fields';
 
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
@@ -118,7 +118,7 @@ export class ProductSheetService {
                         name: a.name,
                         label: a.label || a.name,
                         description: a.description,
-                        required: a.isMandatory,
+                        required: a.isMandatory || atributosObligatoriosAprendidos(attrs).has(claveDeAtributo(a.name)),
                         options: a.options,
                         value: String(this.sync.buscarAtributo(attrs, a.name) ?? ''),
                     }))
