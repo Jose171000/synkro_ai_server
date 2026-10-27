@@ -58,6 +58,15 @@ export class AdminService implements OnModuleInit {
         const profiles = await this.profileRepository.find({ relations: { user: true } });
         const profileByUser = new Map(profiles.map(p => [p.user.id, p]));
 
+        // A qué tiendas pertenece cada cuenta y con qué rol: quien solo es miembro de tiendas ajenas (editor o visor) es
+        // parte del equipo de un cliente, no un cliente.
+        const membresias: { userId: string; role: string; storeId: string; storeName: string }[] = await this.dataSource.query(
+            `SELECT m."userId" AS "userId", m.role AS role, s.id AS "storeId", s.name AS "storeName"
+               FROM store_members m JOIN stores s ON s.id = m."storeId"`,
+        );
+        const membresiasDe = new Map<string, typeof membresias>();
+        for (const m of membresias) membresiasDe.set(m.userId, [...(membresiasDe.get(m.userId) ?? []), m]);
+
         const result = [] as any[];
         for (const user of users) {
             const [productCount, listingCount, connections, paymentsAgg] = await Promise.all([
@@ -76,8 +85,11 @@ export class AdminService implements OnModuleInit {
             const { password, ...safeUser } = user;
             // allowedSections viaja como array para que la UI marque las casillas
 
+            const miembroDe = membresiasDe.get(user.id) ?? [];
             result.push({
                 ...safeUser,
+                teamOf: miembroDe.filter(m => m.role !== 'owner').map(m => ({ storeId: m.storeId, storeName: m.storeName, role: m.role })),
+                teamOnly: user.role !== UserRole.ADMIN && miembroDe.length > 0 && miembroDe.every(m => m.role !== 'owner'),
                 profile: profile
                     ? { ...profile, user: undefined }
                     : null,
