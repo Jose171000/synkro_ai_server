@@ -1251,3 +1251,21 @@ describe('Falabella: variantes de un grupo', () => {
         expect([a.input.variation, b.input.variation]).toEqual(['POLO-ROJO', 'POLO-AZUL']);
     });
 });
+
+describe('Falabella: categorías que no admiten variantes', () => {
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+    const enGrupo = (sku: string) => ({
+        id: sku, sku, name: 'Polo', price: 80, stock: 5, description: 'Polo de algodón para niños',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 1,
+        marketplaceIds: { falabella_category_id: '55' }, aiAttributes: { brand: 'GENERICO' },
+        group: { id: 'g1', parentSku: 'POLO-GRUPO' }, store: { id: 't1' }, owner: { id: 'u1' }, images: [],
+    });
+    const comun = { name: 'estilo', feedName: 'Estilo', label: 'Estilo', isMandatory: false, inputType: 'textfield', options: [], description: '' };
+
+    it('sin campos de variación, las variantes de un grupo salen como productos sueltos (sin ParentSku)', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(enGrupo('POLO-ROJO'), 'active', [comun]);
+        expect(r.input.parentSku).toBeUndefined();
+        expect(r.input.variation).toBe('POLO-ROJO');
+    });
+});

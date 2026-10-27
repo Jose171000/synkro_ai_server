@@ -11,7 +11,7 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1268,6 +1268,24 @@ export class SyncService implements OnModuleInit {
      * cuáles son obligatorios, cómo se llaman en castellano y qué valores
      * admiten. Se marcan los que la plataforma ya cubre por su cuenta.
      */
+    /**
+     * ¿Esta categoría de Falabella admite variantes? Las que sí traen campos de variación («…Variant»: color, tamaño…); en las
+     * que no, cada variante de un grupo se publica como producto suelto. Solo consulta, no cambia nada.
+     */
+    async falabellaCategoryVariants(scope: SyncScope, categoryId: string, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const attributes = await this.falabellaApi.getCategoryAttributes(this.credentialsOf(connection), categoryId);
+        const campos = camposDeVariacion(attributes);
+        return {
+            categoryId,
+            admiteVariantes: campos.length > 0,
+            camposDeVariacion: campos.map(c => ({ name: c.name, label: c.label || c.name, required: c.isMandatory, options: c.options })),
+            publicacion: campos.length > 0
+                ? 'Las variantes de un grupo se publican juntas bajo un mismo ParentSku.'
+                : 'Esta categoría no admite variantes: cada variante se publica como producto suelto.',
+        };
+    }
+
     async getFalabellaCategoryFields(scope: SyncScope, categoryId: string, connectionId?: string) {
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const attributes = await this.falabellaApi.getCategoryAttributes(this.credentialsOf(connection), categoryId);
@@ -1676,9 +1694,9 @@ export class SyncService implements OnModuleInit {
                 // como vacíos aunque iban con valor. Una ficha suelta es su propio grupo (ParentSku = su SKU), salvo que Falabella ya
                 // haya dicho que ParentSku no aplica a su categoría.
                 // Una variante de un producto con variantes lleva el código de su grupo (así Falabella las junta); una ficha suelta, su propio SKU.
-                parentSku: noAplican.has('parentsku') ? undefined
-                    : (product as any).group?.parentSku
-                        ?? (categoryAttributes.some(a => a.isMandatory && /variant$/i.test(a.feedName ?? '')) ? product.sku : undefined),
+                // Solo si la categoría admite variantes (trae campos «…Variant»): si no, cada variante se publica como producto suelto.
+                parentSku: noAplican.has('parentsku') || !categoriaAdmiteVariantes(categoryAttributes) ? undefined
+                    : (product as any).group?.parentSku ?? product.sku,
                 extraAttributes: propios,
             },
         };

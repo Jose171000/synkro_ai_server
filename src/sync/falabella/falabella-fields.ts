@@ -65,6 +65,18 @@ export function leerAtributosNoAplicables(mensaje: string | null | undefined): s
     return m[1].split(',').map((t) => t.trim()).filter(Boolean);
 }
 
+/**
+ * Los campos que definen la variación de una ficha («ColorVariant», «TamanoCamaVariant»…). Una categoría que los trae admite
+ * variantes (varias fichas bajo un mismo ParentSku); una que no los trae no las admite y cada variante va como producto suelto.
+ */
+export function camposDeVariacion<T extends { feedName?: string; name?: string }>(atributos: T[] | null | undefined): T[] {
+    return (atributos ?? []).filter((a) => /variant$/i.test(String(a?.feedName ?? a?.name ?? '')));
+}
+
+export function categoriaAdmiteVariantes(atributos: { feedName?: string; name?: string }[] | null | undefined): boolean {
+    return camposDeVariacion(atributos).length > 0;
+}
+
 /** ¿Falabella pide un número en este campo? (su tipo de entrada es «numberfield», «numeric»…) */
 export function esCampoNumerico(inputType: string | null | undefined): boolean {
     return /number|numeric|integer|decimal/i.test(String(inputType ?? ''));

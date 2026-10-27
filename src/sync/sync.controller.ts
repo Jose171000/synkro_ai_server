@@ -236,6 +236,18 @@ export class SyncController {
         return this.syncService.getFalabellaCategoryFields(scopeOf(req), categoryId, connectionId);
     }
 
+    @Get('falabella/categories/:categoryId/variants')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
+    @ApiOperation({
+        summary: '¿Esta categoría de Falabella admite variantes?',
+        description: 'Sí si trae campos de variación («…Variant»: color, tamaño…). Si no, las variantes de un grupo se publican como productos sueltos. Solo consulta.',
+    })
+    getFalabellaCategoryVariants(@Param('categoryId') categoryId: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.falabellaCategoryVariants(scopeOf(req), categoryId, connectionId);
+    }
+
     @Get('products/:id/sheet')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

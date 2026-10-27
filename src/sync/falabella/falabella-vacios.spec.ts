@@ -37,3 +37,19 @@ describe('campos numéricos de Falabella', () => {
         expect(soloElNumero('')).toBeUndefined();
     });
 });
+
+import { camposDeVariacion, categoriaAdmiteVariantes } from './falabella-fields';
+
+describe('¿la categoría admite variantes?', () => {
+    it('sí si trae campos «…Variant»', () => {
+        const attrs = [{ name: 'estilo', feedName: 'Estilo' }, { name: 'color_variant', feedName: 'ColorVariant' }];
+        expect(categoriaAdmiteVariantes(attrs)).toBe(true);
+        expect(camposDeVariacion(attrs).map((a) => a.feedName)).toEqual(['ColorVariant']);
+    });
+
+    it('no si no los trae, o si no hay atributos', () => {
+        expect(categoriaAdmiteVariantes([{ name: 'estilo', feedName: 'Estilo' }])).toBe(false);
+        expect(categoriaAdmiteVariantes([])).toBe(false);
+        expect(categoriaAdmiteVariantes(null)).toBe(false);
+    });
+});
