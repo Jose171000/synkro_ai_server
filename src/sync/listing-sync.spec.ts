@@ -777,6 +777,21 @@ describe('campos de sistema y atributos que Falabella dijo que no aplican', () =
         );
         expect(r.input.extraAttributes).toEqual({ garantia: '12 meses' });
     });
+
+    it('un atributo que Falabella exigió como no vacío se envía aunque antes se anotara que no aplica', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(
+            base({ tamano_cama_variant: '2 plazas', _noAplica: ['tamano_cama_variant'], _obligatorios: ['TamanoCamaVariant'] }), 'active',
+            [atributo('tamano_cama_variant')],
+        );
+        expect(Object.values(r.input.extraAttributes)).toEqual(['2 plazas']);
+    });
+
+    it('si es obligatorio por haberlo exigido Falabella y está vacío, lo pide antes de enviar', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(base({ _obligatorios: ['tamano_cama_variant'] }), 'active', [atributo('tamano_cama_variant')]);
+        expect(r.reason).toMatch(/tamano_cama_variant/);
+    });
 });
 
 describe('un segundo clic en Publicar mientras el canal todavía procesa', () => {

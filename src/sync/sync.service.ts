@@ -1456,6 +1456,10 @@ export class SyncService implements OnModuleInit {
             _categoriaManual: String(datos.categoryId),
         };
         delete (product.aiAttributes as any)._categoriaDudosa;
+        // Un dato que la persona acaba de llenar se envía aunque antes se hubiera anotado que «no aplica».
+        const llenados = new Set(Object.entries(datos.attributes || {}).filter(([, v]) => String(v ?? '').trim() !== '').map(([k]) => claveDeAtributo(k)));
+        const noAplica = (product.aiAttributes as any)._noAplica;
+        if (Array.isArray(noAplica) && llenados.size) (product.aiAttributes as any)._noAplica = noAplica.filter((k: string) => !llenados.has(claveDeAtributo(k)));
         // Quien guarda las medidas las está revisando: dejan de estar marcadas como estimadas.
         const previo = (product.aiAttributes as any).estimated;
         if (previo) (product.aiAttributes as any).estimated = { ...previo, measures: false };
@@ -1613,7 +1617,8 @@ export class SyncService implements OnModuleInit {
         for (const attribute of categoryAttributes) {
             if (esAtributoDeSistema(attribute)) continue;
             // Falabella ya respondió que este no aplica a la categoría de este producto.
-            if (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name))) continue;
+            const exigido = aprendidos.has(claveDeAtributo(attribute.feedName)) || aprendidos.has(claveDeAtributo(attribute.name));
+            if (!exigido && (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name)))) continue;
 
             const bruto = this.buscarAtributo(attributes, attribute.name);
             const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
@@ -2117,7 +2122,10 @@ export class SyncService implements OnModuleInit {
             if (vacios.length && link.product) {
                 const actuales = { ...((link.product.aiAttributes as any) || {}) };
                 const previos: string[] = actuales._obligatorios ?? [];
-                const nuevos = { ...actuales, _obligatorios: [...new Set([...previos, ...vacios])] };
+                // Si Falabella lo exige, deja de estar en «no aplica»: ese choque lo dejaba sin enviar aunque estuviera lleno.
+                const exigidos = new Set(vacios.map(claveDeAtributo));
+                const noAplica: string[] = (actuales._noAplica ?? []).filter((k: string) => !exigidos.has(claveDeAtributo(k)));
+                const nuevos = { ...actuales, _obligatorios: [...new Set([...previos, ...vacios])], ...(actuales._noAplica ? { _noAplica: noAplica } : {}) };
                 await this.productRepository.update(link.product.id, { aiAttributes: nuevos } as any);
                 link.product.aiAttributes = nuevos as any;
             }
