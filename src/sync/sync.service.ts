@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
+import { descripcionEnTextoPlano } from './meli/descripcion-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -1119,9 +1120,15 @@ export class SyncService implements OnModuleInit {
             const payload = this.buildMeliItemPayload(product, categoryId);
             const created = await this.meliApi.createItem(connection.accessToken, payload);
 
-            const description = product.aiDescription || product.description;
+            // El ítem ya existe en Mercado Libre: si solo falla la descripción no se pierde (un reintento crearía un duplicado).
+            const description = descripcionEnTextoPlano(product.aiDescription || product.description);
+            let avisoDescripcion: string | null = null;
             if (description) {
-                await this.meliApi.setItemDescription(connection.accessToken, created.id, description);
+                try {
+                    await this.meliApi.setItemDescription(connection.accessToken, created.id, description);
+                } catch (error: any) {
+                    avisoDescripcion = `Publicado, pero la descripción no se pudo enviar: ${this.describeApiError(error)}`.slice(0, 500);
+                }
             }
 
             link.externalId = created.id;
@@ -1130,7 +1137,7 @@ export class SyncService implements OnModuleInit {
             link.lastStockSynced = product.stock;
             link.lastPriceSynced = product.price;
             link.lastSyncedAt = new Date();
-            link.lastError = null as any;
+            link.lastError = avisoDescripcion as any;
 
             // Keep the product's quick-view fields in sync with reality
             product.marketplaceIds = { ...(product.marketplaceIds || {}), mercadolibre: created.id };
