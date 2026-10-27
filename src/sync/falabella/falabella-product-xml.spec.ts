@@ -241,3 +241,21 @@ describe('fotos dentro del alta (experimento, apagado por defecto)', () => {
         expect(xml).not.toContain('ftp://');
     });
 });
+
+describe('campos de variación (…Variant)', () => {
+    it('van a nivel de Product y no dentro de ProductData', () => {
+        const xml = buildProductFeedXml([producto({ extraAttributes: { Estilo: 'Básico', ColorVariant: 'Blanco', TamanoCamaVariant: '2 plazas' } })], OPCIONES);
+        const productData = xml.match(/<ProductData>([\s\S]*?)<\/ProductData>/)![1];
+        expect(productData).toContain('<Estilo>Básico</Estilo>');
+        expect(productData).not.toContain('Variant');
+        const antes = xml.slice(0, xml.indexOf('<ProductData>'));
+        expect(antes).toContain('<ColorVariant>Blanco</ColorVariant>');
+        expect(antes).toContain('<TamanoCamaVariant>2 plazas</TamanoCamaVariant>');
+    });
+
+    it('sin campos de variación el XML no cambia', () => {
+        const xml = buildProductFeedXml([producto({ extraAttributes: { Estilo: 'Básico' } })], OPCIONES);
+        expect(xml).toContain('<Estilo>Básico</Estilo>');
+        expect(xml).not.toContain('Variant');
+    });
+});

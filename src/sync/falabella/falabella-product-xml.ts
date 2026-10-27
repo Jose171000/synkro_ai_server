@@ -119,6 +119,11 @@ function tag(name: string, value: string | number | undefined | null): string {
     return `<${name}>${escapeXml(String(value))}</${name}>`;
 }
 
+/** «ColorVariant», «ColorBasicoVariant», «TamanoCamaVariant»…: los campos que definen la variación de la ficha. */
+export function esCampoDeVariacion(nombre: string): boolean {
+    return /variant$/i.test(nombre);
+}
+
 function buildProduct(product: FalabellaProductInput, options: BuildOptions): string {
     const businessUnit = [
         tag('OperatorCode', options.operatorCode),
@@ -127,9 +132,12 @@ function buildProduct(product: FalabellaProductInput, options: BuildOptions): st
         tag('Status', product.status ?? 'active'),
     ].join('');
 
-    const extras = Object.entries(product.extraAttributes ?? {})
-        .map(([name, value]) => tag(name, value))
-        .join('');
+    // Los campos de variación («ColorVariant», «TamanoCamaVariant»…) van a nivel de Product, no dentro de ProductData: dentro
+    // Falabella los rechaza como vacíos aunque lleven valor (según su documentación, color y tamaño de un producto con variaciones
+    // se informan a nivel de Product).
+    const entradas = Object.entries(product.extraAttributes ?? {});
+    const extras = entradas.filter(([name]) => !esCampoDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
+    const deVariacion = entradas.filter(([name]) => esCampoDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
 
     const productData = [
         tag('ConditionType', product.conditionType ?? 'Nuevo'),
@@ -146,6 +154,7 @@ function buildProduct(product: FalabellaProductInput, options: BuildOptions): st
         tag('Name', product.name),
         tag('ParentSku', product.parentSku),
         tag('Variation', product.variation),
+        deVariacion,
         tag('ProductId', product.productId),
         `<Description>${cdata(product.description)}</Description>`,
         tag('Brand', product.brand),
