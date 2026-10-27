@@ -423,6 +423,10 @@ export class FalabellaApiService {
         if (includeImages) this.logger.log(`Alta con fotos incluidas (${products.filter(p => p.images?.length).length} de ${products.length} productos).`);
         const feedId = await this.postFeed(credentials, 'ProductCreate', xml);
         this.logger.log(`Lote de ${products.length} productos enviado a Falabella. Feed ${feedId}.`);
+        // Qué datos propios de la categoría viajaron en cada ficha (sin precios ni credenciales): permite ver por qué Falabella rechaza un campo.
+        for (const p of products.slice(0, 5)) {
+            this.logger.log(`Feed ${feedId} · ${p.sellerSku} · datos enviados: ${JSON.stringify(p.extraAttributes ?? {}).slice(0, 1500)} · Variation=${p.variation ?? ''}`);
+        }
         return feedId;
     }
 
