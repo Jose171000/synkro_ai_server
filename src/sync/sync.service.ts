@@ -1116,33 +1116,43 @@ export class SyncService implements OnModuleInit {
 
         try {
             const connection = await this.getValidConnectionById(connectionId);
-            const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
-            const payload = this.buildMeliItemPayload(product, categoryId);
-            const created = await this.meliApi.createItem(connection.accessToken, payload);
 
-            // El ítem ya existe en Mercado Libre: si solo falla la descripción no se pierde (un reintento crearía un duplicado).
-            const description = descripcionEnTextoPlano(product.aiDescription || product.description);
-            let avisoDescripcion: string | null = null;
-            if (description) {
-                try {
-                    await this.meliApi.setItemDescription(connection.accessToken, created.id, description);
-                } catch (error: any) {
-                    avisoDescripcion = `Publicado, pero la descripción no se pudo enviar: ${this.describeApiError(error)}`.slice(0, 500);
+            // Si el producto ya tiene su publicación en esta cuenta (un intento anterior que quedó a medias, o una creada por fuera
+            // con el mismo SKU) no se crea otra: se enlaza y se actualiza, para no duplicarla en Mercado Libre.
+            const yaExiste = link.externalId || (await this.buscarPublicacionMeli(connection, product));
+            if (yaExiste) {
+                await this.enlazarPublicacionMeli(product, link, connection, yaExiste);
+            } else {
+                const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
+                const payload = this.buildMeliItemPayload(product, categoryId);
+                const created = await this.meliApi.createItem(connection.accessToken, payload);
+
+                // El ítem ya existe en Mercado Libre: se anota ya, para que un fallo posterior no lo deje huérfano (un reintento lo duplicaría).
+                link.externalId = created.id;
+                link.permalink = created.permalink;
+                await this.listingLinkRepository.save(link);
+
+                const description = descripcionEnTextoPlano(product.aiDescription || product.description);
+                let avisoDescripcion: string | null = null;
+                if (description) {
+                    try {
+                        await this.meliApi.setItemDescription(connection.accessToken, created.id, description);
+                    } catch (error: any) {
+                        avisoDescripcion = `Publicado, pero la descripción no se pudo enviar: ${this.describeApiError(error)}`.slice(0, 500);
+                    }
                 }
+
+                link.syncStatus = 'published';
+                link.lastStockSynced = product.stock;
+                link.lastPriceSynced = product.price;
+                link.lastSyncedAt = new Date();
+                link.lastError = avisoDescripcion as any;
+
+                // Keep the product's quick-view fields in sync with reality
+                product.marketplaceIds = { ...(product.marketplaceIds || {}), mercadolibre: created.id };
+                product.status = 'synced';
+                await this.productRepository.save(product);
             }
-
-            link.externalId = created.id;
-            link.permalink = created.permalink;
-            link.syncStatus = 'published';
-            link.lastStockSynced = product.stock;
-            link.lastPriceSynced = product.price;
-            link.lastSyncedAt = new Date();
-            link.lastError = avisoDescripcion as any;
-
-            // Keep the product's quick-view fields in sync with reality
-            product.marketplaceIds = { ...(product.marketplaceIds || {}), mercadolibre: created.id };
-            product.status = 'synced';
-            await this.productRepository.save(product);
         } catch (error: any) {
             link.syncStatus = 'error';
             link.lastError = this.describeApiError(error);
@@ -1168,6 +1178,82 @@ export class SyncService implements OnModuleInit {
         });
 
         return this.listingLinkRepository.save(link);
+    }
+
+    /** La publicación de este producto en la cuenta de Mercado Libre (por su SKU), o null si no tiene. Las cerradas no cuentan. */
+    private async buscarPublicacionMeli(connection: MarketplaceConnection, product: Product): Promise<string | null> {
+        if (!product.sku) return null;
+        try {
+            const ids = await this.meliApi.findItemIdsBySku(connection.accessToken, connection.externalUserId, product.sku);
+            if (!ids.length) return null;
+            const { items } = await this.meliApi.getItems(connection.accessToken, ids);
+            return items.find((i: any) => i?.status !== 'closed')?.id ?? null;
+        } catch {
+            return null; // sin poder consultar se publica como siempre
+        }
+    }
+
+    /**
+     * Enlaza el producto con una publicación que ya existe en Mercado Libre y la deja al día (descripción, atributos, stock y precio),
+     * en vez de crear otra. Lo que Mercado Libre no deja cambiar en una publicación con ventas se anota sin cortar el resto.
+     */
+    private async enlazarPublicacionMeli(product: Product, link: ListingLink, connection: MarketplaceConnection, itemId: string): Promise<void> {
+        const token = connection.accessToken;
+        const { items } = await this.meliApi.getItems(token, [itemId]);
+        const item = items[0];
+        if (!item) throw new NotFoundException(`La publicación ${itemId} no existe en esa cuenta de Mercado Libre.`);
+        if (item.seller_id != null && String(item.seller_id) !== String(connection.externalUserId)) {
+            throw new BadRequestException(`La publicación ${itemId} no pertenece a esa cuenta de Mercado Libre.`);
+        }
+
+        const avisos: string[] = [];
+        const intentar = async (que: string, fn: () => Promise<unknown>) => {
+            try { await fn(); } catch (error: any) { avisos.push(`${que}: ${this.describeApiError(error)}`); }
+        };
+        const descripcion = descripcionEnTextoPlano(product.aiDescription || product.description);
+        // Una publicación recién creada aún no tiene descripción: se crea; si ya la tiene, se reemplaza.
+        if (descripcion) {
+            await intentar('descripción', async () => {
+                try { await this.meliApi.updateItemDescription(token, itemId, descripcion); }
+                catch { await this.meliApi.setItemDescription(token, itemId, descripcion); }
+            });
+        }
+        await intentar('atributos', () => this.meliApi.updateItemAttributes(token, itemId, this.atributosParaMeli(product)));
+        if (!(item.variations?.length)) {
+            await intentar('stock y precio', () => this.meliApi.updateItem(token, itemId, { available_quantity: product.stock, price: Number(product.price) }));
+        }
+
+        link.externalId = itemId;
+        link.permalink = item.permalink ?? link.permalink;
+        link.syncStatus = 'published';
+        link.lastStockSynced = product.stock;
+        link.lastPriceSynced = product.price;
+        link.lastSyncedAt = new Date();
+        link.lastError = (avisos.length ? `Enlazada con la publicación existente ${itemId}. No se pudo actualizar — ${avisos.join('; ')}`.slice(0, 500) : null) as any;
+        await this.listingLinkRepository.save(link);
+
+        product.marketplaceIds = { ...(product.marketplaceIds || {}), mercadolibre: itemId };
+        product.status = 'synced';
+        await this.productRepository.save(product);
+    }
+
+    /**
+     * Enlaza a mano un producto con una publicación que ya existe en su cuenta de Mercado Libre (por ejemplo una que se creó sin SKU)
+     * y la actualiza con los datos del producto. No crea nada nuevo.
+     */
+    async linkExistingMeliListing(scope: SyncScope, productId: string, connectionId: string, itemId: string): Promise<ListingLink> {
+        const product = await this.findScopedProduct(scope, productId);
+        const connection = await this.getValidConnectionById(connectionId);
+        if (connection.marketplace !== 'mercadolibre') throw new BadRequestException('Esa cuenta no es de Mercado Libre.');
+        const enOtro = await this.listingLinkRepository.findOne({ where: { externalId: itemId, marketplace: 'mercadolibre' }, relations: { product: true } });
+        if (enOtro && enOtro.product?.id !== product.id) throw new ConflictException(`La publicación ${itemId} ya está enlazada a otro producto.`);
+
+        let link = await this.listingLinkRepository.findOne({ where: { product: { id: product.id }, connection: { id: connectionId } } });
+        if (!link) {
+            link = this.listingLinkRepository.create({ marketplace: 'mercadolibre', externalId: itemId, product, connection: { id: connectionId } as any, syncStatus: 'pending' });
+        }
+        await this.enlazarPublicacionMeli(product, link, connection, itemId);
+        return link;
     }
 
     /**
@@ -1236,8 +1322,10 @@ export class SyncService implements OnModuleInit {
         return [
             { id: 'BRAND', value_name: brand },
             { id: 'MODEL', value_name: product.sku },
+            // El SKU viaja en la publicación: así se reconoce como del producto y no se vuelve a crear.
+            { id: 'SELLER_SKU', value_name: product.sku },
             ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
-                .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && valor !== null && valor !== undefined && String(valor).trim() !== '')
+                .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && valor !== null && valor !== undefined && String(valor).trim() !== '')
                 .map(([id, valor]) => ({ id, value_name: String(valor) })),
         ];
     }
@@ -1412,7 +1500,8 @@ export class SyncService implements OnModuleInit {
         if (!product || !link?.externalId) throw new NotFoundException('Este producto no está publicado en esa cuenta de Mercado Libre.');
         const connection = await this.getValidConnectionById(connectionId);
 
-        const descripcion = product.aiDescription || product.description;
+        // Mercado Libre solo acepta texto plano (el HTML es para los canales que lo admiten, como Falabella).
+        const descripcion = descripcionEnTextoPlano(product.aiDescription || product.description);
         if (descripcion) await this.meliApi.updateItemDescription(connection.accessToken, link.externalId, descripcion);
         await this.meliApi.updateItemAttributes(connection.accessToken, link.externalId, this.atributosParaMeli(product));
         link.lastSyncedAt = new Date();

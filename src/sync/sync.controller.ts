@@ -15,6 +15,7 @@ import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
 import { SetBrandDto } from './dto/set-brand.dto';
+import { LinkMeliListingDto } from './dto/link-meli-listing.dto';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { ProductSheetService } from './product-sheet.service';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
@@ -292,6 +293,18 @@ export class SyncController {
     })
     searchFalabellaBrands(@Query('search') search: string, @Req() req, @Query('connectionId') connectionId?: string) {
         return this.syncService.searchFalabellaBrands(scopeOf(req), search || '', connectionId);
+    }
+
+    @Post('mercadolibre/products/:id/link')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('editor')
+    @ApiOperation({
+        summary: 'Enlaza un producto con una publicación que ya existe en Mercado Libre',
+        description: 'No crea nada: la publicación existente se enlaza y se actualiza con los datos del producto (descripción, atributos, stock y precio).',
+    })
+    linkMeliListing(@Param('id') id: string, @Body() dto: LinkMeliListingDto, @Req() req) {
+        return this.syncService.linkExistingMeliListing(scopeOf(req), id, dto.connectionId, dto.itemId);
     }
 
     @Patch('falabella/products/:id/brand')

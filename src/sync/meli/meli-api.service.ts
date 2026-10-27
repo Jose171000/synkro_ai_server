@@ -227,6 +227,15 @@ export class MeliApiService {
         return { ids: ids.slice(0, max), incompleto: ids.length >= max };
     }
 
+    /** Ids de las publicaciones del vendedor que llevan este SKU. */
+    async findItemIdsBySku(accessToken: string, sellerId: string, sku: string): Promise<string[]> {
+        const { data } = await this.http.get(`/users/${sellerId}/items/search`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: { seller_sku: sku },
+        });
+        return Array.isArray(data?.results) ? data.results.map(String) : [];
+    }
+
     /** Datos de varias publicaciones (ML admite hasta 20 por llamada). */
     async getItems(accessToken: string, ids: string[]): Promise<{ items: any[]; notFound: string[] }> {
         const items: any[] = [];
