@@ -1177,3 +1177,27 @@ describe('publicaciones pausadas o retiradas desde Synkro', () => {
         expect(enlaces[0].syncStatus).toBe('removed');
     });
 });
+
+describe('Falabella: campos numéricos y errores múltiples', () => {
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+    const base = (attrs: any) => ({
+        id: 'p1', sku: 'MK-1', name: 'Sábanas', price: 250, stock: 5, description: 'Juego de sábanas de algodón',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 3,
+        marketplaceIds: { falabella_category_id: '1272' }, aiAttributes: { brand: 'GENERICO', ...attrs },
+        store: { id: 't1' }, owner: { id: 'u1' }, images: [],
+    });
+
+    it('un campo numberfield se envía solo con el número', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const attr = { name: 'numero_de_hilos', feedName: 'NumeroDeHilos', label: 'Número de hilos', isMandatory: true, inputType: 'numberfield', options: [], description: '' };
+        const r: any = (service as any).toFalabellaInput(base({ numero_de_hilos: '3000 hilos' }), 'active', [attr]);
+        expect(r.input.extraAttributes).toEqual({ NumeroDeHilos: '3000' });
+    });
+
+    it('un campo numérico obligatorio sin ningún número no deja publicar', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const attr = { name: 'numero_de_hilos', feedName: 'NumeroDeHilos', label: 'Número de hilos', isMandatory: true, inputType: 'numberfield', options: [], description: '' };
+        const r: any = (service as any).toFalabellaInput(base({ numero_de_hilos: 'muchos' }), 'active', [attr]);
+        expect(r.reason).toMatch(/Número de hilos/);
+    });
+});

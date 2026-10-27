@@ -11,7 +11,7 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, decodificarEntidades, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -1689,6 +1689,8 @@ export class SyncService implements OnModuleInit {
     /** El valor ya normalizado si el atributo lo admite; undefined si es una lista cerrada que no lo incluye. */
     private valorPermitido(attribute: FalabellaAttribute, valor: string): string | undefined {
         const limpio = valor.trim();
+        // Un campo numérico solo admite el número («3000 hilos» → «3000»): Falabella rechaza la ficha entera con «is not a valid integer value».
+        if (esCampoNumerico(attribute.inputType)) return soloElNumero(limpio);
         if (!attribute.options?.length) return limpio || undefined;
         // La opción exacta o la más cercana («madera de pino» → «Madera»).
         return opcionCercana(limpio, attribute.options);
@@ -2066,7 +2068,8 @@ export class SyncService implements OnModuleInit {
 
         const erroresPorSku = new Map<string, string>();
         for (const error of estado.errors) {
-            if (error.sku) erroresPorSku.set(error.sku, error.message);
+            // Una ficha puede traer varios errores: se juntan todos (antes cada uno pisaba al anterior y solo se veía el último).
+            if (error.sku) erroresPorSku.set(error.sku, [erroresPorSku.get(error.sku), error.message].filter(Boolean).join('; '));
         }
 
         // Las fotos no cambian el estado de ningún producto: solo se avisa si Falabella las rechazó.
@@ -2125,7 +2128,10 @@ export class SyncService implements OnModuleInit {
                 } as any);
             }
             // «Field 'X' cannot be empty»: la categoría no lo marca obligatorio pero Falabella lo exige; el siguiente intento lo pide antes de enviar.
-            const vacios = link.product ? leerAtributosVacios(error) : [];
+            // Solo cuenta lo que de verdad está vacío en el producto: si tiene valor, Falabella lo rechazó por otro motivo (p. ej. otro error de la misma ficha).
+            const vacios = link.product
+                ? leerAtributosVacios(error).filter(a => String(this.buscarAtributo((link.product!.aiAttributes as any) || {}, a) ?? '').trim() === '')
+                : [];
             if (vacios.length && link.product) {
                 const actuales = { ...((link.product.aiAttributes as any) || {}) };
                 const previos: string[] = actuales._obligatorios ?? [];

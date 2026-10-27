@@ -18,3 +18,22 @@ describe('atributos que Falabella exige vacíos', () => {
         expect(atributosObligatoriosAprendidos(null).size).toBe(0);
     });
 });
+
+import { esCampoNumerico, soloElNumero } from './falabella-fields';
+
+describe('campos numéricos de Falabella', () => {
+    it('reconoce los campos numéricos por su tipo de entrada', () => {
+        expect(esCampoNumerico('numberfield')).toBe(true);
+        expect(esCampoNumerico('textfield')).toBe(false);
+        expect(esCampoNumerico('dropdown')).toBe(false);
+        expect(esCampoNumerico(undefined)).toBe(false);
+    });
+
+    it('deja solo el número: «3000 hilos» → «3000»', () => {
+        expect(soloElNumero('3000 hilos')).toBe('3000');
+        expect(soloElNumero('1,5 kg')).toBe('1.5');
+        expect(soloElNumero('  12 ')).toBe('12');
+        expect(soloElNumero('sin número')).toBeUndefined();
+        expect(soloElNumero('')).toBeUndefined();
+    });
+});

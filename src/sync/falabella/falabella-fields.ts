@@ -65,6 +65,22 @@ export function leerAtributosNoAplicables(mensaje: string | null | undefined): s
     return m[1].split(',').map((t) => t.trim()).filter(Boolean);
 }
 
+/** ¿Falabella pide un número en este campo? (su tipo de entrada es «numberfield», «numeric»…) */
+export function esCampoNumerico(inputType: string | null | undefined): boolean {
+    return /number|numeric|integer|decimal/i.test(String(inputType ?? ''));
+}
+
+/**
+ * El primer número de un texto, sin unidades ni palabras: «3000 hilos» → «3000», «1,5 kg» → «1.5».
+ * Un entero se devuelve sin decimales. Sin ningún número devuelve undefined.
+ */
+export function soloElNumero(texto: string | null | undefined): string | undefined {
+    const m = String(texto ?? '').match(/-?\d+(?:[.,]\d+)?/);
+    if (!m) return undefined;
+    const n = Number(m[0].replace(',', '.'));
+    return Number.isFinite(n) ? String(n) : undefined;
+}
+
 /** Falabella devuelve sus mensajes con entidades HTML («&#039;»): se pasan a texto normal para mostrarlos y analizarlos. */
 export function decodificarEntidades(texto: string | null | undefined): string {
     return String(texto ?? '')
