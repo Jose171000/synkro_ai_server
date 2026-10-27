@@ -543,6 +543,10 @@ export class FalabellaApiService {
 
         // Los errores llegan anidados y a veces como objeto suelto en vez de lista.
         const rawErrors = feed?.FeedErrors?.Error ?? [];
+        // Los errores tal como llegan (todos sus campos): el mensaje solo no siempre dice a qué ficha o campo se refiere.
+        if (rawErrors && (!Array.isArray(rawErrors) || rawErrors.length)) {
+            this.logger.warn(`Feed ${feedId} · errores tal como llegan de Falabella: ${JSON.stringify(rawErrors).slice(0, 1500)}`);
+        }
         const errors = (Array.isArray(rawErrors) ? rawErrors : [rawErrors])
             .filter(Boolean)
             .map((e: any) => ({
