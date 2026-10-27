@@ -1,11 +1,10 @@
 import { SyncService } from './sync.service';
 
 /** Un SyncService con solo lo que usa la publicación en Mercado Libre. */
-function construir(opts: { link?: any; idsPorSku?: string[]; items?: any[] } = {}) {
+function construir(opts: { link?: any; items?: any[] } = {}) {
     const producto: any = { id: 'p1', sku: 'OG310', name: 'Zapatera', stock: 12, price: '39.90', aiDescription: '<p>Con <b>5</b> cajones</p>', aiAttributes: { brand: 'GENERICO' }, marketplaceIds: {} };
     const guardados: any[] = [];
     const meliApi: any = {
-        findItemIdsBySku: jest.fn(async () => opts.idsPorSku ?? []),
         getItems: jest.fn(async (_t: string, ids: string[]) => ({ items: opts.items ?? ids.map((id) => ({ id, status: 'active', seller_id: 'u1', permalink: `https://ml/${id}` })), notFound: [] })),
         createItem: jest.fn(async () => ({ id: 'MPE-NUEVA', permalink: 'https://ml/nueva' })),
         setItemDescription: jest.fn(async () => undefined),
@@ -40,16 +39,10 @@ describe('Mercado Libre: no se vuelve a crear una publicación que ya existe', (
         expect(link.syncStatus).toBe('published');
     });
 
-    it('si Mercado Libre ya tiene una publicación con ese SKU no crea otra: la enlaza y la actualiza', async () => {
-        const { svc, meliApi, producto } = construir({ idsPorSku: ['MPE111'] });
-        const link = await svc.publishToMeli('p1', 'u', 'c1');
-
-        expect(meliApi.createItem).not.toHaveBeenCalled();
-        expect(meliApi.updateItemDescription).toHaveBeenCalledWith('tok', 'MPE111', 'Con 5 cajones');
-        expect(meliApi.updateItem).toHaveBeenCalledWith('tok', 'MPE111', { available_quantity: 12, price: 39.9 });
-        expect(link.externalId).toBe('MPE111');
-        expect(link.syncStatus).toBe('published');
-        expect(producto.marketplaceIds.mercadolibre).toBe('MPE111');
+    it('otras publicaciones con el mismo SKU en la cuenta no frenan el lanzamiento: se crea la nueva', async () => {
+        const { svc, meliApi } = construir();
+        await svc.publishToMeli('p1', 'u', 'c1');
+        expect(meliApi.createItem).toHaveBeenCalledTimes(1);
     });
 
     it('si el enlace ya tiene el id de un intento a medias, lo actualiza en vez de crear otra', async () => {
@@ -58,20 +51,13 @@ describe('Mercado Libre: no se vuelve a crear una publicación que ya existe', (
         const r = await svc.publishToMeli('p1', 'u', 'c1');
 
         expect(meliApi.createItem).not.toHaveBeenCalled();
-        expect(meliApi.findItemIdsBySku).not.toHaveBeenCalled();
         expect(r.externalId).toBe('MPE222');
         expect(r.syncStatus).toBe('published');
         expect(r.lastError).toBeNull();
     });
 
-    it('una publicación cerrada con ese SKU no cuenta: se crea una nueva', async () => {
-        const { svc, meliApi } = construir({ idsPorSku: ['MPE333'], items: [{ id: 'MPE333', status: 'closed', seller_id: 'u1' }] });
-        await svc.publishToMeli('p1', 'u', 'c1');
-        expect(meliApi.createItem).toHaveBeenCalledTimes(1);
-    });
-
     it('si falla algo al actualizar la existente no la pierde: queda enlazada con el aviso', async () => {
-        const { svc, meliApi } = construir({ idsPorSku: ['MPE111'] });
+        const { svc, meliApi } = construir({ link: { marketplace: 'mercadolibre', externalId: 'MPE111', syncStatus: 'error' } });
         meliApi.updateItemAttributes.mockRejectedValueOnce(new Error('no se puede cambiar'));
         const link = await svc.publishToMeli('p1', 'u', 'c1');
         expect(link.syncStatus).toBe('published');

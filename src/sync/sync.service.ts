@@ -1117,11 +1117,10 @@ export class SyncService implements OnModuleInit {
         try {
             const connection = await this.getValidConnectionById(connectionId);
 
-            // Si el producto ya tiene su publicación en esta cuenta (un intento anterior que quedó a medias, o una creada por fuera
-            // con el mismo SKU) no se crea otra: se enlaza y se actualiza, para no duplicarla en Mercado Libre.
-            const yaExiste = link.externalId || (await this.buscarPublicacionMeli(connection, product));
-            if (yaExiste) {
-                await this.enlazarPublicacionMeli(product, link, connection, yaExiste);
+            // Si Synkro ya creó la publicación de este producto en esta cuenta (un intento anterior que quedó a medias) no se crea otra:
+            // se actualiza. Que haya otras publicaciones con el mismo SKU no la frena: en Mercado Libre pueden existir varias a propósito.
+            if (link.externalId) {
+                await this.enlazarPublicacionMeli(product, link, connection, link.externalId);
             } else {
                 const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
                 const payload = this.buildMeliItemPayload(product, categoryId);
@@ -1178,19 +1177,6 @@ export class SyncService implements OnModuleInit {
         });
 
         return this.listingLinkRepository.save(link);
-    }
-
-    /** La publicación de este producto en la cuenta de Mercado Libre (por su SKU), o null si no tiene. Las cerradas no cuentan. */
-    private async buscarPublicacionMeli(connection: MarketplaceConnection, product: Product): Promise<string | null> {
-        if (!product.sku) return null;
-        try {
-            const ids = await this.meliApi.findItemIdsBySku(connection.accessToken, connection.externalUserId, product.sku);
-            if (!ids.length) return null;
-            const { items } = await this.meliApi.getItems(connection.accessToken, ids);
-            return items.find((i: any) => i?.status !== 'closed')?.id ?? null;
-        } catch {
-            return null; // sin poder consultar se publica como siempre
-        }
     }
 
     /**
@@ -1322,7 +1308,7 @@ export class SyncService implements OnModuleInit {
         return [
             { id: 'BRAND', value_name: brand },
             { id: 'MODEL', value_name: product.sku },
-            // El SKU viaja en la publicación: así se reconoce como del producto y no se vuelve a crear.
+            // El SKU viaja en la publicación, como dato del producto.
             { id: 'SELLER_SKU', value_name: product.sku },
             ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
                 .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && valor !== null && valor !== undefined && String(valor).trim() !== '')
