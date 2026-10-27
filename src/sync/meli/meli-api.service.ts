@@ -190,6 +190,16 @@ export class MeliApiService {
         return data?.[0]?.category_id;
     }
 
+    /** Varias categorías candidatas para una frase (el predictor las ordena de la mejor a la peor). */
+    async predictCategories(accessToken: string | undefined, query: string, limit = 3): Promise<string[]> {
+        const site = process.env.MELI_SITE_ID || 'MPE';
+        const { data } = await this.http.get(`/sites/${site}/domain_discovery/search`, {
+            params: { q: query, limit },
+            ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
+        });
+        return Array.isArray(data) ? data.map((d: any) => String(d?.category_id ?? '')).filter(Boolean) : [];
+    }
+
     /** Nombre de una categoría y el camino desde la raíz («Hogar › Cama › Sábanas»). */
     async getCategory(categoryId: string): Promise<{ id: string; name: string; path_from_root?: { id: string; name: string }[] }> {
         const { data } = await this.http.get(`/categories/${categoryId}`);

@@ -19,6 +19,8 @@ export interface LaunchReport {
     falabella?: FalabellaPrepReport;
     /** Datos de Mercado Libre que la IA tuvo que estimar. */
     estimatedMeli: string[];
+    /** Categoría de Mercado Libre con la que sale el producto; sin `id`, `options` son las recomendadas para que la persona elija. */
+    meliCategory?: { id?: string; path?: string; options?: { id: string; path: string }[] };
 }
 
 const CANALES = ['mercadolibre', 'falabella'];
@@ -42,7 +44,7 @@ export class ProductLaunchService {
     ) { }
 
     /** `elegidas`: las cuentas de cada canal donde la persona quiere publicar; sin ella se usan todas las activas. */
-    async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}): Promise<LaunchReport> {
+    async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}, opciones: { meliCategoryId?: string } = {}): Promise<LaunchReport> {
         const pedidos = [...new Set(marketplaces.map((m) => m.toLowerCase()))].filter((m) => CANALES.includes(m));
         const reporte: LaunchReport = { channels: [], estimatedMeli: [] };
 
@@ -71,10 +73,23 @@ export class ProductLaunchService {
             try {
                 // Preparación propia de cada canal
                 if (canal === 'falabella') reporte.falabella = await this.falabellaPrep.preparar(scope, productId, delCanal[0].id);
-                if (canal === 'mercadolibre') reporte.estimatedMeli = await this.completarMeli(scope, productId, delCanal[0].id);
+                if (canal === 'mercadolibre') reporte.estimatedMeli = await this.completarMeli(scope, productId, delCanal[0].id, reporte, opciones.meliCategoryId);
             } catch (error: any) {
                 this.logger.warn(`Preparación de ${canal} para ${productId}: ${error?.message}`);
                 // Si no se pudo preparar, igual se intenta publicar: el motivo exacto queda en la ficha.
+            }
+
+            // Sin categoría de Mercado Libre no se publica a ciegas: se devuelven las recomendadas para que la persona elija.
+            if (canal === 'mercadolibre' && reporte.meliCategory && !reporte.meliCategory.id) {
+                reporte.channels.push({
+                    marketplace: canal,
+                    accounts: 0,
+                    status: 'error',
+                    message: reporte.meliCategory.options?.length
+                        ? 'No se pudo elegir la categoría de Mercado Libre sola: elige una de las recomendadas.'
+                        : 'No se encontró una categoría de Mercado Libre para este producto: revisa el título.',
+                });
+                continue;
             }
 
             // Falabella rechazaría un producto al que le falta algo que pide: se dice qué falta en vez de fingir que se publica.
@@ -109,10 +124,18 @@ export class ProductLaunchService {
     }
 
     /** Mercado Libre rechaza una publicación sin sus atributos obligatorios: los que falten se estiman. Devuelve cuáles. */
-    private async completarMeli(scope: SyncScope, productId: string, connectionId: string): Promise<string[]> {
+    private async completarMeli(scope: SyncScope, productId: string, connectionId: string, reporte: LaunchReport, elegida?: string): Promise<string[]> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         let categoria = (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id;
+        if (elegida && elegida !== categoria) {
+            // La persona eligió la categoría: manda sobre la que había, y los atributos de la anterior ya no sirven.
+            categoria = elegida;
+            attrs.mercadolibre_category_id = elegida;
+            delete attrs.mercadolibre_attributes;
+            product.aiAttributes = attrs;
+            await this.sync.saveProduct(product);
+        }
         if (!categoria) {
             // Sin categoría guardada, Mercado Libre la predice por el título al publicar y rechaza si faltan sus obligatorios:
             // se predice ahora, se guarda y se completan los atributos de esa categoría.
@@ -128,11 +151,17 @@ export class ProductLaunchService {
                 categoria = (await this.sync.predictMeliCategoryFromQueries(consultas, token)) ?? null;
                 if (categoria) this.logger.log(`Categoría de Mercado Libre para ${product.sku} por frases alternativas: ${categoria} (${consultas.join(' | ')})`);
             }
-            if (!categoria) return [];
+            if (!categoria) {
+                // Nada concluyente: se ofrecen las recomendadas (por el título y por las frases de la IA) para que la persona elija.
+                const frases = [product.aiTitle || product.name, ...(await this.ai.consultasDeCategoria(product.aiTitle || product.name, product.aiDescription || product.description || ''))];
+                reporte.meliCategory = { options: await this.sync.suggestMeliCategories(frases, token) };
+                return [];
+            }
             attrs.mercadolibre_category_id = categoria;
             product.aiAttributes = attrs;
             await this.sync.saveProduct(product);
         }
+        reporte.meliCategory = { id: String(categoria), path: await this.sync.meliCategoryPath(String(categoria)) };
 
         // Todos los atributos de la categoría, no solo los obligatorios: los opcionales que se pueden sacar de las fotos o del texto suben la calidad.
         const requisitos = await this.canales.requisitos('mercadolibre', String(categoria), undefined, undefined, undefined, { todos: true });

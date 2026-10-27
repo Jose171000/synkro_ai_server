@@ -20,6 +20,8 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
         getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
         resolveMeliCategory: jest.fn(async () => 'MPE124007'),
         predictMeliCategoryFromQueries: jest.fn(async () => 'MPE444279'),
+        meliCategoryPath: jest.fn(async (id: string) => 'Ruta › ' + id),
+        suggestMeliCategories: jest.fn(async () => [{ id: 'MPE1', path: 'A › B' }, { id: 'MPE2', path: 'C › D' }]),
         saveProduct: jest.fn(async (p: any) => p),
     };
     const falabellaPrep: any = { preparar: jest.fn(async () => ({ listo: true, category: { id: '956', path: 'x', auto: true } })) };
@@ -124,6 +126,31 @@ describe('lanzar un producto en un paso', () => {
         expect(c.ai.consultasDeCategoria).toHaveBeenCalled();
         expect(c.sync.predictMeliCategoryFromQueries).toHaveBeenCalledWith(['utensilio para desmenuzar carne'], 'tok-ml');
         expect(c.producto.aiAttributes.mercadolibre_category_id).toBe('MPE444279');
+    });
+
+    it('si ninguna búsqueda halla categoría no publica: devuelve las recomendadas para elegir', async () => {
+        const c = construir({
+            producto: { id: 'p1', sku: 'CO252', price: 20, name: 'DESMENUZADOR', description: 'texto', aiAttributes: {}, marketplaceIds: {} },
+        });
+        c.sync.resolveMeliCategory = jest.fn(async () => { throw new Error('nada'); });
+        c.sync.predictMeliCategoryFromQueries = jest.fn(async () => undefined);
+        const r = await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+
+        expect(r.meliCategory).toEqual({ options: [{ id: 'MPE1', path: 'A › B' }, { id: 'MPE2', path: 'C › D' }] });
+        expect(r.channels[0]).toEqual(expect.objectContaining({ marketplace: 'mercadolibre', status: 'error', accounts: 0 }));
+        expect(c.sync.enqueuePublish).not.toHaveBeenCalled();
+    });
+
+    it('con la categoría elegida por la persona la usa, descarta los atributos de la anterior y publica', async () => {
+        const c = construir({
+            producto: { id: 'p1', sku: 'CO252', price: 20, name: 'DESMENUZADOR', description: 'texto', aiAttributes: { mercadolibre_category_id: 'MPE9', mercadolibre_attributes: { VIEJO: 'x' } }, marketplaceIds: {} },
+        });
+        const r = await c.service.lanzar(SCOPE, 'p1', ['mercadolibre'], {}, { meliCategoryId: 'MPE444279' });
+
+        expect(c.producto.aiAttributes.mercadolibre_category_id).toBe('MPE444279');
+        expect(c.producto.aiAttributes.mercadolibre_attributes.VIEJO).toBeUndefined();
+        expect(r.meliCategory).toEqual({ id: 'MPE444279', path: 'Ruta › MPE444279' });
+        expect(c.sync.enqueuePublish).toHaveBeenCalled();
     });
 
     it('ignora canales no soportados y avisa si la tienda no tiene cuenta del canal', async () => {

@@ -1246,6 +1246,28 @@ export class SyncService implements OnModuleInit {
         return link;
     }
 
+    /** Camino completo de una categoría de Mercado Libre («Hogar › Cocina › Pinzas de cocina»). */
+    async meliCategoryPath(categoryId: string): Promise<string> {
+        try {
+            const c = await this.meliApi.getCategory(categoryId);
+            const ruta = (c.path_from_root ?? []).map((x) => x.name).join(' › ');
+            return ruta || c.name || categoryId;
+        } catch {
+            return categoryId;
+        }
+    }
+
+    /** Categorías de Mercado Libre recomendadas para un producto (hasta `max`), con su camino, para que la persona elija. */
+    async suggestMeliCategories(consultas: string[], accessToken?: string, max = 5): Promise<{ id: string; path: string }[]> {
+        const ids: string[] = [];
+        for (const frase of consultas) {
+            const halladas = await this.meliApi.predictCategories(accessToken, frase.slice(0, 60), 3).catch(() => [] as string[]);
+            for (const id of halladas) if (!ids.includes(id)) ids.push(id);
+            if (ids.length >= max) break;
+        }
+        return Promise.all(ids.slice(0, max).map(async (id) => ({ id, path: await this.meliCategoryPath(id) })));
+    }
+
     /** La primera categoría de Mercado Libre que el predictor da para alguna de estas frases (de la más específica a la más general). */
     async predictMeliCategoryFromQueries(consultas: string[], accessToken?: string): Promise<string | undefined> {
         for (const frase of consultas) {

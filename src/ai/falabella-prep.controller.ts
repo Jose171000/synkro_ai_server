@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsBoolean, IsObject, IsOptional, IsString } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsBoolean, IsObject, IsOptional, IsString, Matches } from 'class-validator';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
@@ -37,6 +37,11 @@ class LaunchDto {
     @IsOptional()
     @IsObject()
     connectionIds?: Record<string, string[]>;
+
+    /** Categoría de Mercado Libre elegida por la persona entre las recomendadas. */
+    @IsOptional()
+    @Matches(/^[A-Z]{3}\d+$/, { message: 'La categoría de Mercado Libre es como MPE124007.' })
+    meliCategoryId?: string;
 }
 
 @ApiTags('ai')
@@ -89,7 +94,7 @@ export class FalabellaPrepController {
             'Lo que la IA estimó queda marcado para revisarlo desde la ficha.',
     })
     launchProduct(@Param('id') id: string, @Body() dto: LaunchDto, @Req() req) {
-        return this.launch.lanzar({ userId: req.user.id, storeId: req.store.storeId }, id, dto.marketplaces, leerCuentasElegidas(dto.connectionIds));
+        return this.launch.lanzar({ userId: req.user.id, storeId: req.store.storeId }, id, dto.marketplaces, leerCuentasElegidas(dto.connectionIds), { meliCategoryId: dto.meliCategoryId });
     }
 
     @Post('products/:id/update-falabella')
