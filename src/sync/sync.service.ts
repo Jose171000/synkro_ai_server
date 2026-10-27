@@ -1194,7 +1194,12 @@ export class SyncService implements OnModuleInit {
 
         const avisos: string[] = [];
         const intentar = async (que: string, fn: () => Promise<unknown>) => {
-            try { await fn(); } catch (error: any) { avisos.push(`${que}: ${this.describeApiError(error)}`); }
+            try { await fn(); } catch (error: any) {
+                const motivo = this.describeApiError(error);
+                // «Producto repetido»: los atributos que se reenvían ya describen a esta publicación (Mercado Libre los ve como el mismo producto), no es un fallo.
+                if (que === 'atributos' && /repeated user-product|user product was duplicated/i.test(motivo)) return;
+                avisos.push(`${que}: ${motivo}`);
+            }
         };
         const descripcion = descripcionEnTextoPlano(product.aiDescription || product.description);
         // Una publicación recién creada aún no tiene descripción: se crea; si ya la tiene, se reemplaza.

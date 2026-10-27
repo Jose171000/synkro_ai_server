@@ -69,6 +69,15 @@ describe('Mercado Libre: no se vuelve a crear una publicación que ya existe', (
         expect(enviados).not.toContain('SELLER_SKU');
     });
 
+    it('el rechazo «producto repetido» al reenviar atributos no se anota como fallo', async () => {
+        const link: any = { marketplace: 'mercadolibre', externalId: 'MPE222', syncStatus: 'error' };
+        const { svc, meliApi } = construir({ link });
+        meliApi.updateItemAttributes.mockRejectedValueOnce(new Error('Repeated user-product. Conflict id: MPEU1 — User product was duplicated'));
+        const r = await svc.publishToMeli('p1', 'u', 'c1');
+        expect(r.syncStatus).toBe('published');
+        expect(r.lastError).toBeNull();
+    });
+
     it('si falla algo al actualizar la existente no la pierde: queda enlazada con el aviso', async () => {
         const { svc, meliApi } = construir({ link: { marketplace: 'mercadolibre', externalId: 'MPE111', syncStatus: 'error' } });
         meliApi.updateItemAttributes.mockRejectedValueOnce(new Error('no se puede cambiar'));
