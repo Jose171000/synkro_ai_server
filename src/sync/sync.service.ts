@@ -1447,6 +1447,7 @@ export class SyncService implements OnModuleInit {
             ...((product.marketplaceIds as any) || {}),
             falabella_category_id: datos.categoryId,
         };
+        const anteriores: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         // Se conservan los atributos que ya tuviera: la IA pudo generar
         // algunos y no hay por qué perderlos al completar los de Falabella.
         product.aiAttributes = {
@@ -1456,8 +1457,14 @@ export class SyncService implements OnModuleInit {
             _categoriaManual: String(datos.categoryId),
         };
         delete (product.aiAttributes as any)._categoriaDudosa;
-        // Un dato que la persona acaba de llenar se envía aunque antes se hubiera anotado que «no aplica».
-        const llenados = new Set(Object.entries(datos.attributes || {}).filter(([, v]) => String(v ?? '').trim() !== '').map(([k]) => claveDeAtributo(k)));
+        // Un dato que la persona acaba de llenar o cambiar se envía aunque antes se hubiera anotado que «no aplica».
+        // El diálogo manda todos los campos con valor en cada guardado: los que siguen igual no cuentan, o un atributo
+        // que de verdad no aplica volvería a enviarse (y a rechazarse) cada vez.
+        const llenados = new Set(
+            Object.entries(datos.attributes || {})
+                .filter(([k, v]) => String(v ?? '').trim() !== '' && String(this.buscarAtributo(anteriores, k) ?? '').trim() !== String(v).trim())
+                .map(([k]) => claveDeAtributo(k)),
+        );
         const noAplica = (product.aiAttributes as any)._noAplica;
         if (Array.isArray(noAplica) && llenados.size) (product.aiAttributes as any)._noAplica = noAplica.filter((k: string) => !llenados.has(claveDeAtributo(k)));
         // Quien guarda las medidas las está revisando: dejan de estar marcadas como estimadas.

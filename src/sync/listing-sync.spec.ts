@@ -787,6 +787,22 @@ describe('campos de sistema y atributos que Falabella dijo que no aplican', () =
         expect(Object.values(r.input.extraAttributes)).toEqual(['2 plazas']);
     });
 
+    it('al guardar los datos de Falabella solo se reactiva lo que la persona cambió, no lo que sigue igual', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const prod: any = base({ garantia: '12 meses', tamano_cama_variant: 'vacío', _noAplica: ['garantia', 'tamano_cama_variant'] });
+        prod.save = undefined;
+        jest.spyOn(service as any, 'findScopedProduct').mockResolvedValue(prod);
+        jest.spyOn(service as any, 'resolveConnection').mockRejectedValue(new Error('sin cuenta'));
+        jest.spyOn(service as any, 'scheduleContentSync').mockResolvedValue([]);
+        (service as any).productRepository = { save: jest.fn(async (p: any) => p) };
+        await service.prepareFalabellaProduct({ userId: 'u1', storeId: 't1' } as any, 'p1', {
+            categoryId: '956', packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1,
+            attributes: { garantia: '12 meses', tamano_cama_variant: '2 plazas' },
+        });
+        // «garantia» siguió igual y se mantiene como no aplica; «tamano_cama_variant» cambió y se vuelve a enviar.
+        expect(prod.aiAttributes._noAplica).toEqual(['garantia']);
+    });
+
     it('si es obligatorio por haberlo exigido Falabella y está vacío, lo pide antes de enviar', async () => {
         const { service } = await construir({ conexiones: [fal()] });
         const r: any = (service as any).toFalabellaInput(base({ _obligatorios: ['tamano_cama_variant'] }), 'active', [atributo('tamano_cama_variant')]);
