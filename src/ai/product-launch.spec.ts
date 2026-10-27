@@ -17,6 +17,8 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
             return { message: 'ok' };
         }),
         findScopedProduct: jest.fn(async () => producto),
+        getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
+        resolveMeliCategory: jest.fn(async () => 'MPE124007'),
         saveProduct: jest.fn(async (p: any) => p),
     };
     const falabellaPrep: any = { preparar: jest.fn(async () => ({ listo: true, category: { id: '956', path: 'x', auto: true } })) };
@@ -70,6 +72,18 @@ describe('lanzar un producto en un paso', () => {
         expect(ai.completarAtributos.mock.calls[0][2].map((a: any) => a.name)).toEqual(['MATERIAL']);
         expect(ai.completarAtributos.mock.calls[0][4]).toEqual(expect.objectContaining({ textoCliente: 'texto', vision: { productType: 'torre', material: 'madera' } }));
         expect(producto.aiAttributes.mercadolibre_attributes.MATERIAL).toBe('Madera');
+    });
+
+    it('sin categoría de Mercado Libre guardada la predice con el token de la cuenta, la guarda y completa sus atributos', async () => {
+        const { service, sync, ai, producto } = construir({
+            producto: { id: 'p1', sku: 'OG310', price: 39.9, name: 'Zapatera', description: 'texto', aiAttributes: { brand: 'GENERICO' }, marketplaceIds: {} },
+        });
+        await service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+
+        expect(sync.resolveMeliCategory).toHaveBeenCalledWith(producto, 'tok-ml');
+        expect(producto.aiAttributes.mercadolibre_category_id).toBe('MPE124007');
+        expect(ai.completarAtributos).toHaveBeenCalled();
+        expect(producto.aiAttributes.mercadolibre_attributes).toEqual(expect.objectContaining({ MATERIAL: 'Madera' }));
     });
 
     it('ignora canales no soportados y avisa si la tienda no tiene cuenta del canal', async () => {

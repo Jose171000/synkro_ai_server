@@ -71,7 +71,7 @@ export class ProductLaunchService {
             try {
                 // Preparación propia de cada canal
                 if (canal === 'falabella') reporte.falabella = await this.falabellaPrep.preparar(scope, productId, delCanal[0].id);
-                if (canal === 'mercadolibre') reporte.estimatedMeli = await this.completarMeli(scope, productId);
+                if (canal === 'mercadolibre') reporte.estimatedMeli = await this.completarMeli(scope, productId, delCanal[0].id);
             } catch (error: any) {
                 this.logger.warn(`Preparación de ${canal} para ${productId}: ${error?.message}`);
                 // Si no se pudo preparar, igual se intenta publicar: el motivo exacto queda en la ficha.
@@ -109,14 +109,19 @@ export class ProductLaunchService {
     }
 
     /** Mercado Libre rechaza una publicación sin sus atributos obligatorios: los que falten se estiman. Devuelve cuáles. */
-    private async completarMeli(scope: SyncScope, productId: string): Promise<string[]> {
+    private async completarMeli(scope: SyncScope, productId: string, connectionId: string): Promise<string[]> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         let categoria = (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id;
         if (!categoria) {
             // Sin categoría guardada, Mercado Libre la predice por el título al publicar y rechaza si faltan sus obligatorios:
             // se predice ahora, se guarda y se completan los atributos de esa categoría.
-            categoria = await this.sync.resolveMeliCategory(product).catch(() => null);
+            // Con el token de la cuenta: igual que al publicar, para que la predicción no dependa de una consulta anónima.
+            const token = await this.sync.getValidConnectionById(connectionId).then((c) => c.accessToken).catch(() => undefined);
+            categoria = await this.sync.resolveMeliCategory(product, token).catch((error: any) => {
+                this.logger.warn(`Categoría de Mercado Libre para ${product.sku}: ${error?.message}`);
+                return null;
+            });
             if (!categoria) return [];
             attrs.mercadolibre_category_id = categoria;
             product.aiAttributes = attrs;
