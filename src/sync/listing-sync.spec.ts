@@ -988,6 +988,30 @@ describe('avisos de Falabella: envíos terminados y cambios de calidad', () => {
         vieja.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
         await vieja.service.refreshFalabellaQc('fa1', ['MK-1']);
         expect(vieja.enlaces[0].syncStatus).toBe('error');
+
+        // Tras el máximo de revisiones deja de reprogramarse y queda como un rechazo normal.
+        const agotada = await construir({
+            conexiones: [cuentaFal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', lastSyncedAt: null, updatedAt: new Date(), product: prod, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        agotada.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        await agotada.service.refreshFalabellaQc('fa1', ['MK-1'], 10);
+        expect(agotada.trabajos.find((x: any) => x.n === 'falabella-qc')).toBeUndefined();
+        expect(agotada.enlaces[0].syncStatus).toBe('error');
+    });
+
+    it('la revisión pendiente de fotos lleva un identificador por SKU y ventana, para que las cadenas repetidas se junten en una', async () => {
+        const t = await construir({
+            conexiones: [cuentaFal()], productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'pending', lastSyncedAt: null, updatedAt: new Date(), product: prod, connection: { id: 'fa1', owner: { id: 'u1' } } }],
+        });
+        t.falabella.getQcStates = jest.fn(async () => [{ sku: 'MK-1', status: 'rejected', reason: 'Automatically rejected: Images Missing' }]);
+        const espia = jest.spyOn((t.service as any).syncQueue, 'add');
+        await t.service.refreshFalabellaQc('fa1', ['MK-1'], 2);
+        const [nombre, datos, opciones] = espia.mock.calls.find((c: any) => c[0] === 'falabella-qc') as any;
+        expect(nombre).toBe('falabella-qc');
+        expect(datos).toMatchObject({ connectionId: 'fa1', skus: ['MK-1'], intento: 3 });
+        expect(opciones.jobId).toMatch(/^qc-fotos-fa1-MK-1-\d+$/);
     });
 
     it('un rechazo por reglas de otra categoría descarta la categoría y no se vuelve a proponer', async () => {

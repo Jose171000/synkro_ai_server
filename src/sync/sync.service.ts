@@ -2562,12 +2562,15 @@ export class SyncService implements OnModuleInit {
 
     /** Tiempo tras crear la ficha en que un rechazo por falta de fotos se considera pasajero (las fotos van en otro envío). */
     private static readonly VENTANA_FOTOS_MS = 40 * 60_000;
+    /** Cada cuánto se vuelve a mirar una ficha rechazada por fotos, y cuántas veces como máximo (10 × 4 min = la ventana de arriba). */
+    private static readonly REINTENTO_QC_MS = 4 * 60_000;
+    private static readonly MAX_REVISIONES_DE_FOTOS = 10;
 
     /**
      * Pone al día el estado de calidad de fichas concretas (o de las que esperan, si no se dice cuáles). Lo dispara
      * el aviso «cambió la calidad de un producto»: aprobada → publicada; rechazada → error con su motivo.
      */
-    async refreshFalabellaQc(connectionId: string, skus: string[] = []): Promise<{ aprobadas: number; rechazadas: number }> {
+    async refreshFalabellaQc(connectionId: string, skus: string[] = [], intento = 0): Promise<{ aprobadas: number; rechazadas: number }> {
         const conexion = await this.getValidConnectionById(connectionId);
         const credenciales = this.credentialsOf(conexion);
         const enlaces = await this.listingLinkRepository.find({
@@ -2595,7 +2598,7 @@ export class SyncService implements OnModuleInit {
                 await this.listingLinkRepository.save(enlace);
                 aprobadas++;
                 if (userId) await this.notifications.notify(userId, { type: 'publish', severity: 'success', title: `Falabella aprobó ${enlace.product.sku}`, body: 'La ficha pasó el control de calidad y ya está a la venta.', marketplace: 'falabella', meta: { productId: enlace.product.id } });
-            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && this.esReciente(enlace, SyncService.VENTANA_FOTOS_MS)) {
+            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && intento < SyncService.MAX_REVISIONES_DE_FOTOS && this.esReciente(enlace, SyncService.VENTANA_FOTOS_MS)) {
                 // Falabella revisa la ficha apenas se crea y la rechaza por «Images Missing» antes de recibir las fotos, que
                 // van en un envío aparte. Es pasajero: se deja en proceso y se vuelve a mirar cuando las fotos ya hayan entrado.
                 if (enlace.syncStatus !== 'pending') {
@@ -2603,7 +2606,14 @@ export class SyncService implements OnModuleInit {
                     enlace.lastError = null as any;
                     await this.listingLinkRepository.save(enlace);
                 }
-                await this.syncQueue.add('falabella-qc', { connectionId, skus: [enlace.product.sku] }, { delay: 4 * 60_000 });
+                // Una sola revisión por SKU y ventana de 4 minutos (aunque varias cadenas coincidan) y con tope de intentos:
+                // sin esto las cadenas se acumulaban y revisaban cientos de veces por hora, gastando llamadas de Falabella y Redis.
+                const ventana = Math.floor(Date.now() / SyncService.REINTENTO_QC_MS) + 1;
+                await this.syncQueue.add(
+                    'falabella-qc',
+                    { connectionId, skus: [enlace.product.sku], intento: intento + 1 },
+                    { delay: SyncService.REINTENTO_QC_MS, jobId: `qc-fotos-${connectionId}-${enlace.product.sku}-${ventana}` },
+                );
                 // Respaldo: si aun con las fotos en el alta Falabella dice que faltan, se mandan aparte, una sola vez.
                 const atributos: Record<string, any> = { ...((enlace.product.aiAttributes as any) || {}) };
                 if (!atributos._fotosReenviadas && userId) {
