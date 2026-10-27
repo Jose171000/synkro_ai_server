@@ -1204,7 +1204,11 @@ export class SyncService implements OnModuleInit {
                 catch { await this.meliApi.setItemDescription(token, itemId, descripcion); }
             });
         }
-        await intentar('atributos', () => this.meliApi.updateItemAttributes(token, itemId, this.atributosParaMeli(product)));
+        // Solo los atributos que cambian: reenviar los que la publicación ya tiene hace que Mercado Libre la vea como un producto repetido.
+        const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
+        const tiene = new Map<string, string>((item.attributes ?? []).map((a: any) => [String(a?.id), norm(a?.value_name)]));
+        const distintos = this.atributosParaMeli(product).filter((a) => tiene.get(a.id) !== norm(a.value_name));
+        if (distintos.length) await intentar('atributos', () => this.meliApi.updateItemAttributes(token, itemId, distintos));
         if (!(item.variations?.length)) {
             await intentar('stock y precio', () => this.meliApi.updateItem(token, itemId, { available_quantity: product.stock, price: Number(product.price) }));
         }

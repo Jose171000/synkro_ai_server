@@ -56,6 +56,19 @@ describe('Mercado Libre: no se vuelve a crear una publicación que ya existe', (
         expect(r.lastError).toBeNull();
     });
 
+    it('solo reenvía los atributos que la publicación no tiene ya', async () => {
+        const link: any = { marketplace: 'mercadolibre', externalId: 'MPE222', syncStatus: 'error' };
+        const { svc, meliApi } = construir({
+            link,
+            items: [{ id: 'MPE222', status: 'active', seller_id: 'u1', attributes: [{ id: 'BRAND', value_name: 'genérico' }, { id: 'MODEL', value_name: 'OG310' }, { id: 'SELLER_SKU', value_name: 'OG310' }] }],
+        });
+        await svc.publishToMeli('p1', 'u', 'c1');
+        // BRAND del producto es GENERICO (distinto de «genérico»): es lo único que difiere de lo que ya tiene
+        const enviados = meliApi.updateItemAttributes.mock.calls[0]?.[2]?.map((a: any) => a.id) ?? [];
+        expect(enviados).not.toContain('MODEL');
+        expect(enviados).not.toContain('SELLER_SKU');
+    });
+
     it('si falla algo al actualizar la existente no la pierde: queda enlazada con el aviso', async () => {
         const { svc, meliApi } = construir({ link: { marketplace: 'mercadolibre', externalId: 'MPE111', syncStatus: 'error' } });
         meliApi.updateItemAttributes.mockRejectedValueOnce(new Error('no se puede cambiar'));
