@@ -1201,3 +1201,33 @@ describe('Falabella: campos numéricos y errores múltiples', () => {
         expect(r.reason).toMatch(/Número de hilos/);
     });
 });
+
+describe('Falabella: categorías con campos «Variant» obligatorios', () => {
+    const fal = () => cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' });
+    const prod = (extra: any = {}) => ({
+        id: 'p1', sku: 'BE-1', name: 'Sábanas', price: 250, stock: 5, description: 'Juego de sábanas de algodón',
+        packageWidth: 30, packageLength: 40, packageHeight: 20, packageWeight: 3,
+        marketplaceIds: { falabella_category_id: '1272' }, aiAttributes: { brand: 'GENERICO', tamano_cama_variant: '2 plazas', ...extra },
+        store: { id: 't1' }, owner: { id: 'u1' }, images: [],
+    });
+    const variante = { name: 'tamano_cama_variant', feedName: 'TamanoCamaVariant', label: 'Tamaño cama variant', isMandatory: true, inputType: 'dropdown', options: ['2 plazas'], description: '' };
+    const comun = { name: 'estilo', feedName: 'Estilo', label: 'Estilo', isMandatory: false, inputType: 'textfield', options: [], description: '' };
+
+    it('la ficha suelta se declara como su propio grupo (ParentSku = su SKU)', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(prod(), 'active', [variante, comun]);
+        expect(r.input.parentSku).toBe('BE-1');
+    });
+
+    it('una categoría sin campos Variant no lleva ParentSku', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(prod(), 'active', [comun]);
+        expect(r.input.parentSku).toBeUndefined();
+    });
+
+    it('si Falabella ya dijo que ParentSku no aplica, no se envía', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const r: any = (service as any).toFalabellaInput(prod({ _noAplica: ['ParentSku'] }), 'active', [variante]);
+        expect(r.input.parentSku).toBeUndefined();
+    });
+});

@@ -1672,6 +1672,10 @@ export class SyncService implements OnModuleInit {
                 // Muchas categorias exigen Variation aunque el producto no
                 // tenga variantes; el SKU sirve como valor unico.
                 variation: attributes.variation || product.sku,
+                // Las categorías con campos «…Variant» obligatorios agrupan sus fichas por ParentSku: Falabella rechazaba esos campos
+                // como vacíos aunque iban con valor. Una ficha suelta es su propio grupo (ParentSku = su SKU), salvo que Falabella ya
+                // haya dicho que ParentSku no aplica a su categoría.
+                parentSku: !noAplican.has('parentsku') && categoryAttributes.some(a => a.isMandatory && /variant$/i.test(a.feedName ?? '')) ? product.sku : undefined,
                 extraAttributes: propios,
             },
         };
