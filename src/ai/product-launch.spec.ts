@@ -53,6 +53,25 @@ describe('lanzar un producto en un paso', () => {
         expect(r.falabella?.listo).toBe(true);
     });
 
+    it('en Mercado Libre completa también los atributos opcionales y le da a la IA las fotos y el texto del cliente', async () => {
+        const { service, canales, ai, producto } = (() => {
+            const c = construir();
+            c.service['canales'].requisitos = jest.fn(async () => [
+                { name: 'COLOR', description: 'Color', example: '', isRequired: true },
+                { name: 'MATERIAL', description: 'Material', example: '', isRequired: false },
+            ]);
+            c.producto.aiAttributes.vision = { productType: 'torre', material: 'madera' };
+            return { ...c, canales: c.service['canales'] };
+        })();
+        await service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+
+        expect(canales.requisitos).toHaveBeenCalledWith('mercadolibre', 'MPE1', undefined, undefined, undefined, { todos: true });
+        // MATERIAL es opcional y aun así se pide; COLOR ya estaba
+        expect(ai.completarAtributos.mock.calls[0][2].map((a: any) => a.name)).toEqual(['MATERIAL']);
+        expect(ai.completarAtributos.mock.calls[0][4]).toEqual(expect.objectContaining({ textoCliente: 'texto', vision: { productType: 'torre', material: 'madera' } }));
+        expect(producto.aiAttributes.mercadolibre_attributes.MATERIAL).toBe('Madera');
+    });
+
     it('ignora canales no soportados y avisa si la tienda no tiene cuenta del canal', async () => {
         const { service, falabellaPrep } = construir({ cuentas: [{ id: 'ml1', marketplace: 'mercadolibre', status: 'active' }] });
         const r = await service.lanzar(SCOPE, 'p1', ['falabella', 'woocommerce', 'amazon']);

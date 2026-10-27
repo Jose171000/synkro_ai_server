@@ -11,6 +11,8 @@ import { MarketplaceConnection } from '../sync/entities/marketplace-connection.e
 
 /** Cuántos atributos opcionales se piden a la IA: más de eso solo infla el prompt. */
 const MAX_OPCIONALES = 10;
+/** Al pedir «todos» los atributos de Mercado Libre se llega a este número de opcionales. */
+const MAX_OPCIONALES_TODOS = 60;
 const MAX_OPCIONES = 40;
 /** Las listas de Falabella pueden ser largas (materiales, colores…): se guardan completas para poder ajustar el valor a una de ellas. */
 const MAX_OPCIONES_FALABELLA = 400;
@@ -179,7 +181,10 @@ export class ChannelAttributesService {
                 ? [...atributos.filter((a) => a.isRequired), ...atributos.filter((a) => !a.isRequired).slice(0, 80)]
                 : atributos.filter((a) => a.isRequired);
         }
-        return paraLaIa(atributos);
+        // Mercado Libre: con `todos` se piden también los opcionales que la categoría admita (suben la calidad de la publicación).
+        return todos
+            ? [...atributos.filter((a) => a.isRequired), ...atributos.filter((a) => !a.isRequired).slice(0, MAX_OPCIONALES_TODOS)]
+            : paraLaIa(atributos);
     }
 
     /** Todos los atributos de la categoría, tal como los publica el canal. */

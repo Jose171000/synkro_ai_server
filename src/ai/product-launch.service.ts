@@ -3,6 +3,7 @@ import { SyncScope, SyncService } from '../sync/sync.service';
 import { FalabellaAutoPrepService, FalabellaPrepReport } from './falabella-auto-prep.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
+import { quitarUrls } from './description-html';
 import { CuentasElegidas, cuentasParaPublicar } from '../sync/cuentas-elegidas';
 
 export interface LaunchChannelResult {
@@ -26,7 +27,7 @@ const NOMBRE: Record<string, string> = { mercadolibre: 'Mercado Libre', falabell
 /**
  * «Lanzar» un producto: deja listo cada canal y lo publica, sin que la persona tenga que hacer nada más.
  *  - Falabella: categoría, marca contra su catálogo, medidas, todos los atributos y la descripción HTML.
- *  - Mercado Libre: completa los atributos obligatorios que faltaban.
+ *  - Mercado Libre: completa los atributos de la categoría (obligatorios y opcionales) con lo que dicen las fotos y el texto.
  * Lo que la IA estimó (medidas, datos obligatorios) queda marcado para revisarlo después desde la ficha.
  */
 @Injectable()
@@ -122,12 +123,22 @@ export class ProductLaunchService {
             await this.sync.saveProduct(product);
         }
 
-        const requisitos = await this.canales.requisitos('mercadolibre', String(categoria));
+        // Todos los atributos de la categoría, no solo los obligatorios: los opcionales que se pueden sacar de las fotos o del texto suben la calidad.
+        const requisitos = await this.canales.requisitos('mercadolibre', String(categoria), undefined, undefined, undefined, { todos: true });
         const actuales: Record<string, string> = { ...(attrs.mercadolibre_attributes ?? {}) };
-        const faltantes = (requisitos ?? []).filter((a) => a.isRequired && !String(actuales[a.name] ?? '').trim());
+        const faltantes = (requisitos ?? []).filter((a) => !String(actuales[a.name] ?? '').trim());
         if (!faltantes.length) return [];
 
-        const r = await this.ai.completarAtributos(product.aiTitle || product.name, product.aiDescription || product.description || product.name, faltantes, { marca: attrs.brand, color: attrs.color });
+        const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
+            ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
+            : undefined;
+        const r = await this.ai.completarAtributos(
+            product.aiTitle || product.name,
+            product.aiDescription || product.description || product.name,
+            faltantes,
+            { marca: attrs.brand, color: attrs.color },
+            { textoCliente: quitarUrls(product.description), vision: attrs.vision, medidas, sku: product.sku },
+        );
         if (!Object.keys(r.values).length) return [];
 
         const estimated = attrs.estimated ?? { measures: false, attributes: {} };
