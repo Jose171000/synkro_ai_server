@@ -122,6 +122,12 @@ export class ProductLaunchService {
                 this.logger.warn(`Categoría de Mercado Libre para ${product.sku}: ${error?.message}`);
                 return null;
             });
+            if (!categoria) {
+                // El título solo no la halla: la IA propone frases de lo que es el producto y se prueban una a una.
+                const consultas = await this.ai.consultasDeCategoria(product.aiTitle || product.name, product.aiDescription || product.description || '');
+                categoria = (await this.sync.predictMeliCategoryFromQueries(consultas, token)) ?? null;
+                if (categoria) this.logger.log(`Categoría de Mercado Libre para ${product.sku} por frases alternativas: ${categoria} (${consultas.join(' | ')})`);
+            }
             if (!categoria) return [];
             attrs.mercadolibre_category_id = categoria;
             product.aiAttributes = attrs;
@@ -131,28 +137,48 @@ export class ProductLaunchService {
         // Todos los atributos de la categoría, no solo los obligatorios: los opcionales que se pueden sacar de las fotos o del texto suben la calidad.
         const requisitos = await this.canales.requisitos('mercadolibre', String(categoria), undefined, undefined, undefined, { todos: true });
         const actuales: Record<string, string> = { ...(attrs.mercadolibre_attributes ?? {}) };
+        // Un campo numérico guardado con texto («3 niveles») hace que Mercado Libre rechace la publicación: se borra y se vuelve a completar.
+        let limpiado = false;
+        for (const a of requisitos ?? []) {
+            const v = String(actuales[a.name] ?? '').trim();
+            if (a.valueType === 'number' && v && !/^-?\d+(\.\d+)?$/.test(v)) { delete actuales[a.name]; limpiado = true; }
+        }
         const faltantes = (requisitos ?? []).filter((a) => !String(actuales[a.name] ?? '').trim());
-        if (!faltantes.length) return [];
 
-        const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
-            ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
-            : undefined;
-        const r = await this.ai.completarAtributos(
-            product.aiTitle || product.name,
-            product.aiDescription || product.description || product.name,
-            faltantes,
-            { marca: attrs.brand, color: attrs.color },
-            { textoCliente: quitarUrls(product.description), vision: attrs.vision, medidas, sku: product.sku },
-        );
-        if (!Object.keys(r.values).length) return [];
+        let nuevos: Record<string, string> = {};
+        let estimados: string[] = [];
+        if (faltantes.length) {
+            const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
+                ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
+                : undefined;
+            const r = await this.ai.completarAtributos(
+                product.aiTitle || product.name,
+                product.aiDescription || product.description || product.name,
+                faltantes,
+                { marca: attrs.brand, color: attrs.color },
+                { textoCliente: quitarUrls(product.description), vision: attrs.vision, medidas, sku: product.sku },
+            );
+            nuevos = r.values;
+            estimados = r.estimated;
+        }
+
+        const todos = { ...actuales, ...nuevos };
+        // Vender por «Unidad» obliga a decir cuántas vienen en el envase: una.
+        const pideUnidades = (requisitos ?? []).some((a) => a.name === 'UNITS_PER_PACK');
+        if (pideUnidades && /^unidad(es)?$/i.test(String(todos.SALE_FORMAT ?? '').trim()) && !String(todos.UNITS_PER_PACK ?? '').trim()) {
+            todos.UNITS_PER_PACK = '1';
+            nuevos.UNITS_PER_PACK = '1';
+        }
+        if (!Object.keys(nuevos).length && !limpiado) return [];
 
         const estimated = attrs.estimated ?? { measures: false, attributes: {} };
         product.aiAttributes = {
             ...attrs,
-            mercadolibre_attributes: { ...actuales, ...r.values },
-            estimated: { ...estimated, attributes: { ...(estimated.attributes ?? {}), mercadolibre: [...new Set([...(estimated.attributes?.mercadolibre ?? []), ...r.estimated])] } },
+            mercadolibre_attributes: todos,
+            estimated: { ...estimated, attributes: { ...(estimated.attributes ?? {}), mercadolibre: [...new Set([...(estimated.attributes?.mercadolibre ?? []), ...estimados])] } },
         };
         await this.sync.saveProduct(product);
-        return r.estimated;
+        return estimados;
     }
 }
+

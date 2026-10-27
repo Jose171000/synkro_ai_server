@@ -8,6 +8,7 @@ import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
+import { soloElNumero } from '../sync/falabella/falabella-fields';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import OpenAI from 'openai';
 
@@ -588,6 +589,37 @@ Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde s
     }
   }
 
+  /**
+   * Frases cortas, de lo que ES el producto (sin marca ni color), con las que buscar su categoría en Mercado Libre cuando
+   * el título solo no la encuentra: «desmenuzador de pollo» → «utensilio para desmenuzar carne», «pinzas de cocina»…
+   */
+  public async consultasDeCategoria(nombre: string, descripcion: string): Promise<string[]> {
+    try {
+      const r = await this.openai.chat.completions.create({
+        model: 'deepseek-chat',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Necesito encontrar la categoría de Mercado Libre Perú de este producto, pero el buscador no la halla con su título.
+Producto: ${nombre}
+Descripción: ${String(descripcion ?? '').slice(0, 600)}
+
+Da de 4 a 6 frases de búsqueda en español, de 2 a 5 palabras, de lo que ES el producto: su tipo genérico y sinónimos o el grupo al que pertenece
+(de lo más específico a lo más general). Sin marcas, colores ni medidas.
+Responde solo un JSON: { "consultas": ["...", "..."] }`,
+          },
+        ],
+      });
+      const j = JSON.parse(r.choices[0]?.message?.content || '{}');
+      return (Array.isArray(j.consultas) ? j.consultas : []).map((c: any) => String(c).trim()).filter(Boolean).slice(0, 6);
+    } catch (error: any) {
+      console.warn(`[AI] No se pudieron proponer consultas de categoría: ${error?.message}`);
+      return [];
+    }
+  }
+
   public async completarAtributos(
     nombre: string,
     descripcion: string,
@@ -643,6 +675,10 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
           // Exacta o, si no, la más cercana de la lista («madera de pino» → «Madera»).
           const valida = a.options.find(o => k(o) === k(String(v))) ?? opcionCercana(String(v), a.options);
           if (valida) values[a.name] = valida;
+        } else if (a.valueType === 'number') {
+          // Un campo numérico rechaza «3 niveles» o «20 platos»: se manda solo el número.
+          const n = soloElNumero(String(v));
+          if (n !== undefined) values[a.name] = n;
         } else {
           values[a.name] = String(v);
         }

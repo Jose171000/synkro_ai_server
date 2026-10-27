@@ -36,12 +36,13 @@ export function atributosDeMeli(crudos: any[], maxOpcionales = MAX_OPCIONALES): 
     const mapear = (a: any): CategoryAttribute => {
         const opciones = Array.isArray(a.values) ? a.values.map((v: any) => v?.name).filter(Boolean).slice(0, MAX_OPCIONES) : [];
         const unidades = Array.isArray(a.allowed_units) ? a.allowed_units.map((u: any) => u?.name).filter(Boolean) : [];
-        const partes = [a.name, a.hint, unidades.length ? `unidades: ${unidades.join('/')}` : null].filter(Boolean);
+        const partes = [a.name, a.hint, unidades.length ? `unidades: ${unidades.join('/')}` : null, a.value_type === 'number' ? 'responde SOLO con un número, sin texto ni unidad' : null].filter(Boolean);
         return {
             name: a.id,
             description: partes.join(' — '),
             example: opciones[0] ?? '',
             isRequired: !!a.tags?.required,
+            ...(a.value_type ? { valueType: String(a.value_type) } : {}),
             ...(opciones.length ? { options: opciones } : {}),
         };
     };
@@ -156,7 +157,9 @@ export class ChannelAttributesService {
         const aprendidos = guardada?.requiredAttributes?.length ? guardada.requiredAttributes : null;
         const vigente = !!guardada && !!aprendidos && Date.now() - new Date(guardada.updatedAt).getTime() < VIGENCIA_MS;
         // Lo aprendido antes de guardar las listas completas de Falabella tiene las opciones cortadas en 40: se vuelve a pedir.
-        const recortada = marketplace === 'falabella' && !!aprendidos?.some((x) => x.options?.length === MAX_OPCIONES);
+        const recortada = (marketplace === 'falabella' && !!aprendidos?.some((x) => x.options?.length === MAX_OPCIONES))
+            // Lo aprendido de Mercado Libre antes de guardar el tipo de dato de cada atributo no dice cuáles piden solo un número.
+            || (marketplace === 'mercadolibre' && !!aprendidos?.some((x) => x.valueType === undefined));
         // En Falabella las palabras del producto se aprenden solo cuando la ficha es aprobada (confirmarCategoria):
         // si no, una categoría equivocada también aprendería las palabras y repetiría el error.
         const contextoParaAprender = marketplace === 'falabella' ? undefined : contexto;

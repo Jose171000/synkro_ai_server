@@ -19,10 +19,11 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
         findScopedProduct: jest.fn(async () => producto),
         getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
         resolveMeliCategory: jest.fn(async () => 'MPE124007'),
+        predictMeliCategoryFromQueries: jest.fn(async () => 'MPE444279'),
         saveProduct: jest.fn(async (p: any) => p),
     };
     const falabellaPrep: any = { preparar: jest.fn(async () => ({ listo: true, category: { id: '956', path: 'x', auto: true } })) };
-    const ai: any = { completarAtributos: jest.fn(async () => ({ values: { MATERIAL: 'Madera' }, estimated: ['MATERIAL'] })) };
+    const ai: any = { consultasDeCategoria: jest.fn(async () => ['utensilio para desmenuzar carne']), completarAtributos: jest.fn(async () => ({ values: { MATERIAL: 'Madera' }, estimated: ['MATERIAL'] })) };
     const canales: any = {
         requisitos: jest.fn(async () => [
             { name: 'COLOR', description: 'Color', example: '', isRequired: true },
@@ -84,6 +85,45 @@ describe('lanzar un producto en un paso', () => {
         expect(producto.aiAttributes.mercadolibre_category_id).toBe('MPE124007');
         expect(ai.completarAtributos).toHaveBeenCalled();
         expect(producto.aiAttributes.mercadolibre_attributes).toEqual(expect.objectContaining({ MATERIAL: 'Madera' }));
+    });
+
+    it('un campo numérico guardado con texto se borra y se vuelve a completar', async () => {
+        const c = construir();
+        c.producto.aiAttributes.mercadolibre_attributes = { COLOR: 'Azul', DISHES_CAPACITY: '3 niveles' };
+        c.service['canales'].requisitos = jest.fn(async () => [
+            { name: 'COLOR', description: 'Color', example: '', isRequired: true },
+            { name: 'DISHES_CAPACITY', description: 'Capacidad', example: '', isRequired: true, valueType: 'number' },
+        ]);
+        c.ai.completarAtributos.mockResolvedValueOnce({ values: { DISHES_CAPACITY: '20' }, estimated: [] });
+        await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+
+        expect(c.ai.completarAtributos.mock.calls[0][2].map((a: any) => a.name)).toEqual(['DISHES_CAPACITY']);
+        expect(c.producto.aiAttributes.mercadolibre_attributes.DISHES_CAPACITY).toBe('20');
+    });
+
+    it('si vende por Unidad y la categoría pide la cantidad de envases, pone 1', async () => {
+        const c = construir();
+        c.producto.aiAttributes.mercadolibre_attributes = { COLOR: 'Azul', SALE_FORMAT: 'Unidad' };
+        c.service['canales'].requisitos = jest.fn(async () => [
+            { name: 'COLOR', description: 'Color', example: '', isRequired: true },
+            { name: 'SALE_FORMAT', description: 'Formato', example: '', isRequired: false },
+            { name: 'UNITS_PER_PACK', description: 'Cantidad de envases', example: '', isRequired: false },
+        ]);
+        c.ai.completarAtributos.mockResolvedValueOnce({ values: {}, estimated: [] });
+        await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+        expect(c.producto.aiAttributes.mercadolibre_attributes.UNITS_PER_PACK).toBe('1');
+    });
+
+    it('si el título no encuentra categoría en Mercado Libre prueba con las frases que propone la IA', async () => {
+        const c = construir({
+            producto: { id: 'p1', sku: 'CO252', price: 20, name: 'DESMENUZADOR DE POLLO', description: 'texto', aiAttributes: {}, marketplaceIds: {} },
+        });
+        c.sync.resolveMeliCategory = jest.fn(async () => { throw new Error('No se pudo determinar la categoría'); });
+        await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
+
+        expect(c.ai.consultasDeCategoria).toHaveBeenCalled();
+        expect(c.sync.predictMeliCategoryFromQueries).toHaveBeenCalledWith(['utensilio para desmenuzar carne'], 'tok-ml');
+        expect(c.producto.aiAttributes.mercadolibre_category_id).toBe('MPE444279');
     });
 
     it('ignora canales no soportados y avisa si la tienda no tiene cuenta del canal', async () => {

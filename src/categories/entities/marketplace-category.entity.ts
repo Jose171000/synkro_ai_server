@@ -7,6 +7,7 @@ export interface CategoryAttribute {
     example: string;      // e.g. "10.5"
     isRequired: boolean;  // true = obligatorio en el listing, false = recomendado/opcional
     options?: string[];   // valores admitidos por el canal, si es una lista cerrada
+    valueType?: string;   // tipo de dato del canal (Mercado Libre): 'number' pide solo un número, sin texto ni unidad
 }
 
 @Entity('marketplace_categories')
