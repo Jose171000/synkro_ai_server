@@ -146,13 +146,8 @@ export class ProductLaunchService {
                 return null;
             });
             if (!categoria) {
-                // El título solo no la halla: la IA propone frases de lo que es el producto y se prueban una a una.
-                const consultas = await this.ai.consultasDeCategoria(product.aiTitle || product.name, product.aiDescription || product.description || '');
-                categoria = (await this.sync.predictMeliCategoryFromQueries(consultas, token)) ?? null;
-                if (categoria) this.logger.log(`Categoría de Mercado Libre para ${product.sku} por frases alternativas: ${categoria} (${consultas.join(' | ')})`);
-            }
-            if (!categoria) {
-                // Nada concluyente: se ofrecen las recomendadas (por el título y por las frases de la IA) para que la persona elija.
+                // El título solo no la halla. Las frases de la IA NO deciden: una coincidencia floja acabó poniendo un desmenuzador en
+                // «Detergentes». Solo sirven para ofrecer opciones, y la persona elige.
                 const frases = [product.aiTitle || product.name, ...(await this.ai.consultasDeCategoria(product.aiTitle || product.name, product.aiDescription || product.description || ''))];
                 reporte.meliCategory = { options: await this.sync.suggestMeliCategories(frases, token) };
                 return [];

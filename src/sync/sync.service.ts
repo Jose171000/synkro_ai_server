@@ -1268,15 +1268,6 @@ export class SyncService implements OnModuleInit {
         return Promise.all(ids.slice(0, max).map(async (id) => ({ id, path: await this.meliCategoryPath(id) })));
     }
 
-    /** La primera categoría de Mercado Libre que el predictor da para alguna de estas frases (de la más específica a la más general). */
-    async predictMeliCategoryFromQueries(consultas: string[], accessToken?: string): Promise<string | undefined> {
-        for (const frase of consultas) {
-            const categoria = await this.meliApi.predictCategory(accessToken, frase.slice(0, 60)).catch(() => undefined);
-            if (categoria) return categoria;
-        }
-        return undefined;
-    }
-
     /**
      * Resolves a REAL category id for the configured site (e.g. MPE for Perú).
      * Prefers the one stored by AI Phase A; if it's missing or belongs to

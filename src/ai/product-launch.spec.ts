@@ -19,7 +19,6 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
         findScopedProduct: jest.fn(async () => producto),
         getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
         resolveMeliCategory: jest.fn(async () => 'MPE124007'),
-        predictMeliCategoryFromQueries: jest.fn(async () => 'MPE444279'),
         meliCategoryPath: jest.fn(async (id: string) => 'Ruta › ' + id),
         suggestMeliCategories: jest.fn(async () => [{ id: 'MPE1', path: 'A › B' }, { id: 'MPE2', path: 'C › D' }]),
         saveProduct: jest.fn(async (p: any) => p),
@@ -116,24 +115,11 @@ describe('lanzar un producto en un paso', () => {
         expect(c.producto.aiAttributes.mercadolibre_attributes.UNITS_PER_PACK).toBe('1');
     });
 
-    it('si el título no encuentra categoría en Mercado Libre prueba con las frases que propone la IA', async () => {
-        const c = construir({
-            producto: { id: 'p1', sku: 'CO252', price: 20, name: 'DESMENUZADOR DE POLLO', description: 'texto', aiAttributes: {}, marketplaceIds: {} },
-        });
-        c.sync.resolveMeliCategory = jest.fn(async () => { throw new Error('No se pudo determinar la categoría'); });
-        await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
-
-        expect(c.ai.consultasDeCategoria).toHaveBeenCalled();
-        expect(c.sync.predictMeliCategoryFromQueries).toHaveBeenCalledWith(['utensilio para desmenuzar carne'], 'tok-ml');
-        expect(c.producto.aiAttributes.mercadolibre_category_id).toBe('MPE444279');
-    });
-
-    it('si ninguna búsqueda halla categoría no publica: devuelve las recomendadas para elegir', async () => {
+    it('si el título no halla categoría no decide con frases de la IA: no publica y devuelve las recomendadas para elegir', async () => {
         const c = construir({
             producto: { id: 'p1', sku: 'CO252', price: 20, name: 'DESMENUZADOR', description: 'texto', aiAttributes: {}, marketplaceIds: {} },
         });
         c.sync.resolveMeliCategory = jest.fn(async () => { throw new Error('nada'); });
-        c.sync.predictMeliCategoryFromQueries = jest.fn(async () => undefined);
         const r = await c.service.lanzar(SCOPE, 'p1', ['mercadolibre']);
 
         expect(r.meliCategory).toEqual({ options: [{ id: 'MPE1', path: 'A › B' }, { id: 'MPE2', path: 'C › D' }] });
