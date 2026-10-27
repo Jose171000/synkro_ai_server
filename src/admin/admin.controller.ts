@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -16,6 +16,8 @@ import { Inject } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { diagnosticarRedis } from '../common/redis-diagnostico';
+import { limpiarTrabajosSueltos } from '../common/redis-limpieza';
+import { COLAS } from '../common/queue-maintenance.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -34,6 +36,20 @@ export class AdminController {
     @ApiOperation({ summary: 'Qué ocupa Redis: memoria, copias en disco, trabajos por cola y reparto por tipo de dato (solo lectura, solo admin)' })
     redisDiagnostico() {
         return diagnosticarRedis(this.redis);
+    }
+
+    @Post('redis/limpiar-trabajos')
+    @ApiOperation({
+        summary: 'Quita de Redis los registros de trabajos que ninguna cola usa (solo admin)',
+        description: 'Por defecto solo simula y dice cuántos quitaría y cuánta memoria liberaría. Con `ejecutar=true` los borra, por tandas; `max` limita cuántos por llamada. Solo toca trabajos de más de 2 horas que ninguna lista de la cola menciona.',
+    })
+    @ApiQuery({ name: 'cola', required: false })
+    @ApiQuery({ name: 'ejecutar', required: false, example: 'false' })
+    @ApiQuery({ name: 'max', required: false, example: 100000 })
+    async limpiarTrabajosRedis(@Query('cola') cola?: string, @Query('ejecutar') ejecutar?: string, @Query('max') max?: string) {
+        const nombre = cola ?? 'marketplace-sync-queue';
+        if (!COLAS.includes(nombre)) throw new BadRequestException(`Cola desconocida. Las válidas son: ${COLAS.join(', ')}.`);
+        return limpiarTrabajosSueltos(this.redis, nombre, { ejecutar: ejecutar === 'true', max: max ? parseInt(max, 10) || undefined : undefined });
     }
 
     @Get('sections')
