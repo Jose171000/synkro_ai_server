@@ -1,8 +1,8 @@
 import { ChannelAttributesService } from './channel-attributes.service';
 
 const crudos = [
-    { id: 'COLOR', name: 'Color', tags: { required: true }, values: [{ name: 'Azul' }] },
-    { id: 'MATERIAL', name: 'Material', tags: {} },
+    { id: 'COLOR', name: 'Color', tags: { required: true }, value_type: 'list', values: [{ name: 'Azul' }] },
+    { id: 'MATERIAL', name: 'Material', tags: {}, value_type: 'string' },
 ];
 
 function construir(opts: { guardadas?: any[]; meliFalla?: boolean } = {}) {
