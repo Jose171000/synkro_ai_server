@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -417,8 +417,17 @@ export class ProductsService {
         return this.productRepository.save(product);
     }
 
-    async remove(id: string, userId: string) {
-        const product = await this.findOne(id, userId);
+    /**
+     * Borra un producto de la tienda activa: cualquiera con permiso de editor en ella puede, sea quien sea el que lo creó.
+     * (Los productos anteriores a las tiendas, sin tienda, solo los borra su dueño.)
+     */
+    async remove(id: string, userId: string, storeId?: string) {
+        const product = storeId
+            ? await this.productRepository.findOne({
+                where: [{ id, store: { id: storeId } }, { id, store: IsNull(), owner: { id: userId } }],
+            })
+            : await this.productRepository.findOne({ where: { id, owner: { id: userId } } });
+        if (!product) throw new NotFoundException('Producto no encontrado');
         return this.productRepository.remove(product);
     }
 

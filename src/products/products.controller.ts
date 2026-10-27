@@ -269,8 +269,10 @@ export class ProductsController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar un producto' })
+  @UseGuards(StoreAccessGuard)
+  @RequireStoreRole('editor')
+  @ApiOperation({ summary: 'Eliminar un producto de la tienda activa' })
   remove(@Param('id') id: string, @Req() req) {
-    return this.productsService.remove(id, req.user.id);
+    return this.productsService.remove(id, req.user.id, req.store.storeId);
   }
 }
