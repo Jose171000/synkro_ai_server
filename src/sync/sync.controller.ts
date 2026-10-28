@@ -252,7 +252,7 @@ export class SyncController {
         description: 'Encola un job por marketplace. Si la tienda tiene varias cuentas del canal hay que indicar cuál en connectionIds.',
     })
     publish(@Param('id') id: string, @Body() dto: PublishProductDto, @Req() req) {
-        return this.syncService.enqueuePublish(scopeOf(req), id, dto.marketplaces, dto.connectionIds);
+        return this.syncService.enqueuePublishFamilia(scopeOf(req), id, dto.marketplaces, dto.connectionIds);
     }
 
     @Get('falabella/categories')

@@ -58,3 +58,32 @@ describe('nombre de una variante en Falabella cuando sale como ficha suelta', ()
         expect(simple.input.name).toBe('Taza de cerámica azul 350 ml');
     });
 });
+
+describe('publicar un grupo de variantes sin IA', () => {
+    const construir = (familia: any[], enqueue: jest.Mock) => {
+        const s: any = Object.create(SyncService.prototype);
+        s.familiaDe = jest.fn(async () => familia);
+        s.enqueuePublish = enqueue;
+        return s as SyncService;
+    };
+    const scope: any = { userId: 'u', storeId: 's' };
+
+    it('manda la orden de cada variante y no falla si algunas ya estaban publicadas', async () => {
+        const enqueue = jest.fn(async (_s: any, id: string) => { if (id === 'b') throw new Error('Este producto ya está publicado'); return { message: 'ok' }; });
+        const r = await construir([{ id: 'a' }, { id: 'b' }, { id: 'c' }], enqueue).enqueuePublishFamilia(scope, 'a', ['mercadolibre'], { mercadolibre: 'c1' });
+        expect(enqueue).toHaveBeenCalledTimes(3);
+        expect(r.message).toContain('2 de 3 variantes');
+    });
+
+    it('si ninguna se pudo encolar, devuelve el error', async () => {
+        const enqueue = jest.fn(async () => { throw new Error('Este producto ya está publicado'); });
+        await expect(construir([{ id: 'a' }, { id: 'b' }], enqueue).enqueuePublishFamilia(scope, 'a', ['mercadolibre'])).rejects.toThrow(/ya está publicado/);
+    });
+
+    it('un producto sin variantes se publica como siempre', async () => {
+        const enqueue = jest.fn(async () => ({ message: 'ok' }));
+        await construir([{ id: 'a' }], enqueue).enqueuePublishFamilia(scope, 'a', ['falabella']);
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect(enqueue).toHaveBeenCalledWith(scope, 'a', ['falabella'], {});
+    });
+});

@@ -1093,6 +1093,28 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /**
+     * Como enqueuePublish, pero un producto con variantes se publica entero: cada variante del grupo recibe su orden.
+     * Las que ya estaban publicadas o en proceso se saltan; solo falla si NINGUNA pudo encolarse.
+     */
+    async enqueuePublishFamilia(scope: SyncScope, productId: string, marketplaces: string[], connectionIds: Record<string, string> = {}) {
+        const familia = await this.familiaDe(scope, productId);
+        if (familia.length === 1) return this.enqueuePublish(scope, productId, marketplaces, connectionIds);
+
+        let encoladas = 0;
+        let ultimoError: unknown = null;
+        for (const miembro of familia) {
+            try {
+                await this.enqueuePublish(scope, miembro.id, marketplaces, connectionIds);
+                encoladas++;
+            } catch (error) {
+                ultimoError = error;
+            }
+        }
+        if (!encoladas) throw ultimoError;
+        return { message: `Publicación encolada para ${encoladas} de ${familia.length} variantes en: ${marketplaces.join(', ')}.` };
+    }
+
     /** El producto y, si es una variante, todas las de su grupo: en un canal se lanzan juntas. Sin grupo, solo él. */
     async familiaDe(scope: SyncScope, productId: string): Promise<Product[]> {
         const producto = await this.findScopedProduct(scope, productId);
