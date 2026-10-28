@@ -62,6 +62,47 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         private readonly products: Repository<Product>,
     ) { }
 
+    /** Las categorías de Falabella más cercanas al producto: por significado primero y, si faltan, por palabras. */
+    private async candidatasDe(nombre: string, descripcion: string, vision: ProductVision | null, creds: any): Promise<MarketplaceCategory[]> {
+        let candidatas: MarketplaceCategory[] = [];
+        try {
+            const emb = await this.seeder.generateEmbedding(`${nombre} ${descripcion.slice(0, 300)}`);
+            candidatas = await this.vectores.findSimilarCategories(emb, 'falabella', 8);
+        } catch (error: any) {
+            this.logger.warn(`Búsqueda por significado no disponible: ${error?.message}`);
+        }
+        if (candidatas.length < 3) {
+            const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...nombre.split(/\s+/)].filter(Boolean);
+            candidatas = [...candidatas, ...(await this.canales.candidatasFalabella(creds, palabras))].slice(0, 25);
+        }
+        return candidatas;
+    }
+
+    private async admiteVariantes(scope: SyncScope, categoryId: string, connectionId: string): Promise<boolean> {
+        try {
+            return (await this.sync.falabellaCategoryVariants(scope, categoryId, connectionId)).admiteVariantes;
+        } catch {
+            return false;
+        }
+    }
+
+    /** La categoría más cercana que admite variantes Y que la IA confirma que corresponde al producto (revisa hasta 8 candidatas). */
+    private async categoriaQueAdmiteVariantes(
+        scope: SyncScope, connectionId: string, creds: any, excluir: string[], nombre: string, descripcion: string, vision: ProductVision | null,
+    ): Promise<{ id: string; path: string } | null> {
+        const candidatas = await this.candidatasDe(nombre, descripcion, vision, creds);
+        let revisadas = 0;
+        for (const c of candidatas) {
+            const id = String(c.categoryId);
+            if (excluir.includes(id)) continue;
+            if (++revisadas > 8) break;
+            if (!(await this.admiteVariantes(scope, id, connectionId))) continue;
+            const v = await this.ai.verificarCategoria(nombre, descripcion, vision, c.name);
+            if (v.ok) return { id, path: c.name };
+        }
+        return null;
+    }
+
     async preparar(scope: SyncScope, productId: string, connectionId?: string, opciones: { regenerar?: boolean } = {}): Promise<FalabellaPrepReport> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const connection = await this.sync.resolveConnection(scope.storeId, 'falabella', connectionId);
@@ -98,17 +139,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         if (categoryId && confianza !== 'manual') confianza = attrs._categoriaDudosa ? 'baja' : 'alta';
 
         if (!categoryId) {
-            let candidatas: MarketplaceCategory[] = [];
-            try {
-                const emb = await this.seeder.generateEmbedding(`${nombre} ${descripcion.slice(0, 300)}`);
-                candidatas = await this.vectores.findSimilarCategories(emb, 'falabella', 8);
-            } catch (error: any) {
-                this.logger.warn(`Búsqueda por significado no disponible: ${error?.message}`);
-            }
-            if (candidatas.length < 3) {
-                const palabras = [vision?.productType ?? '', ...(vision?.keywords ?? []), ...nombre.split(/\s+/)].filter(Boolean);
-                candidatas = [...candidatas, ...(await this.canales.candidatasFalabella(creds, palabras))].slice(0, 25);
-            }
+            const candidatas = await this.candidatasDe(nombre, descripcion, vision, creds);
             // Las candidatas más cercanas al producto (por significado), sin las que Falabella ya rechazó: sirven de sugerencia.
             const masCercanas = (excepto?: string) => candidatas
                 .filter((c) => !descartadas.includes(String(c.categoryId)) && String(c.categoryId) !== excepto)
@@ -133,6 +164,23 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             }
         }
         if (!categoryId) delete attrs.falabella_category_id;
+
+        // Un producto con variantes se publica agrupado si la categoría lo admite: si la elegida no admite variantes, se busca una
+        // parecida y verificada que sí; si no hay ninguna razonable, cada variante saldrá como ficha suelta con la variante en el nombre.
+        // Una categoría que eligió una persona no se toca.
+        if (categoryId && confianza !== 'manual' && (await this.sync.familiaDe(scope, productId)).length > 1
+            && !(await this.admiteVariantes(scope, String(categoryId), connection.id))) {
+            const alternativa = await this.categoriaQueAdmiteVariantes(scope, connection.id, creds, [...descartadas, String(categoryId)], nombre, descripcion, vision);
+            if (alternativa) {
+                this.logger.log(`Categoría de Falabella para ${product.sku}: ${categoryId} no admite variantes; se usa ${alternativa.id} (${alternativa.path}).`);
+                categoryId = alternativa.id;
+                ids.falabella_category_id = alternativa.id;
+                attrs._categoriaVerificada = alternativa.id;
+                categoriaAuto = true;
+                confianza = 'alta';
+                delete attrs._categoriaDudosa;
+            }
+        }
 
         // ── Descripción HTML estándar de la agencia ──
         let descripcionGenerada = false;

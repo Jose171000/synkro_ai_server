@@ -78,9 +78,12 @@ export class ProductLaunchService {
             // Preparación propia de cada canal, variante por variante.
             let sinCategoria = false;
             let faltaFalabella: string | null = null;
-            for (const miembro of familia) {
+            for (let i = 0; i < familia.length; i++) {
+                const miembro = familia[i];
                 try {
                     if (canal === 'falabella') {
+                        // Todas las variantes van en la categoría que se eligió para la primera: así Falabella puede agruparlas.
+                        if (i > 0 && reporte.falabella?.category) await this.igualarCategoriaFalabella(scope, miembro.id, reporte.falabella.category.id);
                         const prep = await this.falabellaPrep.preparar(scope, miembro.id, delCanal[0].id);
                         if (!reporte.falabella) reporte.falabella = prep;
                         if (!prep.listo && !faltaFalabella) faltaFalabella = familia.length > 1 ? `${miembro.sku} ${prep.motivo}` : String(prep.motivo);
@@ -144,6 +147,21 @@ export class ProductLaunchService {
             );
         }
         return reporte;
+    }
+
+    /** Pone en una variante la categoría de Falabella ya elegida para el grupo, salvo que una persona le haya puesto otra a mano. */
+    private async igualarCategoriaFalabella(scope: SyncScope, productId: string, categoryId: string): Promise<void> {
+        const producto = await this.sync.findScopedProduct(scope, productId);
+        const attrs: Record<string, any> = { ...((producto.aiAttributes as any) || {}) };
+        const actual = (producto.marketplaceIds as any)?.falabella_category_id ?? attrs.falabella_category_id;
+        if (String(actual) === String(categoryId)) return;
+        if (actual && String(attrs._categoriaManual) === String(actual)) return;
+        producto.marketplaceIds = { ...((producto.marketplaceIds as any) || {}), falabella_category_id: categoryId };
+        attrs.falabella_category_id = categoryId;
+        attrs._categoriaVerificada = categoryId;
+        delete attrs._categoriaDudosa;
+        producto.aiAttributes = attrs;
+        await this.sync.saveProduct(producto);
     }
 
     /** Mercado Libre rechaza una publicación sin sus atributos obligatorios: los que falten se estiman. Devuelve cuáles. */

@@ -251,3 +251,19 @@ describe('categoría elegida por la persona', () => {
         expect(producto.aiAttributes.mercadolibre_category_id).toBe('MPE436429');
     });
 });
+
+describe('categoría de Falabella de un grupo', () => {
+    it('las demás variantes usan la categoría elegida para la primera, salvo una puesta a mano', async () => {
+        const v = (id: string, extra: any = {}) => ({ id, sku: id, price: 10, name: id, marketplaceIds: { falabella_category_id: '3169' }, aiAttributes: { brand: 'X', ...extra } });
+        const familia = [v('v1'), v('v2'), v('v3', { _categoriaManual: '3169' })];
+        const { service, sync, falabellaPrep } = construir({ familia, producto: familia[0] });
+        sync.findScopedProduct.mockImplementation(async (_s: any, id: string) => familia.find((f) => f.id === id));
+        falabellaPrep.preparar.mockImplementation(async (_s: any, id: string) => ({ listo: true, category: { id: '5000', path: 'x', auto: true } }));
+
+        await service.lanzar(SCOPE, 'v1', ['falabella'], { falabella: ['fa1'] });
+
+        expect((familia[1].marketplaceIds as any).falabella_category_id).toBe('5000');
+        expect((familia[1].aiAttributes as any)._categoriaVerificada).toBe('5000');
+        expect((familia[2].marketplaceIds as any).falabella_category_id).toBe('3169'); // la eligió una persona
+    });
+});

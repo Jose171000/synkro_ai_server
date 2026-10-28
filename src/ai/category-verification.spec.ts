@@ -81,6 +81,8 @@ describe('preparar un producto sin categoría segura', () => {
     function construir(elegida: any, producto: any) {
         const sync: any = {
             findScopedProduct: jest.fn(async () => producto),
+            familiaDe: jest.fn(async () => [producto]),
+            falabellaCategoryVariants: jest.fn(async () => ({ admiteVariantes: false })),
             resolveConnection: jest.fn(async () => ({ id: 'c1' })),
             credentialsOf: jest.fn(() => ({ userId: 'x', apiKey: 'k' })),
             categoriaFalabella: jest.fn((p: any) => p.marketplaceIds?.falabella_category_id),
