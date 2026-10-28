@@ -1112,6 +1112,11 @@ export class SyncService implements OnModuleInit {
                 connection: { id: connectionId } as any,
                 syncStatus: 'pending',
             });
+        } else if (link.syncStatus === 'removed') {
+            // La publicación anterior se cerró (definitivo en Mercado Libre): no se reutiliza, se crea una nueva.
+            link.externalId = '';
+            link.permalink = null as any;
+            link.variationId = null as any;
         }
 
         try {

@@ -78,6 +78,16 @@ describe('Mercado Libre: no se vuelve a crear una publicación que ya existe', (
         expect(r.lastError).toBeNull();
     });
 
+    it('una publicación anterior cerrada (removed) no se reutiliza: se crea una nueva', async () => {
+        const link: any = { marketplace: 'mercadolibre', externalId: 'MPE-CERRADA', syncStatus: 'removed', permalink: 'x' };
+        const { svc, meliApi } = construir({ link });
+        const r = await svc.publishToMeli('p1', 'u', 'c1');
+
+        expect(meliApi.createItem).toHaveBeenCalledTimes(1);
+        expect(r.externalId).toBe('MPE-NUEVA');
+        expect(r.syncStatus).toBe('published');
+    });
+
     it('si falla algo al actualizar la existente no la pierde: queda enlazada con el aviso', async () => {
         const { svc, meliApi } = construir({ link: { marketplace: 'mercadolibre', externalId: 'MPE111', syncStatus: 'error' } });
         meliApi.updateItemAttributes.mockRejectedValueOnce(new Error('no se puede cambiar'));
