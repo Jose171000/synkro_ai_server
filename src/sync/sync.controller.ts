@@ -32,6 +32,7 @@ import { OrdersQueryService } from './orders-query.service';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
+import { VerifyChannelsDto } from './dto/verify-channels.dto';
 
 /** Quién actúa y en qué tienda: la tienda la fija StoreAccessGuard tras comprobar el acceso. */
 const scopeOf = (req: any): SyncScope => ({ userId: req.user.id, storeId: req.store.storeId });
@@ -416,6 +417,19 @@ export class SyncController {
     })
     groupVariantsManually(@Body() dto: ManualVariantGroupDto, @Req() req) {
         return this.variantImport.agruparManual(scopeOf(req), dto);
+    }
+
+    @Post('channels/verify')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Comprueba en Mercado Libre y Falabella cómo están de verdad estos SKU (solo lee)',
+        description: 'Para confirmar que algo que se quitó ya no está a la venta, leyendo el estado real en cada canal. No cambia nada.',
+    })
+    verifyChannels(@Req() req, @Body() dto: VerifyChannelsDto) {
+        return this.listingActions.verificarEnCanales(scopeOf(req), dto.skus);
     }
 
     @Post('mercadolibre/duplicates/:action')

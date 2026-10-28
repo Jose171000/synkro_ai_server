@@ -125,6 +125,66 @@ export class ListingActionsService {
         return { results, message: `${bien} de ${results.length} publicaciones repetidas ${verbo}.` };
     }
 
+    /**
+     * Qué hay de verdad en cada canal para estos SKU de la tienda: lee Mercado Libre y Falabella en vivo (no cambia nada).
+     * Sirve para comprobar que algo que se quitó ya no está a la venta, en vez de fiarse solo de la respuesta de la orden.
+     */
+    async verificarEnCanales(scope: SyncScope, skus: string[]): Promise<{
+        sku: string;
+        enSynkro: string[];
+        mercadolibre: { id: string; estado: string; subestado: string | null; cuenta: string }[];
+        falabella: { cuenta: string; existe: boolean; estado: string | null; calidad: string | null }[];
+    }[]> {
+        const lista = [...new Set(skus.map((s) => String(s).trim()).filter(Boolean))];
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { sku: In(lista) }, connection: { store: { id: scope.storeId } } },
+            relations: { product: true, connection: true },
+        });
+
+        const salida = new Map(lista.map((sku) => [sku, { sku, enSynkro: [] as string[], mercadolibre: [] as any[], falabella: [] as any[] }]));
+        for (const e of enlaces) salida.get(e.product.sku)?.enSynkro.push(`${e.marketplace}: ${e.syncStatus}${e.externalId ? ` (${e.externalId})` : ''}`);
+
+        // Mercado Libre: el estado real de cada publicación que Synkro conoce de estos productos.
+        const porCuentaMl = new Map<string, ListingLink[]>();
+        for (const e of enlaces.filter((x) => x.marketplace === 'mercadolibre' && x.externalId && x.connection)) {
+            porCuentaMl.set(e.connection!.id, [...(porCuentaMl.get(e.connection!.id) ?? []), e]);
+        }
+        for (const [connectionId, ls] of porCuentaMl) {
+            const conexion = await this.sync.getValidConnectionById(connectionId);
+            const ids = [...new Set(ls.map((l) => l.externalId))];
+            const { items, notFound } = await this.meliApi.getItems(conexion.accessToken, ids);
+            const cuenta = conexion.label || conexion.externalNickname || conexion.externalUserId;
+            for (const l of ls) {
+                const item: any = (items as any[]).find((i) => String(i?.id) === String(l.externalId));
+                salida.get(l.product.sku)?.mercadolibre.push({
+                    id: l.externalId,
+                    estado: item ? String(item.status) : notFound.includes(l.externalId) ? 'no existe' : 'sin respuesta',
+                    subestado: item ? (Array.isArray(item.sub_status) ? item.sub_status.join(',') : item.sub_status ?? null) : null,
+                    cuenta,
+                });
+            }
+        }
+
+        // Falabella: si la ficha sigue existiendo para ese SKU y en qué estado.
+        const porCuentaFa = new Map<string, Set<string>>();
+        for (const e of enlaces.filter((x) => x.marketplace === 'falabella' && x.connection)) {
+            const s = porCuentaFa.get(e.connection!.id) ?? new Set<string>();
+            s.add(e.product.sku);
+            porCuentaFa.set(e.connection!.id, s);
+        }
+        for (const [connectionId, setSkus] of porCuentaFa) {
+            const conexion = await this.sync.getValidConnectionById(connectionId);
+            const credenciales = this.sync.credentialsOf(conexion);
+            const encontrados = await this.falabellaApi.getProductsBySku(credenciales, [...setSkus]);
+            const cuenta = conexion.label || conexion.externalNickname || conexion.externalUserId;
+            for (const sku of setSkus) {
+                const p: any = encontrados.find((x: any) => String(x?.SellerSku).trim() === sku);
+                salida.get(sku)?.falabella.push({ cuenta, existe: !!p, estado: p ? String(p.Status ?? '') || null : null, calidad: p ? String(p.QCStatus ?? '') || null : null });
+            }
+        }
+        return [...salida.values()];
+    }
+
     private estadoEfectivo(enlace: ListingLink): ListingLink['syncStatus'] {
         // Una ficha de Falabella pausada con stock 0 puede figurar «publicada» para el canal: manda lo que decidió el usuario.
         return enlace.pausedByUser && enlace.syncStatus === 'published' ? 'paused' : enlace.syncStatus;

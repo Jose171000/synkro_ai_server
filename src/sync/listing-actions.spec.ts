@@ -147,3 +147,41 @@ describe('ListingActionsService', () => {
         await expect(servicio.ejecutar(ambito, 'p1', 'remove')).rejects.toBeInstanceOf(BadRequestException);
     });
 });
+
+describe('verificar en los canales lo que se quitó', () => {
+    const producto = (sku: string) => ({ id: `id-${sku}`, sku });
+    const conexion = (id: string, marketplace: string) => ({ id, marketplace, label: `cuenta-${marketplace}` });
+    const enlace = (sku: string, marketplace: string, externalId: string, syncStatus: string) => ({ product: producto(sku), marketplace, externalId, syncStatus, connection: conexion(`c-${marketplace}`, marketplace) });
+
+    function armar(enlaces: any[], ml: { items: any[]; notFound?: string[] }, fala: any[]) {
+        const repo: any = { find: jest.fn(async () => enlaces) };
+        const sync: any = { getValidConnectionById: jest.fn(async (id: string) => ({ ...conexion(id, id.replace('c-', '')), accessToken: 't' })), credentialsOf: jest.fn(() => ({ userId: 'u', apiKey: 'k' })) };
+        const meli: any = { getItems: jest.fn(async () => ({ items: ml.items, notFound: ml.notFound ?? [] })) };
+        const falabella: any = { getProductsBySku: jest.fn(async () => fala) };
+        return { servicio: new ListingActionsService(repo, sync, meli, falabella), meli, falabella };
+    }
+
+    it('lee el estado real de cada publicación en Mercado Libre y si la ficha sigue en Falabella', async () => {
+        const { servicio, meli, falabella } = armar(
+            [enlace('BL1', 'mercadolibre', 'MPE1', 'removed'), enlace('BL1', 'falabella', 'BL1', 'removed'), enlace('BL2', 'mercadolibre', 'MPE2', 'removed')],
+            { items: [{ id: 'MPE1', status: 'closed', sub_status: ['expired'] }, { id: 'MPE2', status: 'active' }] },
+            [{ SellerSku: 'BL1', Status: 'deleted', QCStatus: 'approved' }],
+        );
+        const r = await servicio.verificarEnCanales({ userId: 'u', storeId: 's' }, ['BL1', 'BL2']);
+        expect(meli.getItems).toHaveBeenCalledWith('t', ['MPE1', 'MPE2']);
+        expect(falabella.getProductsBySku).toHaveBeenCalledWith({ userId: 'u', apiKey: 'k' }, ['BL1']);
+        expect(r.find((x) => x.sku === 'BL1')).toMatchObject({
+            mercadolibre: [{ id: 'MPE1', estado: 'closed', subestado: 'expired' }],
+            falabella: [{ existe: true, estado: 'deleted' }],
+        });
+        // lo que sigue activo en el canal se ve: no se da por quitado solo porque Synkro lo marcó
+        expect(r.find((x) => x.sku === 'BL2')!.mercadolibre[0].estado).toBe('active');
+    });
+
+    it('una publicación que ya no existe en el canal se dice, y una ficha ausente de Falabella también', async () => {
+        const { servicio } = armar([enlace('BL3', 'mercadolibre', 'MPE9', 'removed'), enlace('BL3', 'falabella', 'BL3', 'removed')], { items: [], notFound: ['MPE9'] }, []);
+        const r = await servicio.verificarEnCanales({ userId: 'u', storeId: 's' }, ['BL3']);
+        expect(r[0].mercadolibre[0].estado).toBe('no existe');
+        expect(r[0].falabella[0]).toMatchObject({ existe: false, estado: null });
+    });
+});
