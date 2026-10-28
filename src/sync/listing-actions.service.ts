@@ -26,7 +26,8 @@ const NOMBRE_DE_CANAL: Record<string, string> = { mercadolibre: 'Mercado Libre',
 const ESTADOS_QUE_ADMITEN: Record<AccionDeCanal, ListingLink['syncStatus'][]> = {
     pause: ['published'],
     resume: ['paused'],
-    remove: ['published', 'paused', 'error'],
+    // Quitar también vale para una publicación que el canal aún está revisando: si no, podría aprobarse más tarde y salir a la venta.
+    remove: ['published', 'paused', 'error', 'pending'],
 };
 
 /**
@@ -220,6 +221,12 @@ export class ListingActionsService {
     // ── Mercado Libre ─────────────────────────────────────────────
 
     private async enMercadoLibre(enlace: ListingLink, accion: AccionDeCanal): Promise<void> {
+        // Un envío que no llegó a crear nada en el canal no tiene qué cerrar: solo queda anotado como quitado.
+        if (accion === 'remove' && !enlace.externalId) {
+            this.marcar(enlace, accion);
+            await this.listingLinkRepository.save(enlace);
+            return;
+        }
         const conexion = await this.sync.getValidConnectionById(enlace.connection!.id);
         const estado = accion === 'pause' ? 'paused' : accion === 'resume' ? 'active' : 'closed';
         await this.meliApi.setItemStatus(conexion.accessToken, enlace.externalId, estado);

@@ -142,8 +142,14 @@ describe('ListingActionsService', () => {
         expect(l.syncStatus).toBe('published');
     });
 
-    it('ya retiradas o en proceso de publicarse no admiten acciones', async () => {
+    it('una ya retirada no admite acciones, y una en proceso de publicarse solo admite quitarse (no pausar ni reanudar)', async () => {
         const { servicio } = construir([enlace({ syncStatus: 'removed' }), enlace({ id: 'x', syncStatus: 'pending' })]);
+        await expect(servicio.ejecutar(ambito, 'p1', 'pause')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(servicio.ejecutar(ambito, 'p1', 'resume')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('una ya retirada sola no tiene nada que quitar', async () => {
+        const { servicio } = construir([enlace({ syncStatus: 'removed' })]);
         await expect(servicio.ejecutar(ambito, 'p1', 'remove')).rejects.toBeInstanceOf(BadRequestException);
     });
 });
@@ -183,5 +189,47 @@ describe('verificar en los canales lo que se quitó', () => {
         const r = await servicio.verificarEnCanales({ userId: 'u', storeId: 's' }, ['BL3']);
         expect(r[0].mercadolibre[0].estado).toBe('no existe');
         expect(r[0].falabella[0]).toMatchObject({ existe: false, estado: null });
+    });
+});
+
+describe('quitar una publicación que el canal todavía está revisando', () => {
+    function armar(enlace: any) {
+        const repo: any = { find: jest.fn(async () => [enlace]), findOne: jest.fn(async () => ({ ...enlace, connection: { ...enlace.connection, owner: { id: 'o1' } } })), save: jest.fn(async (e: any) => e) };
+        const sync: any = {
+            findScopedProduct: jest.fn(async () => ({ id: 'p1' })),
+            getValidConnectionById: jest.fn(async () => ({ accessToken: 't' })),
+            getFalabellaCredentials: jest.fn(async () => ({ userId: 'u', apiKey: 'k' })),
+            registrarFeedFalabella: jest.fn(async () => undefined),
+            falabellaOperatorCode: 'OP',
+        };
+        const meli: any = { setItemStatus: jest.fn(async () => undefined) };
+        const falabella: any = { productRemove: jest.fn(async () => 'feed-1') };
+        return { servicio: new ListingActionsService(repo, sync, meli, falabella), meli, falabella, sync };
+    }
+    const base = (marketplace: string, externalId: string) => ({ id: 'l1', marketplace, externalId, syncStatus: 'pending', pausedByUser: false, product: { id: 'p1', sku: 'BL1' }, connection: { id: 'c1', label: 'cuenta' } });
+
+    it('una ficha de Falabella pendiente se da de baja, para que no salga a la venta si la aprueban después', async () => {
+        const e: any = base('falabella', 'BL1');
+        const { servicio, falabella } = armar(e);
+        const r = await servicio.ejecutar({ userId: 'u', storeId: 's' }, 'p1', 'remove');
+        expect(falabella.productRemove).toHaveBeenCalledWith({ userId: 'u', apiKey: 'k' }, ['BL1']);
+        expect(r.results[0].ok).toBe(true);
+        expect(e.syncStatus).toBe('removed');
+    });
+
+    it('una publicación de Mercado Libre en revisión se cierra', async () => {
+        const e: any = base('mercadolibre', 'MPE9');
+        const { servicio, meli } = armar(e);
+        await servicio.ejecutar({ userId: 'u', storeId: 's' }, 'p1', 'remove');
+        expect(meli.setItemStatus).toHaveBeenCalledWith('t', 'MPE9', 'closed');
+        expect(e.syncStatus).toBe('removed');
+    });
+
+    it('un envío pendiente que nunca creó nada en Mercado Libre solo queda anotado, sin llamar al canal', async () => {
+        const e: any = base('mercadolibre', '');
+        const { servicio, meli } = armar(e);
+        await servicio.ejecutar({ userId: 'u', storeId: 's' }, 'p1', 'remove');
+        expect(meli.setItemStatus).not.toHaveBeenCalled();
+        expect(e.syncStatus).toBe('removed');
     });
 });
