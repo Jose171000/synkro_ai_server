@@ -238,3 +238,16 @@ describe('categoría de Mercado Libre elegida sola', () => {
         expect(sync.enqueuePublish).toHaveBeenCalled();
     });
 });
+
+describe('categoría elegida por la persona', () => {
+    it('reemplaza también la que ya estaba en marketplaceIds, que es la que se usa al publicar', async () => {
+        const producto = {
+            id: 'p1', price: 40, name: 'Perchero', aiTitle: 'Perchero Metal', description: 'texto',
+            marketplaceIds: { mercadolibre_category_id: 'MPE444184' }, aiAttributes: { brand: 'GENERICO', mercadolibre_category_id: 'MPE444184', mercadolibre_attributes: { COLOR: 'Azul' } },
+        };
+        const { service } = construir({ producto });
+        await service.lanzar(SCOPE, 'p1', ['mercadolibre'], { mercadolibre: ['ml1'] }, { meliCategoryId: 'MPE436429' });
+        expect(producto.marketplaceIds.mercadolibre_category_id).toBe('MPE436429');
+        expect(producto.aiAttributes.mercadolibre_category_id).toBe('MPE436429');
+    });
+});

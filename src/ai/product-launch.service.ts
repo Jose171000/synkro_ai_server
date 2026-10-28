@@ -157,6 +157,8 @@ export class ProductLaunchService {
             attrs.mercadolibre_category_id = elegida;
             delete attrs.mercadolibre_attributes;
             product.aiAttributes = attrs;
+            // Al publicar manda la categoría de marketplaceIds: si queda la vieja, la elegida no se usa.
+            product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), mercadolibre_category_id: elegida };
             await this.sync.saveProduct(product);
         }
         if (!categoria) {
