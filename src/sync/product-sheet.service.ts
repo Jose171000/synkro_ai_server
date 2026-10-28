@@ -7,6 +7,7 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { SaveSheetDto } from './dto/save-sheet.dto';
+import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
 import { ATRIBUTOS_DE_SISTEMA, atributosObligatoriosAprendidos, claveDeAtributo, esAtributoDeSistema } from './falabella/falabella-fields';
 
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
@@ -43,6 +44,11 @@ export class ProductSheetService {
 
     async getSheet(scope: SyncScope, productId: string) {
         const product = await this.sync.findScopedProduct(scope, productId);
+        // El grupo decide el nombre con el que sale cada variante: se carga para mostrar lo mismo que se envía.
+        if (product.group === undefined) {
+            const conGrupo = await this.products.findOne({ where: { id: productId }, relations: { group: true } });
+            if (conGrupo?.group) product.group = conGrupo.group;
+        }
         const attrs: Record<string, any> = (product.aiAttributes as any) || {};
         const enlaces = await this.links.find({
             where: { product: { id: productId } },
@@ -96,6 +102,8 @@ export class ProductSheetService {
         const categoria = this.sync.categoriaFalabella(product);
         const definiciones = categoria ? await this.falabella.getCategoryAttributes(creds, categoria).catch(() => []) : [];
         const validacion = this.sync.toFalabellaInput(product, 'active', definiciones);
+        // Lo que se envía: el color o la talla de ESTA variante manda sobre los del molde del grupo.
+        const efectivos = atributosConVariante(attrs, product.variantValues);
         const ruta = categoria
             ? (await this.falabella.getCategories(creds).catch((): { id: string; path: string }[] => [])).find((c) => c.id === String(categoria))?.path
             : undefined;
@@ -103,7 +111,7 @@ export class ProductSheetService {
         return {
             ...base,
             sent: {
-                name: this.sync.nombreParaFalabella(product.aiTitle || product.name),
+                name: 'input' in validacion ? validacion.input.name : this.sync.nombreParaFalabella(product.aiTitle || product.name),
                 description: String(attrs.descriptionHtml || product.aiDescription || product.description || ''),
                 isHtml: !!attrs.descriptionHtml,
                 brand: attrs.brand || 'GENERICO',
@@ -120,7 +128,7 @@ export class ProductSheetService {
                         description: a.description,
                         required: a.isMandatory || atributosObligatoriosAprendidos(attrs).has(claveDeAtributo(a.name)),
                         options: a.options,
-                        value: String(this.sync.buscarAtributo(attrs, a.name) ?? ''),
+                        value: String(this.sync.buscarAtributo(efectivos, a.name) ?? ''),
                     }))
                     .sort((x, y) => Number(y.required) - Number(x.required)),
             },
@@ -133,7 +141,10 @@ export class ProductSheetService {
         return {
             ...base,
             sent: {
-                title: (product.aiTitle || product.name).slice(0, 60),
+                // Una variante de un grupo sale con el nombre común de la familia: Mercado Libre le agrega solo el color de cada una.
+                title: product.group
+                    ? nombreDeFamilia(product.group.name || product.aiTitle || product.name, (product.group.axes ?? []).flatMap((e) => e.values))
+                    : (product.aiTitle || product.name).slice(0, 60),
                 titleEditable: false,
                 description: String(product.aiDescription || product.description || ''),
                 categoryId: (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id ?? null,

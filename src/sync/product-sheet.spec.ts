@@ -22,7 +22,7 @@ function construir(producto: any, enlaces: any[] = []) {
         getCategories: jest.fn(async () => [{ id: '956', path: 'Juguetes › Torres' }]),
     };
     const links: any = { find: jest.fn(async () => enlaces) };
-    const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }) };
+    const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }), findOne: jest.fn(async () => ({ id: producto.id, group: producto.groupDelTest ?? null })) };
     return { service: new ProductSheetService(sync, falabella, links, products), sync, guardados };
 }
 
@@ -88,5 +88,27 @@ describe('la ficha de un producto', () => {
         const r = await service.syncNow(SCOPE, 'p1');
         expect(sync.runContentSync).toHaveBeenCalledTimes(2);
         expect(r.results.map((x) => x.marketplace)).toEqual(['falabella', 'mercadolibre']);
+    });
+});
+
+describe('la ficha de una variante muestra lo que se envía', () => {
+    const grupo = { name: 'Perchero Elegante Multifuncional Kasari Metal Negro Azul', parentSku: 'PERCHERO-METAL', axes: [{ name: 'Color', values: ['Negro', 'Celeste'] }] };
+
+    it('en Falabella, el color de la variante (no el del molde del grupo) y el nombre que sale en el envío', async () => {
+        const p: any = { ...producto(), sku: 'OG146', group: grupo, variantValues: { Color: 'Celeste' } };
+        p.aiAttributes = { ...p.aiAttributes, color: 'Azul', material: 'Metal' };
+        const { service, sync } = construir(p, [enlace('falabella')]);
+        sync.toFalabellaInput.mockReturnValue({ input: { name: 'Perchero Elegante Multifuncional Kasari Metal - Celeste' } });
+        const hoja: any = await service.getSheet(SCOPE, 'p1');
+        const f = hoja.channels[0].sent;
+        expect(f.name).toBe('Perchero Elegante Multifuncional Kasari Metal - Celeste');
+        expect(sync.buscarAtributo.mock.calls.some(([a]: any[]) => a.color === 'Celeste')).toBe(true);
+    });
+
+    it('en Mercado Libre, el nombre común de la familia, sin colores', async () => {
+        const p: any = { ...producto(), sku: 'OG146', group: grupo, variantValues: { Color: 'Celeste' } };
+        const { service } = construir(p, [enlace('mercadolibre')]);
+        const hoja: any = await service.getSheet(SCOPE, 'p1');
+        expect(hoja.channels[0].sent.title).toBe('Perchero Elegante Multifuncional Kasari Metal');
     });
 });
