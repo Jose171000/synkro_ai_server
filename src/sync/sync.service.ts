@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
-import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
+import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
+import { etiquetaDe } from '../products/variantes';
 import { descripcionEnTextoPlano } from './meli/descripcion-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
@@ -1808,7 +1809,13 @@ export class SyncService implements OnModuleInit {
         return {
             input: {
                 sellerSku: product.sku,
-                name: this.nombreParaFalabella(product.aiTitle || product.name),
+                // Una variante sin ParentSku (categoría sin variantes) sale como ficha suelta: el color va en el nombre, y se arma desde el
+                // nombre del grupo con hasta 100 caracteres, sin depender de un título guardado que pudo quedar cortado.
+                name: this.nombreParaFalabella(
+                    (product.group && product.variantValues
+                        ? tituloDeVariante(product.group.name, etiquetaDe(product.variantValues, product.group.axes ?? []), (product.group.axes ?? []).flatMap((e) => e.values), 100)
+                        : undefined) || product.aiTitle || product.name,
+                ),
                 description,
                 brand: attributes.brand || 'GENERICO',
                 primaryCategory: category,

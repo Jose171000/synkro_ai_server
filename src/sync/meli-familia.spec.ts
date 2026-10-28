@@ -34,3 +34,27 @@ describe('familias de Mercado Libre', () => {
         expect(idsDe(simple)).toMatchObject({ COLOR: 'Azul', MODEL: 'KI-1', SELLER_SKU: 'KI-1' });
     });
 });
+
+describe('nombre de una variante en Falabella cuando sale como ficha suelta', () => {
+    const servicio: any = Object.create(SyncService.prototype);
+    const ficha = (sku: string, color: string, extra: any = {}) => ({
+        sku, name: `Perchero Elegante Multifuncional Kasari Metal Negro Azul - ${color}`, aiTitle: `Perchero Elegante Multifuncional Kasari Metal Negr - ${color}`,
+        price: 39.9, stock: 5, images: [{ url: 'https://i/1.jpg' }], description: 'Un perchero metálico moderno',
+        packageWidth: 18, packageLength: 80, packageHeight: 12, packageWeight: 2.2,
+        marketplaceIds: { falabella_category_id: '3169' },
+        aiAttributes: { brand: 'Kasari', color: 'Azul', color_basico: 'Negro' },
+        group: grupo, variantValues: { Color: color }, ...extra,
+    });
+
+    it('se arma desde el nombre del grupo con el color al final, sin palabras partidas ni colores repetidos', () => {
+        const negro = servicio.toFalabellaInput(ficha('OG144', 'Negro'));
+        const celeste = servicio.toFalabellaInput(ficha('OG146', 'Celeste'));
+        expect(negro.input.name).toBe('Perchero Elegante Multifuncional Kasari Metal - Negro');
+        expect(celeste.input.name).toBe('Perchero Elegante Multifuncional Kasari Metal - Celeste');
+    });
+
+    it('un producto sin grupo conserva su título', () => {
+        const simple = servicio.toFalabellaInput(ficha('KI-1', 'x', { group: null, variantValues: null, aiTitle: 'Taza de cerámica azul 350 ml', name: 'Taza' }));
+        expect(simple.input.name).toBe('Taza de cerámica azul 350 ml');
+    });
+});
