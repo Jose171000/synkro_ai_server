@@ -713,6 +713,16 @@ describe('atributos de Falabella: todos los que se conocen, con valores válidos
         expect(r.input.extraAttributes).toEqual({ MATERIAL: 'Madera', COLOR: 'Azul', GARANTIA: '12 meses' });
     });
 
+    it('una lista desplegable opcional cuyas opciones Falabella no entrega no se envía (no se puede comprobar el valor)', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const attrs = [
+            atributo('tipo_de_puerta', { inputType: 'dropdown', options: [] }),
+            atributo('garantia', {}),
+        ];
+        const r: any = (service as any).toFalabellaInput(producto({ tipo_de_puerta: 'puerta ranurada abatible', garantia: '12 meses' }), 'active', attrs);
+        expect(r.input.extraAttributes).toEqual({ GARANTIA: '12 meses' });
+    });
+
     it('un obligatorio con un valor que no está en sus opciones no deja publicar y lo dice', async () => {
         const { service } = await construir({ conexiones: [fal()] });
         const r: any = (service as any).toFalabellaInput(producto({ material: 'Cartón' }), 'active', [atributo('material', { label: 'Material', isMandatory: true, options: ['Madera'] })]);

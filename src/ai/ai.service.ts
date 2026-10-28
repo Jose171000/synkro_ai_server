@@ -9,6 +9,7 @@ import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
 import { soloElNumero } from '../sync/falabella/falabella-fields';
+import { medidasQueFaltan } from '../sync/meli/unidades-meli';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import OpenAI from 'openai';
 
@@ -177,16 +178,14 @@ export class AiService {
     const generationPrompt = this.buildDynamicPrompt(generatorDto);
 
     try {
-      const finalResponse = await this.openai.chat.completions.create({
+      const finalJson = await this.jsonDeLaIa(() => this.openai.chat.completions.create({
         model: 'deepseek-chat',
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
           { role: 'user', content: generationPrompt }
         ]
-      });
-
-      const finalJson = JSON.parse(finalResponse.choices[0].message.content || '{}');
+      }));
 
       // Lo que la IA estimó (solo en modo masivo) se anota aparte y se quita de los atributos.
       const estimatedAttributes: Record<string, string[]> = {};
@@ -219,6 +218,18 @@ export class AiService {
         ? await this.estimarPaquete(textoDelCliente, enriquecido.name, vision)
         : null;
 
+      // Las medidas obligatorias de la categoría de Mercado Libre que la IA dejó vacías (p. ej. la profundidad) salen de las del paquete.
+      const requisitosMeli = categoryRequirements['mercadolibre'] ?? [];
+      const atributosMeli = finalJson?.mercadolibre?.attributes;
+      if (atributosMeli && requisitosMeli.some((r: any) => r.isRequired && !String(atributosMeli[r.name] ?? '').trim())) {
+        const paquete = packageEstimate ?? await this.estimarPaquete(textoDelCliente, enriquecido.name, vision);
+        const medidas = medidasQueFaltan(atributosMeli, requisitosMeli, paquete);
+        if (Object.keys(medidas).length) {
+          Object.assign(atributosMeli, medidas);
+          estimatedAttributes['mercadolibre'] = [...new Set([...(estimatedAttributes['mercadolibre'] ?? []), ...Object.keys(medidas)])];
+        }
+      }
+
       // Bundle the results from Phase A (Categorization) and Phase B (Generation) together
       return {
         categorizedAs: catJson,
@@ -235,6 +246,19 @@ export class AiService {
     } catch (error) {
       console.error('[AiService] Failed during Phase B Generation:', error);
       throw new InternalServerErrorException('Failed to generate product content via AI.');
+    }
+  }
+
+  /** La IA a veces devuelve un JSON con comillas sin escapar: se pide de nuevo antes de dar el producto por fallido. */
+  async jsonDeLaIa(pedir: () => Promise<any>, intentos = 3): Promise<any> {
+    for (let i = 1; ; i++) {
+      const respuesta = await pedir();
+      try {
+        return JSON.parse(respuesta.choices[0].message.content || '{}');
+      } catch (error) {
+        if (i >= intentos) throw error;
+        console.warn(`[AiService] La IA devolvió un JSON inválido (intento ${i} de ${intentos}); se vuelve a pedir.`);
+      }
     }
   }
 

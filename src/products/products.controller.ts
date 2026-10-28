@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, BadRequestException, UseInterceptors, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, BadRequestException, UseInterceptors, Query, ParseUUIDPipe } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { UploadedFiles } from '@nestjs/common';
 import { ApiConsumes, ApiBody, ApiOperation } from '@nestjs/swagger';
@@ -234,7 +234,7 @@ export class ProductsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un producto por ID' })
-  findOne(@Param('id') id: string, @Req() req) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
     return this.productsService.findOne(id, req.user.id);
   }
 
@@ -254,7 +254,7 @@ export class ProductsController {
   @Patch(':id')
   @ApiOperation({ summary: 'Actualizar campos de un producto' })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateProductDto: Partial<CreateProductDto>,
     @Req() req,
   ) {
@@ -272,7 +272,7 @@ export class ProductsController {
   @UseGuards(StoreAccessGuard)
   @RequireStoreRole('editor')
   @ApiOperation({ summary: 'Eliminar un producto de la tienda activa' })
-  remove(@Param('id') id: string, @Req() req) {
+  remove(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
     return this.productsService.remove(id, req.user.id, req.store.storeId);
   }
 }

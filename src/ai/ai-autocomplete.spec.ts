@@ -140,3 +140,24 @@ describe('medidas del paquete y modo masivo', () => {
         expect(r.packageEstimate).toBeNull();
     });
 });
+
+describe('JSON de la IA mal formado', () => {
+    const servicio = () => new AiService({} as any, {} as any, {} as any, {} as any, { asegurarImportadas: jest.fn() } as any);
+    const respuesta = (contenido: string) => ({ choices: [{ message: { content: contenido } }] });
+
+    it('lo vuelve a pedir y usa la primera respuesta válida', async () => {
+        const pedir = jest.fn()
+            .mockResolvedValueOnce(respuesta('{"title": "Ropero "negro" de tela"}'))
+            .mockResolvedValueOnce(respuesta('{"title": "Ropero negro de tela"}'));
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await expect(servicio().jsonDeLaIa(pedir)).resolves.toEqual({ title: 'Ropero negro de tela' });
+        expect(pedir).toHaveBeenCalledTimes(2);
+    });
+
+    it('si todos los intentos vienen mal, falla con el error de lectura', async () => {
+        const pedir = jest.fn(async () => respuesta('{"title": "mal"'));
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await expect(servicio().jsonDeLaIa(pedir, 2)).rejects.toThrow(SyntaxError);
+        expect(pedir).toHaveBeenCalledTimes(2);
+    });
+});

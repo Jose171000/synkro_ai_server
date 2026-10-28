@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
+import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { descripcionEnTextoPlano } from './meli/descripcion-meli';
@@ -1384,7 +1385,7 @@ export class SyncService implements OnModuleInit {
             { id: 'SELLER_SKU', value_name: product.sku },
             ...Object.entries(delCanal)
                 .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && valor !== null && valor !== undefined && String(valor).trim() !== '')
-                .map(([id, valor]) => ({ id, value_name: String(valor) })),
+                .map(([id, valor]) => ({ id, value_name: conUnidadMeli(id, String(valor)) })),
         ];
     }
 
@@ -1816,6 +1817,9 @@ export class SyncService implements OnModuleInit {
 
             // Obligatorio por la categoría o porque Falabella ya rechazó este producto por dejarlo vacío.
             const obligatorio = attribute.isMandatory || aprendidos.has(claveDeAtributo(attribute.feedName)) || aprendidos.has(claveDeAtributo(attribute.name));
+            // Una lista desplegable cuyas opciones Falabella no entrega (llega vacía) no se puede comprobar: lo que invente la IA
+            // haría rechazar la ficha entera («does not appear to be a valid option»). Si es opcional, mejor no enviarla.
+            if (!obligatorio && valor !== undefined && String(attribute.inputType ?? '').toLowerCase() === 'dropdown' && !attribute.options?.length) valor = undefined;
             if (obligatorio && valor === undefined) {
                 faltantes.push(hayValor ? `${attribute.label || attribute.feedName} (valor no válido)` : (attribute.label || attribute.feedName));
                 continue;
