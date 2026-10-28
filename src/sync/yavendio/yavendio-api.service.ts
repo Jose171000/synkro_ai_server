@@ -36,6 +36,15 @@ export interface YavendioOrder {
     summary_conversation?: string | null;
 }
 
+/** Producto de Yavendió tal como lo devuelve GET /products/:id. */
+export interface YavendioProduct {
+    id: number;
+    name: string;
+    status?: string;
+    options?: { id: number; name: string; values: { id: number; name: string }[] }[];
+    variants?: { id: number; name: string; sku?: string | null; base_price?: string | number; currency?: string; status?: string; media?: { id: number; url: string }[] }[];
+}
+
 interface Page<T> {
     data: T[];
     pagination?: { page: number; limit: number; has_more?: boolean; total_items?: number; total_pages?: number };
@@ -92,8 +101,12 @@ export class YavendioApiService {
             );
         }
 
-        const detail = axiosError?.response?.data?.message || axiosError?.message || 'error desconocido';
-        return new ServiceUnavailableException(`No se pudo ${action} en Yavendió: ${detail}`);
+        const data = axiosError?.response?.data;
+        const detail = (typeof data?.detail === 'string' ? data.detail : null) || data?.message || axiosError?.message || 'error desconocido';
+        const error422 = status === 422 && data?.errors ? ` ${JSON.stringify(data.errors).slice(0, 300)}` : '';
+        const resultado: any = new ServiceUnavailableException(`No se pudo ${action} en Yavendió: ${detail}${error422}`);
+        resultado.yavendioStatus = status;
+        return resultado;
     }
 
     /**
@@ -187,6 +200,71 @@ export class YavendioApiService {
             currency: data.currency ?? null,
             planName: data.plan_display_name ?? data.plan_name ?? null,
         };
+    }
+
+    /**
+     * Petición con escritura (POST/PATCH/DELETE). Respeta Retry-After ante un 429 y reintenta hasta 3 veces:
+     * la API no tiene lotes, así que publicar un grupo grande son muchas llamadas seguidas.
+     */
+    private async send<T>(apiKey: string, method: 'post' | 'patch' | 'delete', path: string, body: unknown, action: string): Promise<T> {
+        for (let intento = 0; ; intento++) {
+            try {
+                const { data } = await this.http.request<T>({ method, url: path, data: body, headers: this.headers(apiKey) });
+                return data;
+            } catch (error) {
+                const axiosError = error as AxiosError;
+                if (axiosError?.response?.status === 429 && intento < 3) {
+                    const espera = Math.min(Number(axiosError.response.headers?.['retry-after']) || 2 ** intento, 30) * 1000;
+                    this.logger.warn(`Límite de peticiones alcanzado; reintentando en ${espera / 1000}s.`);
+                    await new Promise((resolve) => setTimeout(resolve, espera));
+                    continue;
+                }
+                throw this.describeError(error, action);
+            }
+        }
+    }
+
+    /** Catálogos del comercio (solo lectura; hay uno por comercio). */
+    async listCatalogs(apiKey: string): Promise<{ id: number; name?: string; currency?: string }[]> {
+        const body = await this.get<any>(apiKey, '/catalogs', {}, 'leer el catálogo');
+        return body?.data ?? body ?? [];
+    }
+
+    async getProduct(apiKey: string, productId: string | number): Promise<YavendioProduct> {
+        return this.get<YavendioProduct>(apiKey, `/products/${productId}`, {}, 'leer el producto');
+    }
+
+    async createProduct(apiKey: string, input: { catalog_id: number; name: string; description?: string }): Promise<{ id: number }> {
+        return this.send(apiKey, 'post', '/products', { ...input, status: 'published' }, 'crear el producto');
+    }
+
+    async createOption(apiKey: string, productId: string | number, name: string, values: string[]): Promise<{ id: number; name: string; values: { id: number; name: string }[] }> {
+        return this.send(apiKey, 'post', `/products/${productId}/options`, { name, values }, `crear la opción «${name}»`);
+    }
+
+    async addOptionValue(apiKey: string, productId: string | number, optionId: number, name: string): Promise<{ id: number; name: string }> {
+        return this.send(apiKey, 'post', `/products/${productId}/options/${optionId}/values`, { name }, `agregar el valor «${name}»`);
+    }
+
+    /** `option_values` no se puede cambiar después: para corregirlo hay que borrar la variante y crearla de nuevo. */
+    async createVariant(
+        apiKey: string,
+        productId: string | number,
+        input: { name: string; base_price: number; currency: string; status: 'available' | 'not_available'; option_values: number[] },
+    ): Promise<{ id: number }> {
+        return this.send(apiKey, 'post', `/products/${productId}/variants`, input, `crear la variante «${input.name}»`);
+    }
+
+    async updateVariant(apiKey: string, productId: string | number, variantId: string | number, input: { base_price?: number; status?: 'available' | 'not_available' }): Promise<void> {
+        await this.send(apiKey, 'patch', `/products/${productId}/variants/${variantId}`, input, 'actualizar la variante');
+    }
+
+    async updateProduct(apiKey: string, productId: string | number, input: { name?: string; description?: string }): Promise<void> {
+        await this.send(apiKey, 'patch', `/products/${productId}`, input, 'actualizar el producto');
+    }
+
+    async addVariantMedia(apiKey: string, productId: string | number, variantId: string | number, url: string, title?: string): Promise<void> {
+        await this.send(apiKey, 'post', `/products/${productId}/variants/${variantId}/media`, { url, ...(title ? { title } : {}) }, 'agregar una foto');
     }
 
     async listConversations(apiKey: string): Promise<YavendioConversation[]> {

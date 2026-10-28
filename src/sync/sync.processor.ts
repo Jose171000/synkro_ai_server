@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job, UnrecoverableError } from 'bullmq';
 import { SyncService } from './sync.service';
 import { ChangeRequestsService } from './change-requests.service';
+import { YavendioSyncService } from './yavendio/yavendio-sync.service';
 
 /**
  * Background worker for every marketplace-sync job:
@@ -17,6 +18,7 @@ export class SyncProcessor extends WorkerHost {
     constructor(
         private readonly syncService: SyncService,
         private readonly changeRequests: ChangeRequestsService,
+        private readonly yavendio: YavendioSyncService,
     ) {
         super();
     }
@@ -53,6 +55,20 @@ export class SyncProcessor extends WorkerHost {
                         throw error;
                     }
                 }
+                if (marketplace === 'yavendio') {
+                    try {
+                        const r = await this.yavendio.publish(productId, userId, connectionId);
+                        return { status: 'published', externalId: r.externalId, creadas: r.creadas };
+                    } catch (error: any) {
+                        // Un plan que Yavendió rechazaría (sin precio, valor de eje faltante…) no mejora reintentando.
+                        if (error?.status === 400 || error?.response?.statusCode === 400) {
+                            await this.yavendio.marcarFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
+                            throw new UnrecoverableError(error?.message ?? 'El producto no cumple lo que pide Yavendió.');
+                        }
+                        if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) await this.yavendio.marcarFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
+                        throw error;
+                    }
+                }
                 throw new Error(`Marketplace no soportado aún: ${marketplace}`);
             }
 
@@ -65,6 +81,9 @@ export class SyncProcessor extends WorkerHost {
                         result = { status: 'synced' };
                     } else if (marketplace === 'falabella') {
                         result = await this.syncService.pushInventoryToFalabella(productId, connectionId);
+                    } else if (marketplace === 'yavendio') {
+                        await this.yavendio.pushInventory(productId, connectionId);
+                        result = { status: 'synced' };
                     } else if (this.syncService.hasChannel(marketplace)) {
                         await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId);
                         result = { status: 'synced' };
