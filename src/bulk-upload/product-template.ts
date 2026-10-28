@@ -49,14 +49,16 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
     hoja.addRow({ sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: ejemploCanales, precio_descuento: 199.9, descuento_desde: '2026-11-01', descuento_hasta: '2026-11-30' });
     hoja.addRow({ sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: '' });
 
-    // Lista desplegable de canales para las primeras 1000 filas (el texto de la lista no puede pasar de 255 caracteres).
-    const opciones = combos.join(',');
-    if (combos.length && opciones.length <= 250) {
+    // Lista desplegable de canales para las primeras 1000 filas. Las opciones van en una hoja oculta: en una lista
+    // escrita en la propia validación la coma separa opciones y «falabella,mercadolibre» se partiría en dos.
+    if (combos.length) {
+        const listas = libro.addWorksheet('Listas', { state: 'veryHidden' });
+        combos.forEach((combo, i) => { listas.getCell(`A${i + 1}`).value = combo; });
         for (let fila = 2; fila <= 1001; fila++) {
             hoja.getCell(`G${fila}`).dataValidation = {
                 type: 'list',
                 allowBlank: true,
-                formulae: [`"${opciones}"`],
+                formulae: [`Listas!$A$1:$A$${combos.length}`],
                 showErrorMessage: true,
                 errorStyle: 'warning',
                 errorTitle: 'Canal',
