@@ -12,6 +12,7 @@ function construir(cuentas: any[]) {
         enqueuePublish: jest.fn(async () => ({ message: 'ok' })),
         findScopedProduct: jest.fn(async () => ({ id: 'p1', price: 50, marketplaceIds: {}, aiAttributes: {} })),
         familiaDe: jest.fn(async () => [{ id: 'p1', sku: 'S1', price: 50, marketplaceIds: {}, aiAttributes: {} }]),
+        nombreParaFalabella: jest.fn((n: string) => String(n).slice(0, 100)),
     };
     const servicio = new ProductLaunchService(sync, {} as any, {} as any, {} as any);
     return { servicio, sync };

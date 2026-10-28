@@ -1121,6 +1121,7 @@ export class SyncService implements OnModuleInit {
         const conGrupo = await this.productRepository.findOne({ where: { id: producto.id }, relations: { group: true } });
         if (!conGrupo?.group) return [producto];
         const miembros = await this.productRepository.find({ where: { group: { id: conGrupo.group.id } }, order: { createdAt: 'ASC' } });
+        for (const m of miembros) m.group = conGrupo.group;
         return miembros.length ? miembros : [producto];
     }
 

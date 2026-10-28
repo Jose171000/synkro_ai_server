@@ -18,6 +18,7 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
         }),
         findScopedProduct: jest.fn(async () => producto),
         familiaDe: jest.fn(async () => opts.familia ?? [producto]),
+        nombreParaFalabella: jest.fn((n: string) => String(n).slice(0, 100)),
         getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
         resolveMeliCategory: jest.fn(async () => 'MPE124007'),
         meliCategoryPath: jest.fn(async (id: string) => opts.ruta ?? 'Ruta › ' + id),
@@ -265,5 +266,44 @@ describe('categoría de Falabella de un grupo', () => {
         expect((familia[1].marketplaceIds as any).falabella_category_id).toBe('5000');
         expect((familia[1].aiAttributes as any)._categoriaVerificada).toBe('5000');
         expect((familia[2].marketplaceIds as any).falabella_category_id).toBe('3169'); // la eligió una persona
+    });
+});
+
+describe('revisar antes de publicar', () => {
+    const grupo = { name: 'Perchero Elegante Multifuncional Kasari Metal Negro Azul', parentSku: 'PERCHERO-METAL', axes: [{ name: 'Color', values: ['Negro', 'Celeste'] }] };
+    const variante = (id: string, sku: string, color: string) => ({
+        id, sku, price: 39.9, stock: 10, name: `${grupo.name} - ${color}`, aiTitle: 'título viejo cortado', group: grupo, variantValues: { Color: color },
+        marketplaceIds: { mercadolibre_category_id: 'MPE1' }, aiAttributes: { brand: 'GENERICO', mercadolibre_attributes: { COLOR: 'Azul', MATERIAL: 'Metal' } },
+    });
+
+    it('con soloPreparar deja todo listo y NO publica nada, y dice cómo saldría cada variante', async () => {
+        const familia = [variante('v1', 'OG144', 'Negro'), variante('v2', 'OG146', 'Celeste')];
+        const { service, sync, falabellaPrep } = construir({ familia, producto: familia[0] });
+        const r = await service.lanzar(SCOPE, 'v1', ['falabella', 'mercadolibre'], { falabella: ['fa1'], mercadolibre: ['ml1'] }, { soloPreparar: true });
+
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(falabellaPrep.preparar).toHaveBeenCalledTimes(2); // sí se prepara: categoría, medidas, atributos
+        expect(r.channels.map((c) => c.status)).toEqual(['preparado', 'preparado']);
+        expect(r.channels[0].message).toContain('2 variantes');
+        expect(r.variants).toEqual([
+            { id: 'v1', sku: 'OG144', etiqueta: 'Negro', price: 39.9, stock: 10, titulos: { falabella: 'Perchero Elegante Multifuncional Kasari Metal - Negro', mercadolibre: 'Perchero Elegante Multifuncional Kasari Metal Negro' } },
+            { id: 'v2', sku: 'OG146', etiqueta: 'Celeste', price: 39.9, stock: 10, titulos: { falabella: 'Perchero Elegante Multifuncional Kasari Metal - Celeste', mercadolibre: 'Perchero Elegante Multifuncional Kasari Metal Celeste' } },
+        ]);
+    });
+
+    it('si falta algo, soloPreparar lo dice igual que al publicar', async () => {
+        const familia = [variante('v1', 'OG144', 'Negro'), variante('v2', 'OG146', 'Celeste')];
+        const { service, falabellaPrep } = construir({ familia, producto: familia[0] });
+        falabellaPrep.preparar.mockImplementation(async (_s: any, id: string) => (id === 'v2' ? { listo: false, motivo: 'le faltan las medidas' } : { listo: true }));
+        const r = await service.lanzar(SCOPE, 'v1', ['falabella'], { falabella: ['fa1'] }, { soloPreparar: true });
+        expect(r.channels[0]).toMatchObject({ status: 'error', message: expect.stringContaining('OG146 le faltan las medidas') });
+    });
+
+    it('un producto simple muestra su título tal cual', async () => {
+        const { service } = construir();
+        const r = await service.lanzar(SCOPE, 'p1', ['mercadolibre'], { mercadolibre: ['ml1'] }, { soloPreparar: true });
+        expect(r.variants).toHaveLength(1);
+        expect(r.variants![0].etiqueta).toBeNull();
+        expect(r.variants![0].titulos.mercadolibre).toBe('Torre Montessori');
     });
 });

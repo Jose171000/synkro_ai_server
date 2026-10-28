@@ -5,13 +5,27 @@ import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { quitarUrls } from './description-html';
 import { CuentasElegidas, cuentasParaPublicar } from '../sync/cuentas-elegidas';
+import { nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
+import { etiquetaDe } from '../products/variantes';
 
 export interface LaunchChannelResult {
     marketplace: string;
     /** Cuántas cuentas del canal recibieron la orden de publicar. */
     accounts: number;
-    status: 'encolado' | 'omitido' | 'error';
+    /** `preparado`: todo quedó listo y a la espera de que la persona confirme; no se envió nada al canal. */
+    status: 'encolado' | 'preparado' | 'omitido' | 'error';
     message: string;
+}
+
+/** Cómo saldría cada variante en los canales: para que la persona lo revise antes de publicar. */
+export interface LaunchVariant {
+    id: string;
+    sku: string;
+    /** «Negro», «M · Rojo»… (vacío en un producto simple). */
+    etiqueta: string | null;
+    price: number | null;
+    stock: number | null;
+    titulos: { mercadolibre?: string; falabella?: string };
 }
 
 export interface LaunchReport {
@@ -21,6 +35,8 @@ export interface LaunchReport {
     estimatedMeli: string[];
     /** Categoría de Mercado Libre con la que sale el producto; sin `id`, `options` son las recomendadas para que la persona elija. */
     meliCategory?: { id?: string; path?: string; options?: { id: string; path: string }[] };
+    /** Las variantes (o el producto) tal como saldrían, con su título en cada canal. */
+    variants?: LaunchVariant[];
 }
 
 const CANALES = ['mercadolibre', 'falabella'];
@@ -48,7 +64,7 @@ export class ProductLaunchService {
      * Un producto con variantes se lanza entero: cada variante se prepara y se publica (en Mercado Libre quedan juntas en una
      * familia; en Falabella, bajo un mismo ParentSku si la categoría admite variantes y, si no, como fichas sueltas).
      */
-    async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}, opciones: { meliCategoryId?: string } = {}): Promise<LaunchReport> {
+    async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}, opciones: { meliCategoryId?: string; soloPreparar?: boolean } = {}): Promise<LaunchReport> {
         const pedidos = [...new Set(marketplaces.map((m) => m.toLowerCase()))].filter((m) => CANALES.includes(m));
         const reporte: LaunchReport = { channels: [], estimatedMeli: [] };
 
@@ -123,6 +139,12 @@ export class ProductLaunchService {
                 continue;
             }
 
+            // Para revisar antes de publicar: todo queda preparado, pero no se envía nada al canal.
+            if (opciones.soloPreparar) {
+                reporte.channels.push({ marketplace: canal, accounts: delCanal.length, status: 'preparado', message: familia.length > 1 ? `${NOMBRE[canal]}: listo para publicar las ${familia.length} variantes cuando confirmes.` : `${NOMBRE[canal]}: listo para publicar cuando confirmes.` });
+                continue;
+            }
+
             let encoladas = 0;
             let cuentasConEnvio = 0;
             let ultimoError = '';
@@ -146,7 +168,25 @@ export class ProductLaunchService {
                     : { marketplace: canal, accounts: 0, status: /ya está publicado|ya se está publicando/i.test(ultimoError) ? 'omitido' : 'error', message: ultimoError },
             );
         }
+        reporte.variants = familia.map((m) => this.vistaDeVariante(m, pedidos));
         return reporte;
+    }
+
+    /** Cómo saldría una variante en cada canal pedido (títulos incluidos). */
+    private vistaDeVariante(m: any, canales: string[]): LaunchVariant {
+        const grupo = m.group && m.variantValues ? m.group : null;
+        const valores: string[] = (grupo?.axes ?? []).flatMap((e: any) => e.values);
+        const etiqueta = grupo ? etiquetaDe(m.variantValues, grupo.axes ?? []) : null;
+        const color = grupo ? Object.entries(m.variantValues as Record<string, string>).find(([eje]) => /^colou?r$/i.test(eje))?.[1] : undefined;
+        const titulos: LaunchVariant['titulos'] = {};
+        if (canales.includes('mercadolibre')) {
+            // Mercado Libre agrega solo el color al nombre común de la familia.
+            titulos.mercadolibre = grupo ? `${nombreDeFamilia(grupo.name || m.name, valores)}${color ? ` ${color}` : ''}` : String(m.aiTitle || m.name).slice(0, 60);
+        }
+        if (canales.includes('falabella')) {
+            titulos.falabella = (grupo ? tituloDeVariante(grupo.name || m.name, etiqueta ?? '', valores, 100) : undefined) || this.sync.nombreParaFalabella(m.aiTitle || m.name);
+        }
+        return { id: m.id, sku: m.sku, etiqueta, price: m.price != null ? Number(m.price) : null, stock: m.stock != null ? Number(m.stock) : null, titulos };
     }
 
     /** Pone en una variante la categoría de Falabella ya elegida para el grupo, salvo que una persona le haya puesto otra a mano. */
