@@ -43,12 +43,17 @@ export class ProductLaunchService {
         private readonly canales: ChannelAttributesService,
     ) { }
 
-    /** `elegidas`: las cuentas de cada canal donde la persona quiere publicar; sin ella se usan todas las activas. */
+    /**
+     * `elegidas`: las cuentas de cada canal donde la persona quiere publicar; sin ella se usan todas las activas.
+     * Un producto con variantes se lanza entero: cada variante se prepara y se publica (en Mercado Libre quedan juntas en una
+     * familia; en Falabella, bajo un mismo ParentSku si la categoría admite variantes y, si no, como fichas sueltas).
+     */
     async lanzar(scope: SyncScope, productId: string, marketplaces: string[], elegidas: CuentasElegidas = {}, opciones: { meliCategoryId?: string } = {}): Promise<LaunchReport> {
         const pedidos = [...new Set(marketplaces.map((m) => m.toLowerCase()))].filter((m) => CANALES.includes(m));
         const reporte: LaunchReport = { channels: [], estimatedMeli: [] };
 
         const cuentas = (await this.sync.getConnections(scope.storeId)).filter((c: any) => c.status === 'active');
+        const familia = await this.sync.familiaDe(scope, productId);
 
         for (const canal of pedidos) {
             const activasDelCanal = cuentas.filter((c: any) => c.marketplace === canal);
@@ -64,28 +69,40 @@ export class ProductLaunchService {
             }
 
             // Los canales rechazan una publicación sin precio: se dice antes de gastar IA y de encolar algo que va a fallar.
-            const producto = await this.sync.findScopedProduct(scope, productId);
-            if (!(Number(producto.price) > 0)) {
-                reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: `${NOMBRE[canal]} exige precio: este producto no tiene. Edita el producto, ponle precio y vuelve a pulsar Publicar.` });
+            const sinPrecio = familia.find((p) => !(Number(p.price) > 0));
+            if (sinPrecio) {
+                reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: `${NOMBRE[canal]} exige precio: ${familia.length > 1 ? sinPrecio.sku : 'este producto'} no tiene. Edita el producto, ponle precio y vuelve a pulsar Publicar.` });
                 continue;
             }
 
-            try {
-                // Preparación propia de cada canal
-                if (canal === 'falabella') reporte.falabella = await this.falabellaPrep.preparar(scope, productId, delCanal[0].id);
-                if (canal === 'mercadolibre') reporte.estimatedMeli = await this.completarMeli(scope, productId, delCanal[0].id, reporte, opciones.meliCategoryId);
-            } catch (error: any) {
-                this.logger.warn(`Preparación de ${canal} para ${productId}: ${error?.message}`);
-                // Si no se pudo preparar, igual se intenta publicar: el motivo exacto queda en la ficha.
+            // Preparación propia de cada canal, variante por variante.
+            let sinCategoria = false;
+            let faltaFalabella: string | null = null;
+            for (const miembro of familia) {
+                try {
+                    if (canal === 'falabella') {
+                        const prep = await this.falabellaPrep.preparar(scope, miembro.id, delCanal[0].id);
+                        if (!reporte.falabella) reporte.falabella = prep;
+                        if (!prep.listo && !faltaFalabella) faltaFalabella = familia.length > 1 ? `${miembro.sku} ${prep.motivo}` : String(prep.motivo);
+                    }
+                    if (canal === 'mercadolibre') {
+                        const estimados = await this.completarMeli(scope, miembro.id, delCanal[0].id, reporte, opciones.meliCategoryId);
+                        reporte.estimatedMeli = [...new Set([...reporte.estimatedMeli, ...estimados])];
+                        if (reporte.meliCategory && !reporte.meliCategory.id) sinCategoria = true;
+                    }
+                } catch (error: any) {
+                    this.logger.warn(`Preparación de ${canal} para ${miembro.sku}: ${error?.message}`);
+                    // Si no se pudo preparar, igual se intenta publicar: el motivo exacto queda en la ficha.
+                }
             }
 
             // Sin categoría de Mercado Libre no se publica a ciegas: se devuelven las recomendadas para que la persona elija.
-            if (canal === 'mercadolibre' && reporte.meliCategory && !reporte.meliCategory.id) {
+            if (canal === 'mercadolibre' && sinCategoria) {
                 reporte.channels.push({
                     marketplace: canal,
                     accounts: 0,
                     status: 'error',
-                    message: reporte.meliCategory.options?.length
+                    message: reporte.meliCategory?.options?.length
                         ? 'No se pudo elegir la categoría de Mercado Libre sola: elige una de las recomendadas.'
                         : 'No se encontró una categoría de Mercado Libre para este producto: revisa el título.',
                 });
@@ -93,30 +110,36 @@ export class ProductLaunchService {
             }
 
             // Falabella rechazaría un producto al que le falta algo que pide: se dice qué falta en vez de fingir que se publica.
-            if (canal === 'falabella' && reporte.falabella && !reporte.falabella.listo) {
+            if (canal === 'falabella' && faltaFalabella) {
                 reporte.channels.push({
                     marketplace: canal,
                     accounts: 0,
                     status: 'error',
-                    message: `Falabella: todavía ${reporte.falabella.motivo}. Complétalo en la Ficha del producto y vuelve a pulsar Publicar.`,
+                    message: `Falabella: todavía ${faltaFalabella}. Complétalo en la Ficha del producto y vuelve a pulsar Publicar.`,
                 });
                 continue;
             }
 
             let encoladas = 0;
+            let cuentasConEnvio = 0;
             let ultimoError = '';
             for (const cuenta of delCanal) {
-                try {
-                    await this.sync.enqueuePublish(scope, productId, [canal], { [canal]: cuenta.id });
-                    encoladas++;
-                } catch (error: any) {
-                    ultimoError = error?.response?.message ?? error?.message ?? 'error desconocido';
-                    if (Array.isArray(ultimoError)) ultimoError = (ultimoError as string[]).join(', ');
+                let enEstaCuenta = 0;
+                for (const miembro of familia) {
+                    try {
+                        await this.sync.enqueuePublish(scope, miembro.id, [canal], { [canal]: cuenta.id });
+                        enEstaCuenta++;
+                    } catch (error: any) {
+                        ultimoError = error?.response?.message ?? error?.message ?? 'error desconocido';
+                        if (Array.isArray(ultimoError)) ultimoError = (ultimoError as string[]).join(', ');
+                    }
                 }
+                encoladas += enEstaCuenta;
+                if (enEstaCuenta) cuentasConEnvio++;
             }
             reporte.channels.push(
                 encoladas
-                    ? { marketplace: canal, accounts: encoladas, status: 'encolado', message: `Publicando en ${NOMBRE[canal]}.` }
+                    ? { marketplace: canal, accounts: cuentasConEnvio, status: 'encolado', message: familia.length > 1 ? `Publicando ${familia.length} variantes en ${NOMBRE[canal]}.` : `Publicando en ${NOMBRE[canal]}.` }
                     : { marketplace: canal, accounts: 0, status: /ya está publicado|ya se está publicando/i.test(ultimoError) ? 'omitido' : 'error', message: ultimoError },
             );
         }
@@ -156,7 +179,17 @@ export class ProductLaunchService {
             product.aiAttributes = attrs;
             await this.sync.saveProduct(product);
         }
-        reporte.meliCategory = { id: String(categoria), path: await this.sync.meliCategoryPath(String(categoria)) };
+        const ruta = await this.sync.meliCategoryPath(String(categoria));
+        // Una categoría de coleccionismo casi nunca es la de un producto nuevo (un perchero moderno acabó en «Antigüedades»):
+        // si salió sola no se publica ahí, se ofrecen las demás y la persona elige. Si la eligió ella, se respeta.
+        if (!elegida && /^antig[uü]edades/i.test(ruta)) {
+            const token = await this.sync.getValidConnectionById(connectionId).then((c) => c.accessToken).catch(() => undefined);
+            const frases = [product.aiTitle || product.name, ...(await this.ai.consultasDeCategoria(product.aiTitle || product.name, product.aiDescription || product.description || '').catch(() => [] as string[]))];
+            const opciones = (await this.sync.suggestMeliCategories(frases, token)).filter((o) => !/^antig[uü]edades/i.test(o.path));
+            reporte.meliCategory = { options: opciones };
+            return [];
+        }
+        reporte.meliCategory = { id: String(categoria), path: ruta };
 
         // Todos los atributos de la categoría, no solo los obligatorios: los opcionales que se pueden sacar de las fotos o del texto suben la calidad.
         const requisitos = await this.canales.requisitos('mercadolibre', String(categoria), undefined, undefined, undefined, { todos: true });

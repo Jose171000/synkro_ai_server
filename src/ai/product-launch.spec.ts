@@ -1,6 +1,6 @@
 import { ProductLaunchService } from './product-launch.service';
 
-function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: any } = {}) {
+function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: any; familia?: any[]; ruta?: string } = {}) {
     const producto = opts.producto ?? {
         id: 'p1', price: 99, name: 'Torre', aiTitle: 'Torre Montessori', description: 'texto', aiDescription: 'desc',
         marketplaceIds: { mercadolibre_category_id: 'MPE1' }, aiAttributes: { brand: 'GENERICO', mercadolibre_attributes: { COLOR: 'Azul' } },
@@ -17,9 +17,10 @@ function construir(opts: { cuentas?: any[]; enqueueError?: string; producto?: an
             return { message: 'ok' };
         }),
         findScopedProduct: jest.fn(async () => producto),
+        familiaDe: jest.fn(async () => opts.familia ?? [producto]),
         getValidConnectionById: jest.fn(async () => ({ accessToken: 'tok-ml' })),
         resolveMeliCategory: jest.fn(async () => 'MPE124007'),
-        meliCategoryPath: jest.fn(async (id: string) => 'Ruta › ' + id),
+        meliCategoryPath: jest.fn(async (id: string) => opts.ruta ?? 'Ruta › ' + id),
         suggestMeliCategories: jest.fn(async () => [{ id: 'MPE1', path: 'A › B' }, { id: 'MPE2', path: 'C › D' }]),
         saveProduct: jest.fn(async (p: any) => p),
     };
@@ -180,5 +181,60 @@ describe('lanzar un producto sin precio', () => {
         expect(r.channels[0]).toMatchObject({ marketplace: 'mercadolibre', status: 'error', message: expect.stringContaining('exige precio') });
         expect(sync.enqueuePublish).not.toHaveBeenCalled();
         expect(ai.completarAtributos).not.toHaveBeenCalled();
+    });
+});
+
+describe('lanzar un producto con variantes', () => {
+    const variante = (id: string, sku: string, extra: any = {}) => ({
+        id, sku, price: 39.9, name: 'Perchero', aiTitle: 'Perchero Metal',
+        marketplaceIds: { mercadolibre_category_id: 'MPE1' }, aiAttributes: { brand: 'GENERICO', mercadolibre_attributes: { COLOR: 'Azul', MATERIAL: 'Metal' } }, ...extra,
+    });
+
+    it('prepara y publica cada variante del grupo, no solo la que se pulsó', async () => {
+        const familia = [variante('v1', 'OG144'), variante('v2', 'OG146')];
+        const { service, sync, falabellaPrep } = construir({ familia, producto: familia[0] });
+        const r = await service.lanzar(SCOPE, 'v1', ['falabella', 'mercadolibre'], { falabella: ['fa1'], mercadolibre: ['ml1'] });
+
+        expect(falabellaPrep.preparar.mock.calls.map((c: any[]) => c[1])).toEqual(['v1', 'v2']);
+        expect(sync.enqueuePublish.mock.calls.map((c: any[]) => [c[1], c[2][0]])).toEqual([['v1', 'falabella'], ['v2', 'falabella'], ['v1', 'mercadolibre'], ['v2', 'mercadolibre']]);
+        expect(r.channels).toEqual([
+            { marketplace: 'falabella', accounts: 1, status: 'encolado', message: 'Publicando 2 variantes en Falabella.' },
+            { marketplace: 'mercadolibre', accounts: 1, status: 'encolado', message: 'Publicando 2 variantes en Mercado Libre.' },
+        ]);
+    });
+
+    it('si una variante no está lista para Falabella no se envía ninguna y se dice cuál', async () => {
+        const familia = [variante('v1', 'OG144'), variante('v2', 'OG146')];
+        const { service, sync, falabellaPrep } = construir({ familia, producto: familia[0] });
+        falabellaPrep.preparar.mockImplementation(async (_s: any, id: string) => (id === 'v2' ? { listo: false, motivo: 'le faltan las medidas' } : { listo: true }));
+        const r = await service.lanzar(SCOPE, 'v1', ['falabella'], { falabella: ['fa1'] });
+
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(r.channels[0]).toMatchObject({ status: 'error', message: expect.stringContaining('OG146 le faltan las medidas') });
+    });
+
+    it('una variante sin precio frena el lanzamiento del grupo entero', async () => {
+        const familia = [variante('v1', 'OG144'), variante('v2', 'OG146', { price: 0 })];
+        const { service, sync } = construir({ familia, producto: familia[0] });
+        const r = await service.lanzar(SCOPE, 'v1', ['mercadolibre'], { mercadolibre: ['ml1'] });
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(r.channels[0].message).toContain('OG146');
+    });
+});
+
+describe('categoría de Mercado Libre elegida sola', () => {
+    it('una de «Antigüedades» no se usa para un producto nuevo: se ofrecen las demás y la persona elige', async () => {
+        const { service, sync } = construir({ ruta: 'Antigüedades y Colecciones › Antigüedades › Percheros' });
+        sync.suggestMeliCategories.mockResolvedValue([{ id: 'MPE9', path: 'Antigüedades y Colecciones › Otras' }, { id: 'MPE5', path: 'Hogar › Percheros' }]);
+        const r = await service.lanzar(SCOPE, 'p1', ['mercadolibre'], { mercadolibre: ['ml1'] });
+        expect(sync.enqueuePublish).not.toHaveBeenCalled();
+        expect(r.channels[0]).toMatchObject({ status: 'error' });
+        expect(r.meliCategory).toEqual({ options: [{ id: 'MPE5', path: 'Hogar › Percheros' }] });
+    });
+
+    it('si la persona la eligió, se respeta aunque sea de Antigüedades', async () => {
+        const { service, sync } = construir({ ruta: 'Antigüedades y Colecciones › Antigüedades › Percheros' });
+        await service.lanzar(SCOPE, 'p1', ['mercadolibre'], { mercadolibre: ['ml1'] }, { meliCategoryId: 'MPE444184' });
+        expect(sync.enqueuePublish).toHaveBeenCalled();
     });
 });

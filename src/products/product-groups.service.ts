@@ -7,6 +7,7 @@ import { EjeDeVariacion, ProductGroup } from './entities/product-group.entity';
 import { ProductsService } from './products.service';
 import { AiService } from '../ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
+import { tituloDeVariante } from './titulos-de-variante';
 import { DeteccionDeVariantes, ProductVisionService } from '../ai/product-vision.service';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
@@ -159,7 +160,7 @@ export class ProductGroupsService {
                 const etiqueta = etiquetaDe(variante.variantValues ?? {}, vista.axes);
                 if (nombreDeLaIa) variante.name = `${nombreDeLaIa} - ${etiqueta}`.slice(0, 250);
                 if (faltaba.sinDescripcion && molde.aiDescription) variante.description = molde.aiDescription;
-                variante.aiTitle = this.tituloDeVariante(molde.aiTitle, etiqueta) as any;
+                variante.aiTitle = tituloDeVariante(molde.aiTitle, etiqueta, vista.axes.flatMap((e) => e.values)) as any;
                 variante.aiDescription = molde.aiDescription;
                 variante.aiKeywords = molde.aiKeywords;
                 variante.marketplaceIds = { ...(molde.marketplaceIds ?? {}) };
@@ -176,13 +177,6 @@ export class ProductGroupsService {
         } catch (error: any) {
             return { ok: false, motivo: String(error?.response?.message ?? error?.message ?? 'La IA no pudo generar el contenido') };
         }
-    }
-
-    /** Título de la variante: el del grupo más su combinación, sin pasar de 60 caracteres (el límite más estricto de los canales). */
-    private tituloDeVariante(base: string | undefined, etiqueta: string): string | undefined {
-        if (!base) return undefined;
-        const sufijo = ` - ${etiqueta}`;
-        return `${base.slice(0, Math.max(10, 60 - sufijo.length)).trim()}${sufijo}`.slice(0, 60);
     }
 
     // ─────────────────────────────────────────────────────────────

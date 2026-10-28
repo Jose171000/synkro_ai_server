@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
+import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
 import { descripcionEnTextoPlano } from './meli/descripcion-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
@@ -1091,9 +1092,18 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /** El producto y, si es una variante, todas las de su grupo: en un canal se lanzan juntas. Sin grupo, solo él. */
+    async familiaDe(scope: SyncScope, productId: string): Promise<Product[]> {
+        const producto = await this.findScopedProduct(scope, productId);
+        const conGrupo = await this.productRepository.findOne({ where: { id: producto.id }, relations: { group: true } });
+        if (!conGrupo?.group) return [producto];
+        const miembros = await this.productRepository.find({ where: { group: { id: conGrupo.group.id } }, order: { createdAt: 'ASC' } });
+        return miembros.length ? miembros : [producto];
+    }
+
     /** Executed by the queue processor: actually publishes on Mercado Libre. */
     async publishToMeli(productId: string, userId: string, connectionId: string): Promise<ListingLink> {
-        const product = await this.productRepository.findOne({ where: { id: productId } });
+        const product = await this.productRepository.findOne({ where: { id: productId }, relations: { group: true } });
         if (!product) {
             throw new NotFoundException('Producto no encontrado');
         }
@@ -1341,12 +1351,14 @@ export class SyncService implements OnModuleInit {
     /** Atributos que se envían a Mercado Libre para un producto: marca, modelo y los que completó la IA. */
     atributosParaMeli(product: Product): { id: string; value_name: string }[] {
         const brand = (product.aiAttributes as any)?.brand || 'Genérica';
+        // En una familia, el color o la talla de ESTA variante mandan sobre los del molde del grupo, y el modelo es el del grupo.
+        const delCanal = atributosConVariante((((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>), product.variantValues);
         return [
             { id: 'BRAND', value_name: brand },
-            { id: 'MODEL', value_name: product.sku },
+            { id: 'MODEL', value_name: product.group?.parentSku || product.sku },
             // El SKU viaja en la publicación, como dato del producto.
             { id: 'SELLER_SKU', value_name: product.sku },
-            ...Object.entries(((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>)
+            ...Object.entries(delCanal)
                 .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && valor !== null && valor !== undefined && String(valor).trim() !== '')
                 .map(([id, valor]) => ({ id, value_name: String(valor) })),
         ];
@@ -1354,7 +1366,10 @@ export class SyncService implements OnModuleInit {
 
     private buildMeliItemPayload(product: Product, categoryId: string): MeliItemPayload {
         // ML builds the final title from family_name + attributes (max 60 chars)
-        const familyName = (product.aiTitle || product.name).slice(0, 60);
+        // Las variantes de un grupo comparten el MISMO nombre de familia (sin color: Mercado Libre agrega el de cada una) y así quedan juntas.
+        const familyName = product.group
+            ? nombreDeFamilia(product.group.name || product.aiTitle || product.name, (product.group.axes ?? []).flatMap((e) => e.values))
+            : (product.aiTitle || product.name).slice(0, 60);
 
         return {
             family_name: familyName,
@@ -1722,7 +1737,8 @@ export class SyncService implements OnModuleInit {
         status: 'active' | 'inactive' = 'active',
         categoryAttributes: FalabellaAttribute[] = [],
     ): { input: FalabellaProductInput } | { reason: string } {
-        const attributes = (product.aiAttributes as any) || {};
+        // Los valores de ESTA variante (Color: Negro) ganan a los del molde del grupo (color: Azul).
+        const attributes = atributosConVariante((product.aiAttributes as any) || {}, product.variantValues);
         const marketplaceIds = (product.marketplaceIds as any) || {};
 
         if (product.price === null || product.price === undefined) {
