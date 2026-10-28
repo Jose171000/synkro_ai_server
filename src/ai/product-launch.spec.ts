@@ -307,3 +307,28 @@ describe('revisar antes de publicar', () => {
         expect(r.variants![0].titulos.mercadolibre).toBe('Torre Montessori');
     });
 });
+
+describe('atributos de Mercado Libre de un grupo', () => {
+    it('se completan una sola vez y todas las variantes salen con los mismos (así Mercado Libre las junta en una familia)', async () => {
+        const base = (id: string, extra: any = {}) => ({
+            id, sku: id, price: 10, name: id, aiTitle: id, description: 'texto',
+            marketplaceIds: { mercadolibre_category_id: 'MPE1' }, aiAttributes: { brand: 'X', mercadolibre_category_id: 'MPE1', mercadolibre_attributes: { MATERIAL: 'Metal' }, ...extra },
+        });
+        const familia: any[] = [base('v1'), base('v2'), base('v3')];
+        const { service, sync, ai } = construir({ familia, producto: familia[0] });
+        sync.findScopedProduct.mockImplementation(async (_s: any, id: string) => familia.find((f) => f.id === id));
+        // la IA contestaría distinto cada vez: si se llamara por variante, saldrían atributos distintos
+        let n = 0;
+        ai.completarAtributos.mockImplementation(async () => ({ values: { COLOR: 'Azul', EXTRA: `valor-${++n}` }, estimated: ['EXTRA'] }));
+
+        await service.lanzar(SCOPE, 'v1', ['mercadolibre'], { mercadolibre: ['ml1'] });
+
+        expect(ai.completarAtributos).toHaveBeenCalledTimes(1);
+        const primero = familia[0].aiAttributes.mercadolibre_attributes;
+        expect(primero.EXTRA).toBe('valor-1');
+        expect(familia[1].aiAttributes.mercadolibre_attributes).toEqual(primero);
+        expect(familia[2].aiAttributes.mercadolibre_attributes).toEqual(primero);
+        expect(familia[1].marketplaceIds.mercadolibre_category_id).toBe(familia[0].marketplaceIds.mercadolibre_category_id);
+        expect(sync.enqueuePublish).toHaveBeenCalledTimes(3);
+    });
+});

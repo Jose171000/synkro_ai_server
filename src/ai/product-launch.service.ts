@@ -105,9 +105,15 @@ export class ProductLaunchService {
                         if (!prep.listo && !faltaFalabella) faltaFalabella = familia.length > 1 ? `${miembro.sku} ${prep.motivo}` : String(prep.motivo);
                     }
                     if (canal === 'mercadolibre') {
-                        const estimados = await this.completarMeli(scope, miembro.id, delCanal[0].id, reporte, opciones.meliCategoryId);
-                        reporte.estimatedMeli = [...new Set([...reporte.estimatedMeli, ...estimados])];
-                        if (reporte.meliCategory && !reporte.meliCategory.id) sinCategoria = true;
+                        if (i > 0 && reporte.meliCategory?.id) {
+                            // Las variantes de una familia deben ser idénticas salvo en lo que las distingue (el color): si la IA completara
+                            // los atributos de cada una por separado, saldrían distintos y Mercado Libre no las juntaría en una familia.
+                            await this.igualarDatosMeli(scope, miembro.id, familia[0].id);
+                        } else {
+                            const estimados = await this.completarMeli(scope, miembro.id, delCanal[0].id, reporte, opciones.meliCategoryId);
+                            reporte.estimatedMeli = [...new Set([...reporte.estimatedMeli, ...estimados])];
+                            if (reporte.meliCategory && !reporte.meliCategory.id) sinCategoria = true;
+                        }
                     }
                 } catch (error: any) {
                     this.logger.warn(`Preparación de ${canal} para ${miembro.sku}: ${error?.message}`);
@@ -187,6 +193,26 @@ export class ProductLaunchService {
             titulos.falabella = (grupo ? tituloDeVariante(grupo.name || m.name, etiqueta ?? '', valores, 100) : undefined) || this.sync.nombreParaFalabella(m.aiTitle || m.name);
         }
         return { id: m.id, sku: m.sku, etiqueta, price: m.price != null ? Number(m.price) : null, stock: m.stock != null ? Number(m.stock) : null, titulos };
+    }
+
+    /**
+     * Copia a una variante la categoría y los atributos de Mercado Libre de la primera del grupo. El color (o la talla) de cada una
+     * se pone al enviar, así que no se copia nada que la distinga.
+     */
+    private async igualarDatosMeli(scope: SyncScope, productId: string, origenId: string): Promise<void> {
+        const [origen, destino] = await Promise.all([this.sync.findScopedProduct(scope, origenId), this.sync.findScopedProduct(scope, productId)]);
+        const delOrigen: Record<string, any> = (origen.aiAttributes as any) || {};
+        const atributos: Record<string, any> = { ...((destino.aiAttributes as any) || {}) };
+        atributos.mercadolibre_attributes = { ...(delOrigen.mercadolibre_attributes ?? {}) };
+        if (delOrigen.mercadolibre_category_id) atributos.mercadolibre_category_id = delOrigen.mercadolibre_category_id;
+        if (delOrigen.estimated?.attributes?.mercadolibre) {
+            const estimado = atributos.estimated ?? { measures: false, attributes: {} };
+            atributos.estimated = { ...estimado, attributes: { ...(estimado.attributes ?? {}), mercadolibre: delOrigen.estimated.attributes.mercadolibre } };
+        }
+        destino.aiAttributes = atributos;
+        const categoria = (origen.marketplaceIds as any)?.mercadolibre_category_id ?? delOrigen.mercadolibre_category_id;
+        if (categoria) destino.marketplaceIds = { ...((destino.marketplaceIds as any) || {}), mercadolibre_category_id: categoria };
+        await this.sync.saveProduct(destino);
     }
 
     /** Pone en una variante la categoría de Falabella ya elegida para el grupo, salvo que una persona le haya puesto otra a mano. */
