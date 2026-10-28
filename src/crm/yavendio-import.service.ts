@@ -68,6 +68,61 @@ export class YavendioImportService {
         return String(value || '').replace(/\D/g, '');
     }
 
+    /** El prospecto de este dueño con ese teléfono, comparando solo los dígitos («+51 999-888» y «51999888» son el mismo). */
+    private async findByPhone(ownerId: string, phone: string): Promise<Lead | null> {
+        const digits = this.onlyDigits(phone);
+        if (digits.length < 8) return null;
+        return this.leadRepository
+            .createQueryBuilder('l')
+            .where('l.ownerId = :ownerId', { ownerId })
+            .andWhere(`regexp_replace(COALESCE(l.phone,''), '\\D', '', 'g') = :digits`, { digits })
+            .getOne();
+    }
+
+    /**
+     * Trae los contactos de Yavendió al embudo como prospectos nuevos. Quien ya está en el CRM (por el id del contacto
+     * o por su teléfono, por ejemplo porque ya escribió) no se toca: su etapa y sus notas son trabajo de una persona.
+     */
+    async importContacts(ownerId: string, options: { dryRun?: boolean } = {}): Promise<{ total: number; created: number; existing: number; skipped: number; sample: string[] }> {
+        const apiKey = await this.syncService.getYavendioApiKey(ownerId);
+        const contactos = await this.yavendioApi.listContacts(apiKey);
+        const result = { total: contactos.length, created: 0, existing: 0, skipped: 0, sample: [] as string[] };
+
+        for (const contacto of contactos) {
+            const phone = (contacto.phone || '').trim();
+            const name = (contacto.name || '').trim();
+            if (!phone && !name) { result.skipped++; continue; }
+
+            const externalKey = `${KEY_PREFIX}contacto:${contacto.id}`;
+            const yaEsta = (await this.leadRepository.findOne({ where: { externalKey, owner: { id: ownerId } } }))
+                ?? (phone ? await this.findByPhone(ownerId, phone) : null);
+            if (yaEsta) { result.existing++; continue; }
+
+            const notas = [
+                contacto.tags?.length ? `Etiquetas: ${contacto.tags.join(', ')}` : null,
+                contacto.unsubscribed_at ? 'Se dio de baja de los mensajes: no escribirle.' : null,
+            ].filter(Boolean).join('\n');
+
+            if (!options.dryRun) {
+                await this.leadRepository.save(this.leadRepository.create({
+                    owner: { id: ownerId } as any,
+                    name: name || phone,
+                    phone: phone || undefined,
+                    source: 'yavendio',
+                    stage: 'nuevo',
+                    notes: notas || undefined,
+                    externalKey,
+                    origin: 'yavendio',
+                }));
+            }
+            result.created++;
+            if (result.sample.length < 8) result.sample.push(name || phone);
+        }
+
+        this.logger.log(`Contactos de Yavendió${options.dryRun ? ' (simulado)' : ''}: ${result.created} nuevos, ${result.existing} ya estaban, ${result.skipped} omitidos de ${result.total}.`);
+        return result;
+    }
+
     async import(ownerId: string, options: YavendioImportOptions = {}): Promise<YavendioImportResult> {
         // Se usa la conexión de quien pide la importación: cada cuenta trae sus
         // propias conversaciones a su propio embudo.
@@ -105,16 +160,7 @@ export class YavendioImportService {
             let lead = await this.leadRepository.findOne({
                 where: { externalKey, owner: { id: ownerId } },
             });
-            if (!lead && phone) {
-                const digits = this.onlyDigits(phone);
-                if (digits.length >= 8) {
-                    lead = await this.leadRepository
-                        .createQueryBuilder('l')
-                        .where('l.ownerId = :ownerId', { ownerId })
-                        .andWhere(`regexp_replace(COALESCE(l.phone,''), '\D', '', 'g') = :digits`, { digits })
-                        .getOne();
-                }
-            }
+            if (!lead && phone) lead = await this.findByPhone(ownerId, phone);
 
             const notes = this.buildNotes(conversation);
             const lastContactAt = conversation.updated_at ? conversation.updated_at.slice(0, 10) : undefined;

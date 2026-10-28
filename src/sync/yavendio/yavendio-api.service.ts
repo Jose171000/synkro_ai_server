@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import { YavendioOrderDetail } from './yavendio-orders';
 
 export interface YavendioCompany {
     id: string;
@@ -24,16 +25,29 @@ export interface YavendioConversation {
     updated_at?: string | null;
 }
 
+/** Fila de GET /orders: trae lo básico; las líneas, el cliente y la dirección vienen en GET /orders/:id. */
 export interface YavendioOrder {
     id: number;
     order_date: string;
     status?: string | null;
     payment_method?: string;
     currency?: string;
-    total_amount?: string;
-    customer: { name: string; phone_number?: string | null };
-    items?: { sku?: string | null; name: string; quantity: number; base_price: string }[];
+    total_amount?: string | number;
+    customer?: { name: string; phone_number?: string | null };
+    items?: { variant_id?: number | null; sku?: string | null; name: string; quantity: number; base_price: string }[];
     summary_conversation?: string | null;
+}
+
+export interface YavendioContact {
+    id: number;
+    phone: string;
+    name?: string | null;
+    tags?: string[];
+    is_opted_in?: boolean;
+    unsubscribed_at?: string | null;
+    metadata?: Record<string, any>;
+    created_at?: string | null;
+    updated_at?: string | null;
 }
 
 /** Producto de Yavendió tal como lo devuelve GET /products/:id. */
@@ -275,7 +289,18 @@ export class YavendioApiService {
         return this.getAllPages<YavendioOrder>(apiKey, '/orders', 'leer los pedidos');
     }
 
-    async listContacts(apiKey: string): Promise<any[]> {
-        return this.getAllPages<any>(apiKey, '/contacts', 'leer los contactos');
+    /** Un pedido completo: líneas (con el id de variante), cliente, dirección y pago. */
+    async getOrder(apiKey: string, orderId: string | number): Promise<YavendioOrderDetail> {
+        return this.get<YavendioOrderDetail>(apiKey, `/orders/${orderId}`, {}, 'leer el pedido');
+    }
+
+    /** Todos los productos de la cuenta, con sus opciones y variantes. */
+    async listProducts(apiKey: string): Promise<YavendioProduct[]> {
+        return this.getAllPages<YavendioProduct>(apiKey, '/products', 'leer los productos');
+    }
+
+    /** Los contactos no traen total: se pagina hasta que `has_more` sea falso. */
+    async listContacts(apiKey: string): Promise<YavendioContact[]> {
+        return this.getAllPages<YavendioContact>(apiKey, '/contacts', 'leer los contactos');
     }
 }

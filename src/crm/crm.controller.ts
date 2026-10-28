@@ -75,4 +75,15 @@ export class CrmController {
             skipEmpty: dto.skipEmpty === true,
         });
     }
+
+    @Post('import/yavendio/contacts')
+    @ApiOperation({
+        summary: 'Importa los contactos de Yavendió al embudo como prospectos nuevos',
+        description:
+            'Quien ya está en el CRM (por el id del contacto o por su teléfono) no se toca. Los contactos que se dieron de baja ' +
+            'de los mensajes entran con esa advertencia en la nota. Con dryRun=true solo devuelve el conteo.',
+    })
+    importYavendioContacts(@Body() dto: ImportYavendioDto, @Req() req) {
+        return this.yavendioImport.importContacts(req.user.id, { dryRun: dto.dryRun === true });
+    }
 }

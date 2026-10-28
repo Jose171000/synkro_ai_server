@@ -17,6 +17,8 @@ import { SyncProcessor } from './sync.processor';
 import { MeliApiService } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { YavendioSyncService } from './yavendio/yavendio-sync.service';
+import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
+import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { WooApiService } from './woo/woo-api.service';
 import { ShopifyApiService } from './shopify/shopify-api.service';
@@ -42,7 +44,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, ShopifyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService],
 })
 export class SyncModule { }

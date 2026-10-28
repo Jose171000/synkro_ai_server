@@ -8,7 +8,7 @@ import { YavendioImportService } from './yavendio-import.service';
 
 type FakeLead = Record<string, any>;
 
-function makeService(existing: FakeLead[], conversations: any[]) {
+function makeService(existing: FakeLead[], conversations: any[], contacts: any[] = []) {
     const saved: FakeLead[] = [...existing];
 
     const repo: any = {
@@ -30,7 +30,7 @@ function makeService(existing: FakeLead[], conversations: any[]) {
     };
 
     const sync: any = { getYavendioApiKey: async () => 'yv_live_v1_de_prueba' };
-    const api: any = { listConversations: async () => conversations };
+    const api: any = { listConversations: async () => conversations, listContacts: async () => contacts };
 
     return { service: new YavendioImportService(repo, sync, api), saved };
 }
@@ -137,6 +137,38 @@ describe('importación de Yavendió al embudo', () => {
         const { service, saved } = makeService([], [conversation({ name: null, phone: null })]);
         const r = await service.import('admin-1');
         expect(r.skipped).toBe(1);
+        expect(saved).toHaveLength(0);
+    });
+});
+
+describe('importación de contactos de Yavendió al embudo', () => {
+    const contacto = (over: any = {}) => ({ id: over.id ?? 7, phone: over.phone ?? '51999111222', name: 'name' in over ? over.name : 'Ana Torres', tags: over.tags ?? [], unsubscribed_at: over.unsubscribed_at ?? null });
+
+    it('un contacto nuevo entra como prospecto nuevo con sus etiquetas en la nota', async () => {
+        const { service, saved } = makeService([], [], [contacto({ tags: ['vip', 'lima'] })]);
+        const r = await service.importContacts('admin-1');
+        expect(r).toMatchObject({ total: 1, created: 1, existing: 0 });
+        expect(saved[0]).toMatchObject({ name: 'Ana Torres', phone: '51999111222', stage: 'nuevo', origin: 'yavendio', externalKey: 'yavendio:contacto:7', notes: 'Etiquetas: vip, lima' });
+    });
+
+    it('repetir la importación no duplica y no toca a quien ya está', async () => {
+        const { service, saved } = makeService([{ id: 'l1', externalKey: 'yavendio:contacto:7', stage: 'propuesta' }], [], [contacto()]);
+        const r = await service.importContacts('admin-1');
+        expect(r).toMatchObject({ created: 0, existing: 1 });
+        expect(saved).toHaveLength(1);
+        expect(saved[0].stage).toBe('propuesta');
+    });
+
+    it('avisa en la nota cuando el contacto se dio de baja de los mensajes', async () => {
+        const { service, saved } = makeService([], [], [contacto({ unsubscribed_at: '2026-05-01T00:00:00Z' })]);
+        await service.importContacts('admin-1');
+        expect(saved[0].notes).toMatch(/dio de baja/);
+    });
+
+    it('con dryRun cuenta sin guardar y un contacto sin nombre ni teléfono se omite', async () => {
+        const { service, saved } = makeService([], [], [contacto(), contacto({ id: 8, phone: '', name: null })]);
+        const r = await service.importContacts('admin-1', { dryRun: true });
+        expect(r).toMatchObject({ created: 1, skipped: 1 });
         expect(saved).toHaveLength(0);
     });
 });

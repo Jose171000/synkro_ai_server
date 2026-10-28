@@ -29,6 +29,9 @@ import { FalabellaVariantImportService } from './falabella-variant-import.servic
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
+import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
+import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
+import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
 
 /** Quién actúa y en qué tienda: la tienda la fija StoreAccessGuard tras comprobar el acceso. */
 const scopeOf = (req: any): SyncScope => ({ userId: req.user.id, storeId: req.store.storeId });
@@ -52,6 +55,8 @@ export class SyncController {
         private readonly sheets: ProductSheetService,
         private readonly listingActions: ListingActionsService,
         private readonly variantImport: FalabellaVariantImportService,
+        private readonly yavendioCatalog: YavendioCatalogImportService,
+        private readonly yavendioOrders: YavendioOrdersService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -110,6 +115,43 @@ export class SyncController {
     })
     connectYavendio(@Body() dto: ConnectYavendioDto, @Req() req) {
         return this.syncService.connectYavendio(scopeOf(req), dto.apiKey, dto.label);
+    }
+
+    @Get('yavendio/import/products')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Lista lo que hay en Yavendió y con qué producto de Synkro parece corresponder cada variante',
+        description: 'Solo lee. Yavendió no usa SKU: se propone por SKU si lo tiene y si no por nombre. Nada se vincula hasta confirmarlo.',
+    })
+    @ApiQuery({ name: 'connectionId', required: false })
+    previewYavendioProducts(@Req() req, @Query('connectionId') connectionId?: string) {
+        return this.yavendioCatalog.preview(scopeOf(req), connectionId);
+    }
+
+    @Post('yavendio/import/products/link')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Vincula variantes de Yavendió con productos de Synkro (los pares que la persona confirmó)',
+        description: 'No escribe nada en Yavendió. El stock queda sin definir y el precio y la disponibilidad solo cambian en el siguiente envío normal.',
+    })
+    linkYavendioProducts(@Body() dto: VincularYavendioDto, @Req() req) {
+        return this.yavendioCatalog.link(scopeOf(req), dto.connectionId, dto.links);
+    }
+
+    @Post('yavendio/import/orders')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Trae los pedidos de Yavendió a las ventas de la tienda',
+        description: 'Entran como ventas (sin descontar stock ni mandar correos) solo los pedidos confirmados; los cancelados o rechazados no cuentan. Repetirlo no duplica.',
+    })
+    importYavendioOrders(@Body() dto: ImportarPedidosYavendioDto, @Req() req) {
+        return this.yavendioOrders.import(scopeOf(req), dto.connectionId, { dryRun: dto.dryRun === true, dias: dto.dias });
     }
 
     @Post('falabella/connect')
