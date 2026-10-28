@@ -44,6 +44,13 @@ const numero = (v: any): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * Cómo se ve una variante de Yavendió en una venta cuando aún no hay producto de Synkro: «YV-500». Sale del id de la
+ * variante, que no cambia, así que sigue valiendo después de vincularla. Sirve para mostrar, no es un SKU.
+ */
+export const referenciaDeVariante = (variantId: unknown): string | null =>
+    variantId === null || variantId === undefined || variantId === '' ? null : `YV-${variantId}`;
+
 export interface PedidoYavendioNormalizado {
     externalId: string;
     status: string;
@@ -76,6 +83,7 @@ export function normalizarPedidoYavendio(pedido: YavendioOrderDetail): PedidoYav
         listPrice: null,
         channelItemId: null,
         channelVariationId: i.variant_id != null ? String(i.variant_id) : null,
+        reference: referenciaDeVariante(i.variant_id),
     }));
 
     const pagado = pendiente !== null ? Math.max(0, total - pendiente) : total;

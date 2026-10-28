@@ -133,10 +133,12 @@ describe('Yavendió: importar pedidos a las ventas', () => {
     });
 
     it('avisa de las líneas cuya variante no está vinculada y no descuenta nada', async () => {
-        const { svc } = construirPedidos({ lista: [fila(1, 'confirmed')], detalles: { 1: detalle(1, 999) } });
+        const { svc, ordenes } = construirPedidos({ lista: [fila(1, 'confirmed')], detalles: { 1: detalle(1, 999) } });
         const r = await svc.import({ userId: 'u1', storeId: 's1' } as any, undefined);
         expect(r.nuevos).toBe(1);
         expect(r.lineasSinVincular).toEqual([{ pedido: '1', producto: 'Polo', variantId: '999' }]);
+        expect(ordenes.save.mock.calls[0][0].items[0]).toMatchObject({ sku: null, reference: 'YV-999' });
+        expect(ordenes.save.mock.calls[0][0].items[0].productId).toBeUndefined();
     });
 
     it('repetir no duplica: lo ya guardado no vuelve a pedirse; un cancelado deja de ser venta', async () => {
@@ -164,8 +166,9 @@ describe('Yavendió: importar pedidos a las ventas', () => {
 });
 
 describe('Yavendió: vincular productos importados', () => {
-    function construir(opts: { remoto: any[]; enlaces?: any[] }) {
+    function construir(opts: { remoto: any[]; enlaces?: any[]; ventas?: any[] }) {
         const guardados: any[] = [];
+        const actualizadas: any[] = [];
         const productos: any = {
             findOne: jest.fn(async ({ where }: any) => ({ id: where.id, sku: 'POL-M', name: 'Polo', group: { parentSku: 'POL' } })),
             find: jest.fn(async () => []),
@@ -176,12 +179,16 @@ describe('Yavendió: vincular productos importados', () => {
             create: jest.fn((x: any) => x),
             save: jest.fn(async (x: any) => { guardados.push(x); return x; }),
         };
+        const ordenes: any = {
+            createQueryBuilder: () => ({ where() { return this; }, andWhere() { return this; }, getMany: async () => opts.ventas ?? [] }),
+            update: jest.fn(async (id: string, cambios: any) => { actualizadas.push({ id, ...cambios }); }),
+        };
         const api: any = { listProducts: jest.fn(async () => opts.remoto) };
         const sync: any = {
             resolveConnection: jest.fn(async () => ({ id: 'c1', accessToken: 'k' })),
             findScopedProduct: jest.fn(async (_s: any, id: string) => { if (id === 'fuera') throw new Error('no'); return { id }; }),
         };
-        return { svc: new YavendioCatalogImportService(productos, enlaces, api, sync), guardados, api };
+        return { svc: new YavendioCatalogImportService(productos, enlaces, ordenes, api, sync), guardados, api, actualizadas };
     }
     const remoto = [yavendioProducto(1, 'Polo', [variante(10, 'M', { media: [{ id: 1, url: 'https://x/a.jpg' }] })])];
     const scope: any = { userId: 'u1', storeId: 's1' };
@@ -189,8 +196,21 @@ describe('Yavendió: vincular productos importados', () => {
     it('crea el enlace con el id del producto y de la variante, sin escribir en Yavendió y con el stock sin definir', async () => {
         const { svc, guardados } = construir({ remoto });
         const r = await svc.link(scope, undefined, [{ productId: 'p1', variantId: '10' }]);
-        expect(r).toEqual({ vinculadas: 1, rechazadas: [] });
+        expect(r).toEqual({ vinculadas: 1, rechazadas: [], ventasCompletadas: 0 });
         expect(guardados[0]).toMatchObject({ marketplace: 'yavendio', externalId: '1', variationId: '10', syncStatus: 'published', lastStockSynced: null, regularPrice: 49.9, imageUrl: 'https://x/a.jpg', parentSku: 'POL' });
+    });
+
+    it('al vincular, las ventas anteriores de esa variante quedan asociadas al producto y al SKU, sin tocar las que ya tenían producto', async () => {
+        const ventas = [
+            { id: 'v1', items: [{ title: 'Polo', channelVariationId: '10', reference: 'YV-10', productId: undefined, sku: null }, { title: 'Otro', channelVariationId: '77' }] },
+            { id: 'v2', items: [{ title: 'Polo', channelVariationId: '10', productId: 'ya' , sku: 'X' }] },
+        ];
+        const { svc, actualizadas } = construir({ remoto, ventas });
+        const r = await svc.link(scope, undefined, [{ productId: 'p1', variantId: '10' }]);
+        expect(r.ventasCompletadas).toBe(1);
+        expect(actualizadas).toHaveLength(1);
+        expect(actualizadas[0].items[0]).toMatchObject({ productId: 'p1', sku: 'POL-M', reference: 'YV-10' });
+        expect(actualizadas[0].items[1]).toEqual({ title: 'Otro', channelVariationId: '77' });
     });
 
     it('rechaza una variante inexistente, una ya vinculada y un producto de otra tienda sin frenar el resto', async () => {

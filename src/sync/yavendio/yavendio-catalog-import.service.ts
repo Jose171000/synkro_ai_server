@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import { Product } from '../../products/entities/product.entity';
 import { ListingLink } from '../entities/listing-link.entity';
+import { MarketplaceOrder } from '../entities/marketplace-order.entity';
 import { SyncScope, SyncService } from '../sync.service';
 import { YavendioApiService, YavendioProduct } from './yavendio-api.service';
 import { CandidatoSynkro, SugerenciaDeVariante, sugerirVinculos } from './yavendio-matching';
@@ -26,6 +27,8 @@ export interface ParaVincular {
 export interface ResultadoDeVinculacion {
     vinculadas: number;
     rechazadas: { variantId: string; motivo: string }[];
+    /** Ventas anteriores de esas variantes que ahora quedaron asociadas a su producto. */
+    ventasCompletadas: number;
 }
 
 /**
@@ -40,9 +43,35 @@ export class YavendioCatalogImportService {
     constructor(
         @InjectRepository(Product) private readonly productRepository: Repository<Product>,
         @InjectRepository(ListingLink) private readonly listingLinkRepository: Repository<ListingLink>,
+        @InjectRepository(MarketplaceOrder) private readonly orderRepository: Repository<MarketplaceOrder>,
         private readonly api: YavendioApiService,
         private readonly sync: SyncService,
     ) { }
+
+    /**
+     * Las ventas que ya estaban guardadas con esta variante sin producto quedan asociadas al que se acaba de vincular
+     * (su producto y su SKU). Así el historial se corrige solo, sin volver a importar. No toca el stock.
+     */
+    private async completarVentas(connectionId: string, variantId: string, producto: Product): Promise<number> {
+        const ventas = await this.orderRepository.createQueryBuilder('o')
+            .where('"o"."connectionId" = :connectionId', { connectionId })
+            .andWhere('"o"."items" @> CAST(:fragmento AS jsonb)', { fragmento: JSON.stringify([{ channelVariationId: variantId }]) })
+            .getMany();
+
+        let completadas = 0;
+        for (const venta of ventas) {
+            let cambio = false;
+            const items = (venta.items ?? []).map((l: any) => {
+                if (String(l?.channelVariationId ?? '') !== variantId || l?.productId) return l;
+                cambio = true;
+                return { ...l, productId: producto.id, sku: producto.sku };
+            });
+            if (!cambio) continue;
+            await this.orderRepository.update(venta.id, { items: items as any });
+            completadas++;
+        }
+        return completadas;
+    }
 
     private async enlacesVivos(connectionId: string): Promise<ListingLink[]> {
         const todos = await this.listingLinkRepository.find({
@@ -90,7 +119,7 @@ export class YavendioCatalogImportService {
         const variantes = new Map<string, { producto: YavendioProduct; variante: NonNullable<YavendioProduct['variants']>[number] }>();
         for (const producto of productosYavendio) for (const variante of producto.variants ?? []) variantes.set(String(variante.id), { producto, variante });
 
-        const resultado: ResultadoDeVinculacion = { vinculadas: 0, rechazadas: [] };
+        const resultado: ResultadoDeVinculacion = { vinculadas: 0, rechazadas: [], ventasCompletadas: 0 };
         const rechazar = (variantId: string, motivo: string) => resultado.rechazadas.push({ variantId, motivo });
         const yaVinculadas = new Map((await this.enlacesVivos(connection.id)).map((e) => [String(e.variationId), e.product.id]));
         const usadosEnEstaLlamada = new Set<string>();
@@ -138,9 +167,10 @@ export class YavendioCatalogImportService {
             await this.listingLinkRepository.save(enlace);
             usadosEnEstaLlamada.add(variantId);
             resultado.vinculadas++;
+            resultado.ventasCompletadas += await this.completarVentas(connection.id, variantId, producto);
         }
 
-        this.logger.log(`Vinculación con Yavendió: ${resultado.vinculadas} vinculadas, ${resultado.rechazadas.length} rechazadas.`);
+        this.logger.log(`Vinculación con Yavendió: ${resultado.vinculadas} vinculadas, ${resultado.rechazadas.length} rechazadas, ${resultado.ventasCompletadas} ventas completadas.`);
         return resultado;
     }
 }

@@ -27,6 +27,8 @@ export interface OrderLine {
     channelItemId?: string | null;
     /** Variante de la publicación (Mercado Libre), si la hay. */
     channelVariationId?: string | null;
+    /** Referencia solo para mostrar cuando el canal no usa SKU (Yavendió: «YV-500»). No es un SKU ni se escribe en el canal. */
+    reference?: string | null;
     /** Se completan al descontar el stock de la venta. */
     productId?: string | null;
     stockBefore?: number | null;
