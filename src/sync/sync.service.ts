@@ -600,6 +600,21 @@ export class SyncService implements OnModuleInit {
      * antes de este cambio) se acepta si es del usuario y se adopta: pasa a
      * la tienda desde la que se usa.
      */
+    /**
+     * Marca como importados de un canal los productos de la tienda que tienen una publicación en él y todavía no tienen origen:
+     * sirve para lo que se importó antes de que se guardara de dónde venía. Sin `confirmar` solo cuenta, no escribe.
+     */
+    async marcarImportados(scope: SyncScope, canal: string, confirmar: boolean): Promise<{ canal: string; productos: number; marcados: number; skus: string[] }> {
+        const enlaces = await this.listingLinkRepository.find({
+            where: { marketplace: canal as any, product: { store: { id: scope.storeId }, importedFrom: IsNull() } },
+            relations: { product: true },
+        });
+        const porId = new Map(enlaces.map((e) => [e.product.id, e.product.sku]));
+        const ids = [...porId.keys()];
+        if (confirmar && ids.length) await this.productRepository.update({ id: In(ids) }, { importedFrom: canal });
+        return { canal, productos: ids.length, marcados: confirmar ? ids.length : 0, skus: [...porId.values()].slice(0, 10) };
+    }
+
     async findScopedProduct(scope: SyncScope, productId: string): Promise<Product> {
         const product = await this.productRepository.findOne({
             where: [

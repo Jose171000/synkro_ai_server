@@ -211,6 +211,26 @@ describe('importFalabellaListings', () => {
         expect(sin.importedFrom).toBeUndefined();
     });
 
+    it('marcarImportados sin confirmar solo cuenta; confirmando marca solo los productos sin origen', async () => {
+        const { repoProductos, repoEnlaces } = await construir([]);
+        repoEnlaces.find.mockResolvedValue([
+            { product: { id: 'p1', sku: 'A' } },
+            { product: { id: 'p2', sku: 'B' } },
+            { product: { id: 'p1', sku: 'A' } },
+        ]);
+
+        const cuenta = await service.marcarImportados(SCOPE, 'falabella', false);
+        expect(cuenta).toMatchObject({ productos: 2, marcados: 0 });
+        expect(repoProductos.update).not.toHaveBeenCalled();
+        // Solo los de esta tienda, con publicación en el canal y sin origen.
+        expect(repoEnlaces.find.mock.calls[0][0].where).toMatchObject({ marketplace: 'falabella', product: { store: { id: 'tienda-1' } } });
+
+        const hecho = await service.marcarImportados(SCOPE, 'falabella', true);
+        expect(hecho).toMatchObject({ productos: 2, marcados: 2, skus: ['A', 'B'] });
+        expect(repoProductos.update).toHaveBeenCalledTimes(1);
+        expect(repoProductos.update.mock.calls[0][1]).toEqual({ importedFrom: 'falabella' });
+    });
+
     it('una ficha rechazada por control de calidad NO se muestra como publicada', async () => {
         // Es el caso que este módulo viene a arreglar: en la hoja de cálculo
         // figuraba como "Visible" algo que el comprador no podía ver.

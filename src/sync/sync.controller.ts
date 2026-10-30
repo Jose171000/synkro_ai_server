@@ -33,6 +33,7 @@ import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
 import { VerifyChannelsDto } from './dto/verify-channels.dto';
+import { MarkImportedDto } from './dto/mark-imported.dto';
 
 /** Quién actúa y en qué tienda: la tienda la fija StoreAccessGuard tras comprobar el acceso. */
 const scopeOf = (req: any): SyncScope => ({ userId: req.user.id, storeId: req.store.storeId });
@@ -417,6 +418,19 @@ export class SyncController {
     })
     groupVariantsManually(@Body() dto: ManualVariantGroupDto, @Req() req) {
         return this.variantImport.agruparManual(scopeOf(req), dto);
+    }
+
+    @Post('products/mark-imported')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Marca como importados de un canal los productos de la tienda que tienen publicación en él y aún no tienen origen',
+        description: 'Para lo importado antes de que se guardara el origen. Sin confirm: true solo cuenta cuántos se marcarían. Solo cambia el aviso «importado desde…» de la ficha.',
+    })
+    markImported(@Req() req, @Body() dto: MarkImportedDto) {
+        return this.syncService.marcarImportados(scopeOf(req), dto.channel, dto.confirm === true);
     }
 
     @Post('channels/verify')
