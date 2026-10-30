@@ -7,8 +7,9 @@ import { FalabellaAutoPrepService } from '../ai/falabella-auto-prep.service';
 import { InternalServerErrorException } from '@nestjs/common';
 import { BatchNotificationService, BatchMeta } from './batch-notification.service';
 import { CuentasElegidas, cuentasParaPublicar, leerCuentasElegidas } from '../sync/cuentas-elegidas';
+import { CONCURRENCIA_IA } from './concurrencia-cola';
 
-@Processor('generate-listings-queue')
+@Processor('generate-listings-queue', { concurrency: CONCURRENCIA_IA })
 export class AiProcessor extends WorkerHost {
     constructor(
         private readonly aiService: AiService,
@@ -18,6 +19,7 @@ export class AiProcessor extends WorkerHost {
         private readonly batchNotification: BatchNotificationService,
     ) {
         super();
+        console.log(`[AiProcessor] Productos procesados a la vez: ${CONCURRENCIA_IA} (AI_QUEUE_CONCURRENCY)`);
     }
 
     async process(job: Job<any, any, string>): Promise<any> {
