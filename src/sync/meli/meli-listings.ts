@@ -16,6 +16,8 @@ export interface MeliListingRow {
     /** Id de la variante dentro de la publicación; null si no tiene variantes. */
     variationId: string | null;
     title: string;
+    /** Categoría de la publicación en Mercado Libre (por ejemplo MPE123456); la que tiene el producto al importarlo. */
+    categoryId?: string | null;
     /** Descripción de la variante («Talla: M · Color: Rojo»). */
     variation: string | null;
     regularPrice: number | null;
@@ -140,6 +142,7 @@ export function filasDeItemMeli(item: any, opciones: OpcionesDeFilasMeli = {}): 
     const base = {
         externalId,
         title: texto(item?.title) ?? externalId,
+        categoryId: texto(item?.category_id),
         status: estadoDeItemMeli(item),
         permalink: texto(item?.permalink),
         quality: calidad,

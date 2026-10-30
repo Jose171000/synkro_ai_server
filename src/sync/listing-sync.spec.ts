@@ -156,6 +156,34 @@ describe('importar publicaciones de Mercado Libre', () => {
         expect(enlaces[0].lastStockSynced).toBe(7);
     });
 
+    it('el producto creado queda marcado como importado de Mercado Libre y con la categoría de la publicación', async () => {
+        const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+        meli.getItems.mockResolvedValue({ items: [itemSimple({ category_id: 'MPE12345' })], notFound: [] });
+
+        await service.importMeliListings(SCOPE, undefined);
+
+        expect(productos[0].importedFrom).toBe('mercadolibre');
+        expect(productos[0].marketplaceIds).toEqual({ mercadolibre_category_id: 'MPE12345' });
+    });
+
+    it('un producto que ya existía sin categoría la recibe de la publicación sin tocar su precio ni su stock; uno que ya tenía no la cambia', async () => {
+        const sin = { id: 'p1', sku: 'REL-01', name: 'Reloj propio', stock: 20, price: 100, store: { id: 't1' } };
+        const con = { id: 'p2', sku: 'REL-02', name: 'Otro', stock: 3, price: 50, store: { id: 't1' }, marketplaceIds: { mercadolibre_category_id: 'MPE999' } };
+        const { service, meli, productos } = await construir({ conexiones: [cuenta()], productos: [sin, con] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1', 'MPE3'], incompleto: false });
+        meli.getItems.mockResolvedValue({
+            items: [itemSimple({ category_id: 'MPE12345' }), itemSimple({ id: 'MPE3', seller_custom_field: 'REL-02', category_id: 'MPE12345' })],
+            notFound: [],
+        });
+
+        await service.importMeliListings(SCOPE, undefined);
+
+        expect(productos.find(p => p.sku === 'REL-01')).toMatchObject({ stock: 20, price: 100, marketplaceIds: { mercadolibre_category_id: 'MPE12345' } });
+        expect(productos.find(p => p.sku === 'REL-02').marketplaceIds).toEqual({ mercadolibre_category_id: 'MPE999' });
+        expect(productos.find(p => p.sku === 'REL-01').importedFrom).toBeUndefined();
+    });
+
     it('cada variante con SKU es su propio producto, enlazado a la misma publicación', async () => {
         const { service, meli, productos, enlaces } = await construir({ conexiones: [cuenta()] });
         meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE2'], incompleto: false });

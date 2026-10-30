@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { descripcionDeTexto } from './meli/descripcion-meli';
 import { Product } from '../products/entities/product.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
@@ -82,7 +83,8 @@ export class ProductSheetService {
                 description: product.description,
                 importedFrom: product.importedFrom ?? null,
                 aiTitle: product.aiTitle ?? null,
-                aiDescription: product.aiDescription ?? null,
+                // Sin texto de la IA se muestra la descripción del producto o, si tampoco hay, la que sale de su ficha HTML; solo se guarda si la persona lo edita.
+                aiDescription: product.aiDescription || descripcionDeTexto(product) || null,
                 descriptionHtml: attrs.descriptionHtml ?? null,
                 brand: attrs.brand ?? null,
                 color: attrs.color ?? null,

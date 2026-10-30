@@ -57,6 +57,15 @@ describe('la ficha de un producto', () => {
         expect(hoja.channels[1].sent).toMatchObject({ title: 'Torre Montessori 4 en 1', titleEditable: false, attributes: [{ id: 'BRAND', value: 'GENERICO' }, { id: 'COLOR', value: 'Azul' }] });
     });
 
+    it('sin texto de la IA muestra el que sale de la ficha HTML, y con texto propio no lo cambia', async () => {
+        const sinTexto = { ...producto(), description: '', aiDescription: null, aiAttributes: { descriptionHtml: '<div><p>Proteína de suero</p></div>' } };
+        const { service } = construir(sinTexto);
+        expect((await service.getSheet(SCOPE, 'p1')).product.aiDescription).toBe('Proteína de suero');
+
+        const { service: conTexto } = construir(producto());
+        expect((await conTexto.getSheet(SCOPE, 'p1')).product.aiDescription).toBe('desc');
+    });
+
     it('guardar cambia solo lo enviado, marca las medidas como revisadas y programa el envío a los canales publicados', async () => {
         const { service, sync, guardados } = construir(producto(), [enlace('falabella'), enlace('mercadolibre', { syncStatus: 'pending' })]);
         const r = await service.saveSheet(SCOPE, 'p1', {

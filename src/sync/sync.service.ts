@@ -5,7 +5,7 @@ import { planearGruposDeMeli } from './meli/variantes-meli';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
-import { descripcionEnTextoPlano } from './meli/descripcion-meli';
+import { descripcionDeTexto, descripcionEnTextoPlano } from './meli/descripcion-meli';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -1194,7 +1194,8 @@ export class SyncService implements OnModuleInit {
                 link.permalink = created.permalink;
                 await this.listingLinkRepository.save(link);
 
-                const description = descripcionEnTextoPlano(product.aiDescription || product.description);
+                // Una publicación nueva sin texto propio sale con el de su ficha HTML; las que ya existen en el canal no se reemplazan.
+                const description = descripcionDeTexto(product);
                 let avisoDescripcion: string | null = null;
                 if (description) {
                     try {
@@ -3574,10 +3575,16 @@ export class SyncService implements OnModuleInit {
                         stock: fila.stock,
                         status: 'draft',
                         importedFrom: 'mercadolibre',
+                        // La categoría de la publicación viene con ella: no hay que volver a elegirla.
+                        ...(fila.categoryId ? { marketplaceIds: { mercadolibre_category_id: fila.categoryId } } : {}),
                         owner: { id: userId } as any,
                         store: { id: scope.storeId } as any,
                         images: fila.images.slice(0, 10).map(url => ({ url })) as any,
                     }));
+                } else if (fila.categoryId && !(product.marketplaceIds as any)?.mercadolibre_category_id && !(product.aiAttributes as any)?.mercadolibre_category_id) {
+                    // Un producto que ya estaba sin categoría la recibe de la publicación; una que ya tenía no se cambia.
+                    product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), mercadolibre_category_id: fila.categoryId };
+                    product = await this.productRepository.save(product);
                 }
 
                 await this.guardarEnlaceMeli(connection, product, fila);
