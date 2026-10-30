@@ -11,6 +11,7 @@ import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, r
 import { soloElNumero } from '../sync/falabella/falabella-fields';
 import { medidasQueFaltan } from '../sync/meli/unidades-meli';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
+import { modeloDeepseek } from './modelo-deepseek';
 import OpenAI from 'openai';
 
 @Injectable()
@@ -108,7 +109,7 @@ export class AiService {
       );
 
       const catResponse = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
@@ -179,7 +180,7 @@ export class AiService {
 
     try {
       const finalJson = await this.jsonDeLaIa(() => this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
@@ -281,7 +282,7 @@ export class AiService {
   public async estimarPaquete(textoDelCliente: string, nombre: string, vision: ProductVision | null) {
     try {
       const respuesta = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
@@ -321,7 +322,7 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
   }): Promise<{ html: string; title: string } | null> {
     try {
       const respuesta = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
@@ -370,7 +371,7 @@ Responde únicamente este JSON:
     try {
       const prompt = this.buildCategorizationPrompt(nombre, descripcion, [marketplace], { [marketplace.toLowerCase()]: candidatas });
       const r = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
@@ -412,7 +413,7 @@ Responde únicamente este JSON:
   private async jsonDeIa(prompt: string): Promise<any | null> {
     try {
       const r = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         temperature: 0,
         messages: [
@@ -577,7 +578,7 @@ Responde solo JSON: {"category_id": "<ID de la lista o null>", "confidence": <n�
     try {
       const lista = fichas.slice(0, 60).map((f) => `- SKU "${f.sellerSku}" | título: ${f.nombre.slice(0, 160)} | variación: ${f.variation ?? '-'} | atributos: ${JSON.stringify(f.atributos)}`).join('\n');
       const r = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         temperature: 0,
         messages: [
@@ -620,7 +621,7 @@ Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde s
   public async consultasDeCategoria(nombre: string, descripcion: string): Promise<string[]> {
     try {
       const r = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
@@ -657,7 +658,7 @@ Responde solo un JSON: { "consultas": ["...", "..."] }`,
     try {
       const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ${a.options.length > 120 ? 'LISTA CERRADA (algunas opciones): ' + a.options.slice(0, 120).join(' | ') + ' … Escribe el valor más cercano; se ajustará a la lista.' : 'ELIGE EXACTAMENTE UNO DE: ' + a.options.join(' | ')}` : ''}`).join('\n');
       const r = await this.openai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: modeloDeepseek(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
