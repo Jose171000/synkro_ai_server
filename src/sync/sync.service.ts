@@ -6,6 +6,7 @@ import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { descripcionDeTexto, descripcionEnTextoPlano } from './meli/descripcion-meli';
+import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -735,6 +736,8 @@ export class SyncService implements OnModuleInit {
             porEstado: {} as Record<string, number>,
             /** Media de la nota de calidad que pone Falabella. */
             notaMedia: null as number | null,
+            /** Cuántas fichas traen descripción, marca y atributos (lo que se guarda como referencia y rellena lo vacío del producto). */
+            contenido: { conDescripcion: 0, conMarca: 0, conAtributos: 0, productosCompletados: 0 },
             ejemplos: [] as {
                 sku: string; nombre: string; estado: string;
                 nota: number | null; enCatalogo: boolean;
@@ -749,6 +752,11 @@ export class SyncService implements OnModuleInit {
             const nota = this.notaDeFicha(producto);
             resumen.porEstado[estado] = (resumen.porEstado[estado] ?? 0) + 1;
             if (nota !== null) { sumaNotas += nota; conNota++; }
+            const traido = contenidoDeFichaFalabella(producto);
+            const lo = resumenDeContenido(traido);
+            if (lo.descripcion) resumen.contenido.conDescripcion++;
+            if (lo.marca) resumen.contenido.conMarca++;
+            if (lo.atributos) resumen.contenido.conAtributos++;
 
             const encontrado = await this.findProductBySku(scope, sku);
             if (encontrado.otraTienda) {
@@ -813,6 +821,12 @@ export class SyncService implements OnModuleInit {
                 // Un producto que ya estaba sin categoría la recibe de la ficha; una que ya tenía no se cambia.
                 product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), falabella_category_id: categoria };
                 product = await this.productRepository.save(product);
+            }
+
+            // Lo que Falabella ya tiene de la ficha (descripción, marca, atributos) se guarda como referencia y rellena solo lo vacío.
+            if (aplicarContenidoImportado(product, 'falabella', traido)) {
+                product = await this.productRepository.save(product);
+                resumen.contenido.productosCompletados++;
             }
 
             const externalId = String(producto.ShopSku ?? sku);
@@ -3510,6 +3524,8 @@ export class SyncService implements OnModuleInit {
             incompleto,
             porEstado: {} as Record<string, number>,
             notaMedia: null as number | null,
+            /** Marca y atributos que traen las publicaciones (se guardan como referencia y rellenan solo lo vacío); la descripción se pide aparte, solo al importar de verdad. */
+            contenido: { conMarca: 0, conAtributos: 0, productosCompletados: 0 },
             ejemplos: [] as { sku: string; nombre: string; estado: string; nota: number | null; enCatalogo: boolean }[],
             /** Publicaciones con variaciones: cómo quedan agrupadas (Mercado Libre ya trae el eje y el valor de cada una). */
             variantes: {
@@ -3527,6 +3543,8 @@ export class SyncService implements OnModuleInit {
             },
         };
         const vinculadosMeli = new Map<string, Product>();
+        // La descripción de una publicación se pide una sola vez aunque tenga varias variantes (cada una es un producto). undefined = no se pudo leer.
+        const descripcionesMeli = new Map<string, string | null | undefined>();
 
         // Dos publicaciones con el mismo SKU no son variantes: son la misma cosa publicada dos veces. Se enlaza la principal
         // (activa y con más ventas) y las demás se informan para que la persona decida.
@@ -3561,6 +3579,9 @@ export class SyncService implements OnModuleInit {
                         enCatalogo: estabaEnCatalogo,
                     });
                 }
+                const lo = resumenDeContenido(contenidoDeItemMeli(item));
+                if (lo.marca) resumen.contenido.conMarca++;
+                if (lo.atributos) resumen.contenido.conAtributos++;
                 if (options.dryRun) continue;
 
                 // Un producto que aún no existe se crea como borrador: es la
@@ -3585,6 +3606,22 @@ export class SyncService implements OnModuleInit {
                     // Un producto que ya estaba sin categoría la recibe de la publicación; una que ya tenía no se cambia.
                     product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), mercadolibre_category_id: fila.categoryId };
                     product = await this.productRepository.save(product);
+                }
+
+                // Lo que la publicación ya tiene (descripción, marca, atributos) se guarda como referencia y rellena solo lo vacío.
+                // La descripción se pide la primera vez, y solo si el producto no tiene una; si no se pudo leer, no se guarda nada
+                // todavía para que la próxima importación lo reintente.
+                const necesitaDescripcion = !(product.aiAttributes as any)?._importado?.mercadolibre && !String(product.aiDescription ?? '').trim();
+                if (necesitaDescripcion && !descripcionesMeli.has(fila.externalId)) {
+                    descripcionesMeli.set(fila.externalId, await this.meliApi.getItemDescription(connection.accessToken, fila.externalId).catch((error: any) => {
+                        console.warn(`[Sync] No se pudo leer la descripción de ${fila.externalId}: ${error?.message}`);
+                        return undefined;
+                    }));
+                }
+                const descripcion = necesitaDescripcion ? descripcionesMeli.get(fila.externalId) : null;
+                if (descripcion !== undefined && aplicarContenidoImportado(product, 'mercadolibre', contenidoDeItemMeli(item, descripcion))) {
+                    product = await this.productRepository.save(product);
+                    resumen.contenido.productosCompletados++;
                 }
 
                 await this.guardarEnlaceMeli(connection, product, fila);

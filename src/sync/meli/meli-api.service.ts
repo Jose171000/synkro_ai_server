@@ -129,6 +129,17 @@ export class MeliApiService {
         return { id: data.id, permalink: data.permalink };
     }
 
+    /** La descripción (texto plano) de una publicación; null si no tiene. Va en un endpoint aparte, no viene con la publicación. */
+    async getItemDescription(accessToken: string, itemId: string): Promise<string | null> {
+        try {
+            const { data } = await this.http.get(`/items/${itemId}/description`, { headers: { Authorization: `Bearer ${accessToken}` } });
+            return String(data?.plain_text ?? data?.text ?? '').trim() || null;
+        } catch (error: any) {
+            if (error?.response?.status === 404) return null;
+            throw error;
+        }
+    }
+
     /** Sets the plain-text description of an item (separate endpoint in the ML API). */
     async setItemDescription(accessToken: string, itemId: string, plainText: string): Promise<void> {
         await this.http.post(

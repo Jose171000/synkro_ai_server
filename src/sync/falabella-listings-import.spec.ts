@@ -231,6 +231,65 @@ describe('importFalabellaListings', () => {
         expect(repoProductos.update.mock.calls[0][1]).toEqual({ importedFrom: 'falabella' });
     });
 
+    it('el producto creado trae lo que la ficha ya tiene en Falabella: HTML, marca y atributos, con la copia de referencia', async () => {
+        await construir([ficha({
+            SellerSku: 'NUEVO-1', Brand: 'MUTANT', Description: '<div><p>Proteína real del canal</p></div>',
+            ProductData: { Sabor: 'Vainilla', Material: 'Polvo' },
+        })]);
+
+        const r = await service.importFalabellaListings(SCOPE, undefined);
+
+        const p = productos[productos.length - 1];
+        expect(p.aiAttributes.descriptionHtml).toContain('Proteína real del canal');
+        expect(p.aiAttributes.brand).toBe('MUTANT');
+        expect(p.aiAttributes).toMatchObject({ Sabor: 'Vainilla', Material: 'Polvo' });
+        expect(p.aiAttributes._importado.falabella).toMatchObject({ brand: 'MUTANT' });
+        // El texto que escribe el cliente para alimentar a la IA queda libre.
+        expect(p.description).toBe('');
+        expect(r.contenido).toEqual({ conDescripcion: 1, conMarca: 1, conAtributos: 1, productosCompletados: 1 });
+    });
+
+    it('un producto que ya existía solo recibe lo que le faltaba: su marca y su HTML no se pisan', async () => {
+        await construir([ficha({ SellerSku: 'SKU-1', Brand: 'MUTANT', Description: '<p>del canal</p>', ProductData: { Sabor: 'Vainilla' } })]);
+        productos.push({ id: 'p1', sku: 'SKU-1', name: 'Gafas', aiAttributes: { brand: 'Marca propia', descriptionHtml: '<p>mi html</p>' } });
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        const p = productos.filter(x => x.sku === 'SKU-1').pop();
+        expect(p.aiAttributes.brand).toBe('Marca propia');
+        expect(p.aiAttributes.descriptionHtml).toBe('<p>mi html</p>');
+        expect(p.aiAttributes.Sabor).toBe('Vainilla');
+        expect(p.aiAttributes._importado.falabella.brand).toBe('MUTANT');
+    });
+
+    it('importar de nuevo no reemplaza la copia de referencia ni vuelve a escribir un producto ya completo', async () => {
+        const { repoProductos } = await construir([ficha({ SellerSku: 'SKU-1', Brand: 'MUTANT', Description: '<p>del canal</p>' })]);
+        productos.push({ id: 'p1', sku: 'SKU-1', name: 'Gafas', aiAttributes: {} });
+        await service.importFalabellaListings(SCOPE, undefined);
+        const guardadosAntes = repoProductos.save.mock.calls.length;
+
+        falabella.getAllProducts.mockResolvedValue({ productos: [ficha({ SellerSku: 'SKU-1', Brand: 'OTRA', Description: '<p>cambió</p>' })], incompleto: false });
+        const r = await service.importFalabellaListings(SCOPE, undefined);
+
+        const p = productos.filter(x => x.sku === 'SKU-1').pop();
+        expect(p.aiAttributes._importado.falabella.brand).toBe('MUTANT');
+        expect(p.aiAttributes.brand).toBe('MUTANT');
+        expect(repoProductos.save.mock.calls.length).toBe(guardadosAntes);
+        expect(r.contenido.productosCompletados).toBe(0);
+    });
+
+    it('la vista previa cuenta cuántas fichas traen descripción, marca y atributos sin escribir nada', async () => {
+        const { repoProductos } = await construir([
+            ficha({ SellerSku: 'A', Brand: 'MUTANT', Description: '<p>x</p>', ProductData: { Sabor: 'Vainilla' } }),
+            ficha({ SellerSku: 'B' }),
+        ]);
+
+        const r = await service.importFalabellaListings(SCOPE, undefined, { dryRun: true });
+
+        expect(r.contenido).toEqual({ conDescripcion: 1, conMarca: 1, conAtributos: 1, productosCompletados: 0 });
+        expect(repoProductos.save).not.toHaveBeenCalled();
+    });
+
     it('una ficha rechazada por control de calidad NO se muestra como publicada', async () => {
         // Es el caso que este módulo viene a arreglar: en la hoja de cálculo
         // figuraba como "Visible" algo que el comprador no podía ver.
@@ -434,7 +493,11 @@ describe('importFalabellaListings', () => {
 
             const resumen = await service.importFalabellaListings(SCOPE, undefined);
 
-            expect(productos.map(p => [p.sku, p.images[0].url])).toEqual([['SAB-BE', 'https://img/beige.jpg'], ['SAB-BL', 'https://img/blanco.jpg']]);
+            // Un producto por SKU (el repositorio de la prueba anota cada guardado como una entrada nueva).
+            const distintos = [...new Map(productos.map(p => [p.sku, p])).values()];
+            expect(distintos.map(p => [p.sku, p.images[0].url])).toEqual([['SAB-BE', 'https://img/beige.jpg'], ['SAB-BL', 'https://img/blanco.jpg']]);
+            // Cada variante trae su propio color real de Falabella.
+            expect(distintos.map(p => p.aiAttributes?.Color)).toEqual(['Beige', 'Blanco']);
             expect(aplicar).toHaveBeenCalledTimes(1);
             const [, grupos, porSku] = aplicar.mock.calls[0] as any[];
             expect(grupos[0].variants.map((v: any) => v.sellerSku)).toEqual(['SAB-BE', 'SAB-BL']);

@@ -72,6 +72,7 @@ async function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?
     const meli: any = {
         listSellerItemIds: jest.fn().mockResolvedValue({ ids: [], incompleto: false }),
         getItems: jest.fn().mockResolvedValue({ items: [], notFound: [] }),
+        getItemDescription: jest.fn().mockResolvedValue(null),
         searchOrders: jest.fn().mockResolvedValue([]),
         searchOrdersPage: jest.fn().mockResolvedValue({ results: [], total: 0 }),
         getShipment: jest.fn().mockResolvedValue(null),
@@ -165,6 +166,62 @@ describe('importar publicaciones de Mercado Libre', () => {
 
         expect(productos[0].importedFrom).toBe('mercadolibre');
         expect(productos[0].marketplaceIds).toEqual({ mercadolibre_category_id: 'MPE12345' });
+    });
+
+    it('el producto creado trae lo que la publicación ya tiene: descripción, marca y atributos, y guarda la copia de referencia', async () => {
+        const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+        meli.getItems.mockResolvedValue({ items: [itemSimple({ attributes: [{ id: 'BRAND', value_name: 'Mutant' }, { id: 'FLAVOR', value_name: 'Vainilla' }] })], notFound: [] });
+        meli.getItemDescription.mockResolvedValue('Proteína para recuperación muscular');
+
+        const r = await service.importMeliListings(SCOPE, undefined);
+
+        const p = productos[productos.length - 1];
+        expect(p.aiDescription).toBe('Proteína para recuperación muscular');
+        expect(p.aiAttributes.brand).toBe('Mutant');
+        expect(p.aiAttributes.mercadolibre_attributes).toEqual({ BRAND: 'Mutant', FLAVOR: 'Vainilla' });
+        expect(p.aiAttributes._importado.mercadolibre).toMatchObject({ description: 'Proteína para recuperación muscular', brand: 'Mutant' });
+        expect(p.description).toBe('');
+        expect(r.contenido).toMatchObject({ conMarca: 1, conAtributos: 1, productosCompletados: 1 });
+    });
+
+    it('un producto que ya tiene descripción no vuelve a pedirla a Mercado Libre ni la cambia', async () => {
+        const propio = { id: 'p1', sku: 'REL-01', name: 'Reloj propio', stock: 20, price: 100, store: { id: 't1' }, aiDescription: 'La mía', aiAttributes: {} };
+        const { service, meli, productos } = await construir({ conexiones: [cuenta()], productos: [propio] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+        meli.getItems.mockResolvedValue({ items: [itemSimple({ attributes: [{ id: 'BRAND', value_name: 'Mutant' }] })], notFound: [] });
+        meli.getItemDescription.mockResolvedValue('La del canal');
+
+        await service.importMeliListings(SCOPE, undefined);
+
+        expect(meli.getItemDescription).not.toHaveBeenCalled();
+        const p = productos.filter((x: any) => x.sku === 'REL-01').pop();
+        expect(p.aiDescription).toBe('La mía');
+        expect(p.aiAttributes.brand).toBe('Mutant');
+    });
+
+    it('si no se puede leer la descripción no se guarda nada todavía, para que la próxima importación lo reintente', async () => {
+        const { service, meli, productos } = await construir({ conexiones: [cuenta()] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+        meli.getItems.mockResolvedValue({ items: [itemSimple({ attributes: [{ id: 'BRAND', value_name: 'Mutant' }] })], notFound: [] });
+        meli.getItemDescription.mockRejectedValue(new Error('timeout'));
+
+        const r = await service.importMeliListings(SCOPE, undefined);
+
+        expect(r.enlazadas).toBe(1);
+        expect(productos[productos.length - 1].aiAttributes?._importado).toBeUndefined();
+        expect(r.contenido.productosCompletados).toBe(0);
+    });
+
+    it('la vista previa cuenta lo que traería, sin pedir descripciones ni escribir', async () => {
+        const { service, meli } = await construir({ conexiones: [cuenta()] });
+        meli.listSellerItemIds.mockResolvedValue({ ids: ['MPE1'], incompleto: false });
+        meli.getItems.mockResolvedValue({ items: [itemSimple({ attributes: [{ id: 'BRAND', value_name: 'Mutant' }] })], notFound: [] });
+
+        const r = await service.importMeliListings(SCOPE, undefined, { dryRun: true });
+
+        expect(r.contenido).toMatchObject({ conMarca: 1, conAtributos: 1, productosCompletados: 0 });
+        expect(meli.getItemDescription).not.toHaveBeenCalled();
     });
 
     it('un producto que ya existía sin categoría la recibe de la publicación sin tocar su precio ni su stock; uno que ya tenía no la cambia', async () => {
