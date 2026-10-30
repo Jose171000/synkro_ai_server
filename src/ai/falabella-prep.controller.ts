@@ -16,6 +16,11 @@ class PrepareAutoDto {
     @IsOptional()
     @IsBoolean()
     regenerar?: boolean;
+
+    /** Solo para update-falabella: envía a Falabella lo que tiene el producto ahora. Sin esto solo se prepara y no se envía nada. */
+    @IsOptional()
+    @IsBoolean()
+    enviar?: boolean;
 }
 
 class SuggestDto {
@@ -108,15 +113,17 @@ export class FalabellaPrepController {
     @UseGuards(JwtAuthGuard, StoreAccessGuard)
     @RequireStoreRole('owner')
     @ApiOperation({
-        summary: 'Actualiza en Falabella una ficha ya publicada',
+        summary: 'Prepara o envía la actualización de una ficha ya publicada en Falabella',
         description:
-            'Completa lo que falte (atributos, medidas, descripción HTML) y envía a Falabella el nombre, la descripción, ' +
-            'la marca y los atributos actuales. Con regenerar=true la IA vuelve a redactar nombre y descripción.',
+            'Por defecto SOLO PREPARA: completa lo que falte (atributos, medidas, descripción HTML) y lo guarda en Synkro, sin enviar nada ' +
+            'al canal; con regenerar=true la IA vuelve a redactar nombre y descripción. Con enviar=true manda a Falabella el nombre, la ' +
+            'descripción, la marca y los atributos que tenga el producto ahora, sin pasar por la IA.',
     })
     update(@Param('id') id: string, @Body() dto: PrepareAutoDto, @Req() req) {
         return this.prep.actualizarEnFalabella({ userId: req.user.id, storeId: req.store.storeId }, id, {
             regenerar: dto?.regenerar,
             connectionId: dto?.connectionId,
+            enviar: dto?.enviar === true,
         });
     }
 }

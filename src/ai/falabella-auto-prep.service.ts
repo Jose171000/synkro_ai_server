@@ -349,13 +349,23 @@ export class FalabellaAutoPrepService implements OnModuleInit {
     }
 
     /**
-     * Pone al día una ficha que ya está en Falabella: vuelve a completar lo que falte (atributos, medidas,
-     * descripción) y manda el nombre, la descripción, la marca y los atributos actuales. Con `regenerar`
-     * la IA vuelve a redactar el nombre y la descripción a partir de lo que tenga hoy el producto.
+     * Pone al día una ficha que ya está en Falabella, en dos acciones separadas para que la persona vea lo que
+     * generó la IA antes de que llegue al canal (lo que el canal ya tenía puede ser información precisa):
+     *  - por defecto solo PREPARA: vuelve a completar lo que falte (atributos, medidas, descripción) y lo guarda en
+     *    Synkro, sin enviar nada. Con `regenerar` la IA vuelve a redactar el nombre y la descripción.
+     *  - con `enviar` manda a Falabella el nombre, la descripción, la marca y los atributos que tenga el producto
+     *    ahora, sin pasar otra vez por la IA: sale exactamente lo que la persona revisó.
      */
-    async actualizarEnFalabella(scope: SyncScope, productId: string, opciones: { regenerar?: boolean; connectionId?: string } = {}) {
+    async actualizarEnFalabella(scope: SyncScope, productId: string, opciones: { regenerar?: boolean; connectionId?: string; enviar?: boolean } = {}) {
+        if (opciones.enviar) {
+            const envio = await this.sync.updateFalabellaContent(scope, productId, opciones.connectionId);
+            return { ...envio, sent: true as const };
+        }
         const reporte = await this.preparar(scope, productId, opciones.connectionId, { regenerar: opciones.regenerar });
-        const envio = await this.sync.updateFalabellaContent(scope, productId, opciones.connectionId);
-        return { ...envio, report: reporte };
+        return {
+            message: 'Listo en Synkro: no se envió nada a Falabella. Revisa la ficha del producto y, si está bien, pulsa «Enviar a Falabella».',
+            sent: false as const,
+            report: reporte,
+        };
     }
 }

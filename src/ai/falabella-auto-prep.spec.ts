@@ -50,15 +50,34 @@ const producto = () => ({
 });
 
 describe('dejar un producto listo para Falabella con un paso', () => {
-    it('actualizar una ficha ya publicada vuelve a redactar con la IA si se pide y envía el contenido', async () => {
-        const p: any = { ...producto(), aiAttributes: { brand: 'GENERICO', descriptionHtml: '<div>vieja</div>' }, marketplaceIds: { falabella_category_id: '2804' }, packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1 };
-        const { service, guardados, sync, ai } = construir(p);
-        const r = await service.actualizarEnFalabella({ userId: 'u', storeId: 's' }, 'p1', { regenerar: true });
+    const publicado = (): any => ({ ...producto(), aiAttributes: { brand: 'GENERICO', descriptionHtml: '<div>vieja</div>' }, marketplaceIds: { falabella_category_id: '2804' }, packageWidth: 1, packageLength: 1, packageHeight: 1, packageWeight: 1 });
+
+    it('actualizar una ficha ya publicada vuelve a redactar con la IA si se pide, lo guarda en Synkro y NO envía nada al canal', async () => {
+        const { service, guardados, sync, ai } = construir(publicado());
+        const r: any = await service.actualizarEnFalabella({ userId: 'u', storeId: 's' }, 'p1', { regenerar: true });
         expect(ai.generarDescripcionHtml).toHaveBeenCalledTimes(1);
         expect(guardados[0].aiAttributes.descriptionHtml).toBe('<div>ficha</div>');
-        expect(sync.updateFalabellaContent).toHaveBeenCalledTimes(1);
-        expect(r.message).toBe('enviado');
+        expect(sync.updateFalabellaContent).not.toHaveBeenCalled();
+        expect(r.sent).toBe(false);
+        expect(r.message).toMatch(/no se envió nada/i);
         expect(r.report.attributes).toEqual({ filled: expect.any(Number), total: 2 });
+    });
+
+    it('sin indicar nada tampoco se envía: preparar es lo que ocurre por defecto', async () => {
+        const { service, sync } = construir(publicado());
+        const r: any = await service.actualizarEnFalabella({ userId: 'u', storeId: 's' }, 'p1');
+        expect(sync.updateFalabellaContent).not.toHaveBeenCalled();
+        expect(r.sent).toBe(false);
+    });
+
+    it('enviar manda a Falabella lo que el producto tiene ahora, sin volver a pasar por la IA ni cambiar nada', async () => {
+        const { service, guardados, sync, ai } = construir(publicado());
+        const r: any = await service.actualizarEnFalabella({ userId: 'u', storeId: 's' }, 'p1', { enviar: true, regenerar: true });
+        expect(sync.updateFalabellaContent).toHaveBeenCalledTimes(1);
+        expect(ai.generarDescripcionHtml).not.toHaveBeenCalled();
+        expect(ai.completarAtributos).not.toHaveBeenCalled();
+        expect(guardados).toHaveLength(0);
+        expect(r).toMatchObject({ message: 'enviado', sent: true });
     });
 
     it('elige categoría, cambia una marca inexistente por GENERICO, estima medidas y completa lo obligatorio', async () => {
