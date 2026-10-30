@@ -107,7 +107,8 @@ describe('preparar un producto sin categoría segura', () => {
         const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }) };
         const vectores: any = { findSimilarCategories: jest.fn(async () => []) };
         const seeder: any = { generateEmbedding: jest.fn(async () => [0.1]) };
-        return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products), guardados, ai };
+        const vision: any = { analyze: jest.fn(async () => null) };
+        return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products, vision), guardados, ai };
     }
     const producto = (extra: any = {}) => ({
         id: 'p1', sku: 'CO126', name: 'Máquina de minidonas eléctrica', aiTitle: null, description: 'Hace donas', aiDescription: null,

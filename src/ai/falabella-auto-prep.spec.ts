@@ -40,7 +40,8 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
     const vectores: any = { findSimilarCategories: jest.fn(async () => []) };
     const seeder: any = { generateEmbedding: jest.fn(async () => [0.1]) };
     const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }) };
-    return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products), ai, guardados, canales, sync };
+    const vision: any = { analyze: jest.fn(async () => ({ productType: 'torre de aprendizaje', brand: 'Fisher-Price', color: 'Azul', keywords: ['madera'] })) };
+    return { service: new FalabellaAutoPrepService(sync, falabella, ai, canales, vectores, seeder, products, vision), ai, guardados, canales, sync, vision };
 }
 
 const producto = () => ({

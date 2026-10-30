@@ -22,7 +22,7 @@ export interface ProductVision {
     confidence: number;
 }
 
-const MAX_IMAGES = 4;
+export const MAX_IMAGES = 4;
 
 const SYSTEM = `Eres un catalogador experto de productos para marketplaces de Latinoamérica.
 Observas las fotos de un producto y describes SOLO lo que se ve o se lee en ellas (etiquetas, empaque, logos).

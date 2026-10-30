@@ -9,9 +9,10 @@ import { SyncScope, SyncService } from '../sync/sync.service';
 import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
-import { ProductVision } from './product-vision.service';
+import { ProductVision, ProductVisionService } from './product-vision.service';
 import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
+import { huellaDeFotos, necesitaVision } from './vision-fotos';
 
 export interface FalabellaPrepReport {
     sku?: string;
@@ -60,6 +61,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         private readonly seeder: CategorySeederService,
         @InjectRepository(Product)
         private readonly products: Repository<Product>,
+        private readonly vision: ProductVisionService,
     ) { }
 
     /** Las categorías de Falabella más cercanas al producto: por significado primero y, si faltan, por palabras. */
@@ -112,8 +114,25 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const ids: Record<string, any> = { ...((product.marketplaceIds as any) || {}) };
         const nombre = product.aiTitle || product.name;
         const descripcion = product.aiDescription || product.description || nombre;
-        const vision = (attrs.vision as ProductVision | undefined) ?? null;
+        let vision = (attrs.vision as ProductVision | undefined) ?? null;
         const estimated = { measures: !!attrs.estimated?.measures, attributes: { ...(attrs.estimated?.attributes ?? {}) } as Record<string, string[]> };
+
+        // ── Fotos: lo que se ve en ellas ──
+        // Un producto que no nació con IA (por ejemplo, uno importado de un canal) no tiene guardado lo que muestran sus fotos. Se
+        // analizan cuando nunca se hizo, cuando las fotos cambiaron desde el último análisis o cuando la persona pide rehacerlo.
+        // Si el análisis falla se conserva lo que hubiera y se vuelve a intentar la próxima vez.
+        const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
+        if (necesitaVision(attrs, fotos, opciones.regenerar)) {
+            const nueva = await this.vision.analyze(fotos, { name: product.name, description: quitarUrls(product.description) });
+            if (nueva) {
+                vision = nueva;
+                attrs.vision = nueva;
+                attrs._visionFotos = huellaDeFotos(fotos);
+                // Lo que se ve rellena la marca y el color solo si estaban vacíos.
+                if (!String(attrs.brand ?? '').trim() && nueva.brand) attrs.brand = nueva.brand;
+                if (!String(attrs.color ?? '').trim() && nueva.color) attrs.color = nueva.color;
+            }
+        }
 
         // ── Categoría ──
         // Las que Falabella ya rechazó para este producto no se vuelven a proponer.
@@ -182,26 +201,6 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             }
         }
 
-        // ── Descripción HTML estándar de la agencia ──
-        let descripcionGenerada = false;
-        if (opciones.regenerar) delete attrs.descriptionHtml;
-        if (!attrs.descriptionHtml) {
-            const ficha = await this.ai.generarDescripcionHtml({
-                nombre,
-                textoCliente: quitarUrls(product.description),
-                vision,
-                atributos: attrs,
-                imagenesDelProducto: (product.images ?? []).map((i) => i.url).filter(Boolean),
-                urlsDelCliente: extraerUrlsDeImagen(`${product.name} ${product.description ?? ''}`),
-            });
-            if (ficha) {
-                attrs.descriptionHtml = ficha.html;
-                descripcionGenerada = true;
-                // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
-                if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) product.aiTitle = this.sync.nombreParaFalabella(ficha.title);
-            }
-        }
-
         // ── Marca: Falabella solo acepta las de su catálogo ──
         const original = String(attrs.brand ?? '').trim();
         let marca = original;
@@ -255,6 +254,29 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             }).length;
         }
 
+        // ── Descripción HTML estándar de la agencia ──
+        // Va al final: así la redacción ya cuenta con la marca verificada, las medidas y los atributos que se acaban de completar.
+        // Usa lo que escribió el cliente, el texto que ya tenga el producto, los atributos, lo que muestran las fotos y los GIFs
+        // o imágenes cuyos enlaces pegó en el nombre o la descripción.
+        let descripcionGenerada = false;
+        if (opciones.regenerar) delete attrs.descriptionHtml;
+        if (!attrs.descriptionHtml) {
+            const ficha = await this.ai.generarDescripcionHtml({
+                nombre,
+                textoCliente: this.textoConocido(product),
+                vision,
+                atributos: attrs,
+                imagenesDelProducto: (product.images ?? []).map((i) => i.url).filter(Boolean),
+                urlsDelCliente: extraerUrlsDeImagen(`${product.name} ${product.description ?? ''}`),
+            });
+            if (ficha) {
+                attrs.descriptionHtml = ficha.html;
+                descripcionGenerada = true;
+                // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
+                if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) product.aiTitle = this.sync.nombreParaFalabella(ficha.title);
+            }
+        }
+
         product.marketplaceIds = ids as any;
         product.aiAttributes = { ...attrs, estimated };
         await this.products.save(product);
@@ -301,12 +323,26 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         };
     }
 
+    /**
+     * Lo que ya se sabe del producto en texto: lo que escribió el cliente (sin enlaces) y la descripción en texto que tenga
+     * guardada (la que redactó la IA o la que trajo un canal). Si una contiene a la otra no se repite.
+     */
+    private textoConocido(product: any): string {
+        const propio = quitarUrls(product.description);
+        const guardado = quitarUrls(product.aiDescription);
+        const texto = !guardado ? propio
+            : (!propio || guardado.includes(propio)) ? guardado
+            : propio.includes(guardado) ? propio
+            : `${propio}\n\n${guardado}`;
+        return texto.slice(0, 4000);
+    }
+
     /** Todo lo que se sabe del producto, para que la IA llene los atributos con la mayor información posible. */
     private contextoDe(product: any, attrs: Record<string, any>, vision: any) {
         const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
             ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
             : undefined;
-        return { textoCliente: quitarUrls(product.description), vision, medidas, sku: product.sku };
+        return { textoCliente: this.textoConocido(product), vision, medidas, sku: product.sku };
     }
 
     /**

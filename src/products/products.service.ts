@@ -10,6 +10,8 @@ import { ExportQueryDto } from '../export/dto/export-query.dto';
 import { AiService } from 'src/ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { ListingLink } from '../sync/entities/listing-link.entity';
+import { combinarAtributos } from '../ai/combinar-atributos';
+import { huellaDeFotos } from '../ai/vision-fotos';
 
 /**
  * Dónde debe ser único un SKU: dentro de una tienda. Un producto que todavía no tiene tienda (los de antes de las tiendas)
@@ -270,17 +272,32 @@ export class ProductsService {
 
     async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }) {
         const product = await this.findOne(productId, userId);
+        const previos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
 
+        // La IA parte de todo lo que el producto ya tiene: nombre, texto, marca, fotos y la cuenta del dueño (para consultar a sus canales).
         const aiContent = await this.aiService.generateProductContent({
             name: product.name,
-            description: product.description,
+            description: [product.description, product.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n'),
             category: product.category,
             subcategory: product.subCategory,
             targetMarketplaces: options?.marketplaces || product.targetMarketplaces || ['amazon', 'mercadolibre'],
             tone: options?.tone || 'professional',
+            imageUrls: fotos,
+            userId,
         });
 
         this.applyAiContent(product, aiContent);
+
+        // Regenerar no borra lo que el producto ya tenía (marca, categoría elegida, atributos revisados…): la IA solo rellena lo vacío.
+        // Se rehacen a propósito lo que esta acción pide: la ficha HTML y lo que se ve en las fotos.
+        const combinados = combinarAtributos(previos, product.aiAttributes as any);
+        if (aiContent?.htmlDescription) combinados.descriptionHtml = aiContent.htmlDescription;
+        if (aiContent?.vision) {
+            combinados.vision = aiContent.vision;
+            combinados._visionFotos = huellaDeFotos(fotos);
+        }
+        product.aiAttributes = combinados as any;
 
         return this.productRepository.save(product);
     }
