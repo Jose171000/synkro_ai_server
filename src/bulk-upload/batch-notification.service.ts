@@ -54,25 +54,24 @@ export class BatchNotificationService {
 
         const key = `batch:${meta.batchId}`;
 
-        // Initialize the hash on first use (SET if not exists pattern via HSETNX)
-        await this.redis.hsetnx(key, 'total',    String(meta.batchTotal));
-        await this.redis.hsetnx(key, 'processed', '0');
-        await this.redis.hsetnx(key, 'failed',    '0');
-        await this.redis.expire(key, this.TTL_SECONDS);
+        // Todo en una sola transacción de Redis: se inicializa, se suma y se lee sin que otro producto
+        // se cuele en medio. Con varios productos terminando a la vez, cada uno ve el estado justo
+        // después de su propia suma, y solo uno de ellos hace llegar el total a la meta.
+        const respuesta = await this.redis
+            .multi()
+            .hsetnx(key, 'total', String(meta.batchTotal))
+            .hsetnx(key, 'processed', '0')
+            .hsetnx(key, 'failed', '0')
+            .hincrby(key, success ? 'processed' : 'failed', 1)
+            .hmget(key, 'total', 'processed', 'failed')
+            .expire(key, this.TTL_SECONDS)
+            .exec();
 
-        // Atomically increment the right counter
-        if (success) {
-            await this.redis.hincrby(key, 'processed', 1);
-        } else {
-            await this.redis.hincrby(key, 'failed', 1);
+        const lectura = respuesta?.[4];
+        if (!lectura || lectura[0] || !Array.isArray(lectura[1])) {
+            throw new Error(`No se pudo actualizar el avance del lote ${meta.batchId}: ${lectura?.[0]?.message ?? 'sin respuesta de Redis'}`);
         }
-
-        // Read current totals
-        const [total, processed, failed] = await Promise.all([
-            this.redis.hget(key, 'total'),
-            this.redis.hget(key, 'processed'),
-            this.redis.hget(key, 'failed'),
-        ]);
+        const [total, processed, failed] = lectura[1] as (string | null)[];
 
         const totalN     = Number(total     ?? 0);
         const processedN = Number(processed ?? 0);
@@ -80,8 +79,9 @@ export class BatchNotificationService {
 
         this.logger.log(`[Batch ${meta.batchId}] ${processedN + failedN}/${totalN} (✓${processedN} ✗${failedN})`);
 
-        // Batch complete — send email and cleanup
-        const completo = processedN + failedN >= totalN;
+        // Cierra el lote quien lo deja justo en el total: la suma sube de uno en uno, así que pasa por ese
+        // valor una sola vez (antes era «>=» y, con varios a la vez, dos podían cerrarlo o ninguno).
+        const completo = processedN + failedN === totalN;
         if (completo) {
             // Se conserva una hora (no se borra): la pantalla todavía puede mostrar el resultado final.
             await this.redis.expire(key, 3600);
