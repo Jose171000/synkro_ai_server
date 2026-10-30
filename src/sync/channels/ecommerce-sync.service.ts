@@ -214,6 +214,7 @@ export class EcommerceSyncService implements OnModuleInit {
                     price: fila.regularPrice ?? undefined,
                     stock: fila.stock,
                     status: 'draft',
+                    importedFrom: marketplace,
                     owner: { id: scope.userId } as any,
                     store: { id: scope.storeId } as any,
                     images: fila.images.slice(0, 10).map(url => ({ url })) as any,

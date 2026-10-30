@@ -142,6 +142,15 @@ export function unidadPrincipal(producto: FalabellaProduct): FalabellaBusinessUn
     return lista.find(u => String(u?.IsPublished ?? '') === '1') ?? lista[0] ?? {};
 }
 
+/** Identificador de la categoría de una ficha de Falabella, solo si es un número (a veces trae el nombre). */
+export function categoriaDeFicha(producto: FalabellaProduct): string | undefined {
+    for (const candidato of [producto?.PrimaryCategoryId, producto?.PrimaryCategory]) {
+        const texto = String(candidato ?? '').trim();
+        if (/^\d+$/.test(texto)) return texto;
+    }
+    return undefined;
+}
+
 /** Sitios donde la ficha aparece publicada (Falabella, Sodimac, Tottus...). */
 export function sitiosPublicados(unidad: FalabellaBusinessUnit): string[] {
     const sitios = unidad?.AvailableToSell?.Site?.Site;

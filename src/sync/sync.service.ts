@@ -28,7 +28,7 @@ import { SaleAlertsService } from './sale-alerts.service';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
-import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
+import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, categoriaDeFicha, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
 import { chunkProducts, fechaDeFalabella, FalabellaProductInput, promocionValida } from './falabella/falabella-product-xml';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -772,6 +772,7 @@ export class SyncService implements OnModuleInit {
             const { regular: precio, descuento } = preciosDeUnidad(unidad);
             const existencias = Number(unidad.Stock ?? 0) || 0;
             const imagenes = imagenesDeFicha(producto);
+            const categoria = categoriaDeFicha(producto);
 
             // El producto que aún no tenemos se crea con lo poco que Falabella
             // devuelve, y queda como borrador: es un registro de que la ficha
@@ -784,12 +785,19 @@ export class SyncService implements OnModuleInit {
                     price: precio ?? undefined,
                     stock: existencias,
                     status: 'draft',
+                    importedFrom: 'falabella',
+                    // La categoría de la ficha viene con ella: no hay que volver a elegirla.
+                    ...(categoria ? { marketplaceIds: { falabella_category_id: categoria } } : {}),
                     owner: { id: userId } as any,
                     store: { id: scope.storeId } as any,
                     // Cada variante es su propio SKU en Falabella, con su imagen.
                     images: imagenes.map(url => ({ url })) as any,
                 });
                 product = await this.productRepository.save(nuevo);
+            } else if (categoria && !this.categoriaFalabella(product)) {
+                // Un producto que ya estaba sin categoría la recibe de la ficha; una que ya tenía no se cambia.
+                product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), falabella_category_id: categoria };
+                product = await this.productRepository.save(product);
             }
 
             const externalId = String(producto.ShopSku ?? sku);
@@ -3550,6 +3558,7 @@ export class SyncService implements OnModuleInit {
                         price: fila.regularPrice ?? undefined,
                         stock: fila.stock,
                         status: 'draft',
+                        importedFrom: 'mercadolibre',
                         owner: { id: userId } as any,
                         store: { id: scope.storeId } as any,
                         images: fila.images.slice(0, 10).map(url => ({ url })) as any,

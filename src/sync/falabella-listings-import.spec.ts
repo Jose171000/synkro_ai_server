@@ -175,6 +175,42 @@ describe('importFalabellaListings', () => {
         });
     });
 
+    it('el producto creado queda marcado como importado de Falabella y con la categoría de la ficha', async () => {
+        await construir([ficha({ SellerSku: 'NUEVO-1', PrimaryCategory: '3169' })]);
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(productos[0].importedFrom).toBe('falabella');
+        expect(productos[0].marketplaceIds).toEqual({ falabella_category_id: '3169' });
+    });
+
+    it('si la ficha no trae una categoría numérica, el producto se crea sin categoría', async () => {
+        await construir([ficha({ SellerSku: 'NUEVO-1', PrimaryCategory: 'Proteínas' })]);
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(productos[0].importedFrom).toBe('falabella');
+        expect(productos[0].marketplaceIds).toBeUndefined();
+    });
+
+    it('un producto que ya existía sin categoría la recibe de la ficha; uno que ya tenía no la cambia', async () => {
+        await construir([
+            ficha({ SellerSku: 'SIN-CAT', PrimaryCategory: '3169' }),
+            ficha({ SellerSku: 'CON-CAT', PrimaryCategory: '3169' }),
+        ]);
+        productos.push({ id: 'p-sin', sku: 'SIN-CAT', name: 'A' });
+        productos.push({ id: 'p-con', sku: 'CON-CAT', name: 'B', marketplaceIds: { falabella_category_id: '910' } });
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        const sin = productos.filter(p => p.sku === 'SIN-CAT').pop();
+        const con = productos.filter(p => p.sku === 'CON-CAT').pop();
+        expect(sin.marketplaceIds).toEqual({ falabella_category_id: '3169' });
+        expect(con.marketplaceIds).toEqual({ falabella_category_id: '910' });
+        // Ninguno de los dos se marca como importado: ya estaban en el catálogo.
+        expect(sin.importedFrom).toBeUndefined();
+    });
+
     it('una ficha rechazada por control de calidad NO se muestra como publicada', async () => {
         // Es el caso que este módulo viene a arreglar: en la hoja de cálculo
         // figuraba como "Visible" algo que el comprador no podía ver.

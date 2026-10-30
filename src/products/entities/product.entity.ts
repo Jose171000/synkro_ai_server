@@ -98,6 +98,10 @@ export class Product {
     @Column('simple-array', { nullable: true })
     targetMarketplaces: string[]; // ['mercadolibre', 'amazon']
 
+    /** Canal del que se importó el producto (falabella, mercadolibre…). Nulo si se creó en Synkro. */
+    @Column({ type: 'varchar', nullable: true })
+    importedFrom: string | null;
+
     // Estado
     @Column({ default: 'draft' })
     status: 'draft' | 'pending' | 'synced' | 'error';

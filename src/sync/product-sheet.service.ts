@@ -80,6 +80,7 @@ export class ProductSheetService {
                 sku: product.sku,
                 name: product.name,
                 description: product.description,
+                importedFrom: product.importedFrom ?? null,
                 aiTitle: product.aiTitle ?? null,
                 aiDescription: product.aiDescription ?? null,
                 descriptionHtml: attrs.descriptionHtml ?? null,
