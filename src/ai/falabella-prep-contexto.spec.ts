@@ -118,6 +118,22 @@ describe('preparar usa todo lo que el producto ya tiene', () => {
         expect(guardados[0].description).toBe('Proteína vainilla https://giphy.com/x.gif');
     });
 
+    it('anota lo que escribió la IA para que la Ficha lo etiquete: HTML, texto y la marca que vio en las fotos', async () => {
+        const { service, guardados } = construir(producto({ aiDescription: null, aiAttributes: {} }));
+        await service.preparar(SCOPE, 'p1');
+        expect(guardados[0].aiAttributes._ia).toEqual(expect.arrayContaining(['descriptionHtml', 'aiDescription', 'brand', 'aiTitle']));
+    });
+
+    it('lo que la IA no escribió no se anota: una descripción que ya existía y una marca que acabó siendo GENERICO', async () => {
+        const { service, guardados } = construir(producto({ aiDescription: 'La real del canal', aiTitle: 'Título propio', aiAttributes: { descriptionHtml: '<div>del canal</div>', brand: 'Marca no catalogada' } }));
+        await service.preparar(SCOPE, 'p1');
+        const marcas = guardados[0].aiAttributes._ia ?? [];
+        expect(marcas).not.toContain('aiDescription');
+        expect(marcas).not.toContain('descriptionHtml');
+        expect(marcas).not.toContain('aiTitle');
+        expect(marcas).not.toContain('brand');
+    });
+
     it('una descripción en texto que el producto ya tenía (la del canal o una escrita a mano) no se pisa, salvo que se pida volver a redactar', async () => {
         const normal = construir(producto({ aiDescription: 'La real del canal' }));
         await normal.service.preparar(SCOPE, 'p1');

@@ -56,6 +56,21 @@ describe('regenerar con IA un producto que ya existe', () => {
         expect(r.aiTitle).toBe('Titulo nuevo');
     });
 
+    it('anota que la IA rehízo el título, el texto y el HTML, y conserva lo que ya estaba anotado de la marca', async () => {
+        const p = producto();
+        p.aiAttributes._ia = ['brand', 'aiTitle'];
+        const { service } = construir(p, contenido());
+        const r: any = await service.generateAIContent('p1', 'u1');
+        expect(r.aiAttributes._ia.sort()).toEqual(['aiDescription', 'aiTitle', 'brand', 'descriptionHtml']);
+    });
+
+    it('una marca que ya tenía el producto sin anotación de la IA no pasa a ser de la IA al regenerar', async () => {
+        const { service } = construir(producto(), contenido());
+        const r: any = await service.generateAIContent('p1', 'u1');
+        expect(r.aiAttributes.brand).toBe('MUTANT');
+        expect(r.aiAttributes._ia).not.toContain('brand');
+    });
+
     it('si la IA no devuelve ficha HTML ni visión, deja las que había', async () => {
         const { service } = construir(producto(), { generatedListings: contenido().generatedListings });
         const r: any = await service.generateAIContent('p1', 'u1');

@@ -86,6 +86,45 @@ describe('la ficha de un producto', () => {
         expect(g.aiAttributes.estimated.measures).toBe(false);
     });
 
+    it('etiqueta lo que escribió la IA y lo que trajo el canal, en los campos generales y en los atributos de cada canal', async () => {
+        const p: any = {
+            ...producto(),
+            aiAttributes: {
+                brand: 'MUTANT', material: 'Madera', garantia: '12 meses', descriptionHtml: '<div>h</div>',
+                _ia: ['aiTitle', 'descriptionHtml'],
+                _importado: { falabella: { brand: 'MUTANT', attributes: { Material: 'Madera' } }, mercadolibre: { attributes: { BRAND: 'GENERICO' } } },
+                estimated: { measures: false, attributes: { falabella: ['garantia'], mercadolibre: ['COLOR'] } },
+            },
+        };
+        const { service } = construir(p, [enlace('falabella'), enlace('mercadolibre')]);
+        const hoja: any = await service.getSheet(SCOPE, 'p1');
+
+        expect(hoja.product.origin).toEqual({ aiTitle: 'ia', descriptionHtml: 'ia', brand: 'canal' });
+        const porNombre = Object.fromEntries(hoja.channels[0].sent.attributes.map((a: any) => [a.name, a.origin]));
+        expect(porNombre).toEqual({ material: 'canal', garantia: 'ia' });
+        const porId = Object.fromEntries(hoja.channels[1].sent.attributes.map((a: any) => [a.id, a.origin]));
+        expect(porId).toEqual({ BRAND: 'canal', COLOR: 'ia' });
+    });
+
+    it('lo que la persona edita en la ficha deja de llevar la etiqueta de la IA; lo que no toca la conserva', async () => {
+        const p: any = {
+            ...producto(),
+            aiAttributes: { brand: 'GENERICO', garantia: '12 meses', _ia: ['aiTitle', 'aiDescription', 'brand'], estimated: { measures: false, attributes: { falabella: ['garantia', 'material'], mercadolibre: ['COLOR'] } } },
+        };
+        const { service, guardados } = construir(p);
+        await service.saveSheet(SCOPE, 'p1', { aiTitle: 'Título escrito por mí', aiDescription: 'desc', attributes: { garantia: '24 meses' } });
+
+        expect(guardados[0].aiAttributes._ia).toEqual(['aiDescription', 'brand']);
+        expect(guardados[0].aiAttributes.estimated.attributes).toEqual({ falabella: ['material'], mercadolibre: ['COLOR'] });
+    });
+
+    it('guardar sin cambiar un campo (el diálogo reenvía lo que ya tenía) no le quita la etiqueta', async () => {
+        const p: any = { ...producto(), aiAttributes: { brand: 'GENERICO', _ia: ['aiTitle', 'brand'] } };
+        const { service, guardados } = construir(p);
+        await service.saveSheet(SCOPE, 'p1', { aiTitle: 'Torre Montessori 4 en 1', brand: 'GENERICO' });
+        expect(guardados[0].aiAttributes._ia).toEqual(['aiTitle', 'brand']);
+    });
+
     it('no deja guardar un nombre vacío', async () => {
         const { service, guardados } = construir(producto());
         await expect(service.saveSheet(SCOPE, 'p1', { name: '   ' })).rejects.toThrow(/no puede quedar vacío/);

@@ -9,6 +9,7 @@ import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
+import { origenDeAtributo, origenesGenerales, quitarEstimado, quitarMarcaIA, CampoGeneral } from './origen-de-datos';
 import { ATRIBUTOS_DE_SISTEMA, atributosObligatoriosAprendidos, claveDeAtributo, esAtributoDeSistema } from './falabella/falabella-fields';
 
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
@@ -86,6 +87,8 @@ export class ProductSheetService {
                 // Sin texto de la IA se muestra la descripción del producto o, si tampoco hay, la que sale de su ficha HTML; solo se guarda si la persona lo edita.
                 aiDescription: product.aiDescription || descripcionDeTexto(product) || null,
                 descriptionHtml: attrs.descriptionHtml ?? null,
+                /** Quién escribió cada campo general: la IA o el canal del que se importó. Sin etiqueta: una persona. */
+                origin: origenesGenerales(product, attrs),
                 brand: attrs.brand ?? null,
                 color: attrs.color ?? null,
                 price: product.price !== null && product.price !== undefined ? Number(product.price) : null,
@@ -125,14 +128,18 @@ export class ProductSheetService {
                 measures: { width: product.packageWidth, length: product.packageLength, height: product.packageHeight, weight: product.packageWeight },
                 attributes: definiciones
                     .filter((a) => !esAtributoDeSistema(a))
-                    .map((a) => ({
-                        name: a.name,
-                        label: a.label || a.name,
-                        description: a.description,
-                        required: a.isMandatory || atributosObligatoriosAprendidos(attrs).has(claveDeAtributo(a.name)),
-                        options: a.options,
-                        value: String(this.sync.buscarAtributo(efectivos, a.name) ?? ''),
-                    }))
+                    .map((a) => {
+                        const value = String(this.sync.buscarAtributo(efectivos, a.name) ?? '');
+                        return {
+                            name: a.name,
+                            label: a.label || a.name,
+                            description: a.description,
+                            required: a.isMandatory || atributosObligatoriosAprendidos(attrs).has(claveDeAtributo(a.name)),
+                            options: a.options,
+                            value,
+                            origin: origenDeAtributo(attrs, 'falabella', a.name, value) ?? null,
+                        };
+                    })
                     .sort((x, y) => Number(y.required) - Number(x.required)),
             },
             listo: !('reason' in validacion),
@@ -151,7 +158,7 @@ export class ProductSheetService {
                 titleEditable: false,
                 description: String(product.aiDescription || product.description || ''),
                 categoryId: (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id ?? null,
-                attributes: this.sync.atributosParaMeli(product).map((a) => ({ id: a.id, value: a.value_name })),
+                attributes: this.sync.atributosParaMeli(product).map((a) => ({ id: a.id, value: a.value_name, origin: origenDeAtributo(attrs, 'mercadolibre', a.id, a.value_name) ?? null })),
             },
             listo: true,
         };
@@ -160,7 +167,17 @@ export class ProductSheetService {
     /** Guarda los cambios y programa el envío automático a los canales donde está publicado. */
     async saveSheet(scope: SyncScope, productId: string, dto: SaveSheetDto) {
         const product = await this.sync.findScopedProduct(scope, productId);
-        const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+        let attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+
+        // Lo que la persona cambia deja de ser «escrito por la IA»: se anota qué campos cambian, comparando con lo que había.
+        const editados: CampoGeneral[] = [];
+        const cambia = (nuevo: string | undefined, actual: unknown) => nuevo !== undefined && nuevo.trim() !== String(actual ?? '').trim();
+        if (cambia(dto.aiTitle, product.aiTitle)) editados.push('aiTitle');
+        if (cambia(dto.aiDescription, product.aiDescription)) editados.push('aiDescription');
+        if (cambia(dto.descriptionHtml, attrs.descriptionHtml)) editados.push('descriptionHtml');
+        if (cambia(dto.brand, attrs.brand)) editados.push('brand');
+        const atributosEditados = Object.entries(dto.attributes ?? {}).filter(([k, v]) => String(v ?? '').trim() !== String(attrs[k] ?? '').trim()).map(([k]) => k);
+        const atributosMeliEditados = Object.entries(dto.mercadolibreAttributes ?? {}).filter(([k, v]) => String(v ?? '').trim() !== String(attrs.mercadolibre_attributes?.[k] ?? '').trim()).map(([k]) => k);
 
         if (dto.name !== undefined) {
             if (!dto.name.trim()) throw new BadRequestException('El nombre no puede quedar vacío.');
@@ -195,6 +212,9 @@ export class ProductSheetService {
             if (attrs.estimated) attrs.estimated = { ...attrs.estimated, measures: false };
         }
 
+        attrs = quitarMarcaIA(attrs, editados);
+        attrs = quitarEstimado(attrs, 'falabella', atributosEditados);
+        attrs = quitarEstimado(attrs, 'mercadolibre', atributosMeliEditados);
         product.aiAttributes = attrs;
         await this.products.save(product);
 

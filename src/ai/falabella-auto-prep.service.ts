@@ -13,6 +13,7 @@ import { ProductVision, ProductVisionService } from './product-vision.service';
 import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 import { huellaDeFotos, necesitaVision } from './vision-fotos';
+import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
 
 export interface FalabellaPrepReport {
     sku?: string;
@@ -115,6 +116,8 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const nombre = product.aiTitle || product.name;
         const descripcion = product.aiDescription || product.description || nombre;
         let vision = (attrs.vision as ProductVision | undefined) ?? null;
+        // Los campos que escribe la IA en este paso: la Ficha los muestra con su etiqueta hasta que una persona los edite.
+        const marcasIA: CampoGeneral[] = [];
         const estimated = { measures: !!attrs.estimated?.measures, attributes: { ...(attrs.estimated?.attributes ?? {}) } as Record<string, string[]> };
 
         // ── Fotos: lo que se ve en ellas ──
@@ -129,7 +132,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 attrs.vision = nueva;
                 attrs._visionFotos = huellaDeFotos(fotos);
                 // Lo que se ve rellena la marca y el color solo si estaban vacíos.
-                if (!String(attrs.brand ?? '').trim() && nueva.brand) attrs.brand = nueva.brand;
+                if (!String(attrs.brand ?? '').trim() && nueva.brand) { attrs.brand = nueva.brand; marcasIA.push('brand'); }
                 if (!String(attrs.color ?? '').trim() && nueva.color) attrs.color = nueva.color;
             }
         }
@@ -271,17 +274,20 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             });
             if (ficha) {
                 attrs.descriptionHtml = ficha.html;
+                marcasIA.push('descriptionHtml');
                 descripcionGenerada = true;
                 // La descripción en texto (Mercado Libre y canales sin HTML) sale del mismo contenido: se redacta si el producto no tiene
                 // una (la que trajo un canal o escribió una persona no se pisa) o si la persona pidió volver a redactar.
-                if (ficha.texto && (opciones.regenerar || !String(product.aiDescription ?? '').trim())) product.aiDescription = ficha.texto;
+                if (ficha.texto && (opciones.regenerar || !String(product.aiDescription ?? '').trim())) { product.aiDescription = ficha.texto; marcasIA.push('aiDescription'); }
                 // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
-                if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) product.aiTitle = this.sync.nombreParaFalabella(ficha.title);
+                if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) { product.aiTitle = this.sync.nombreParaFalabella(ficha.title); marcasIA.push('aiTitle'); }
             }
         }
 
         product.marketplaceIds = ids as any;
-        product.aiAttributes = { ...attrs, estimated };
+        // Una marca que acabó siendo GENERICO ya no es algo que la IA haya aportado.
+        const sinMarcaGenerica = normalizar(String(attrs.brand ?? '')) === 'generico' ? marcasIA.filter((c) => c !== 'brand') : marcasIA;
+        product.aiAttributes = { ...marcarComoIA(attrs, sinMarcaGenerica), estimated };
         await this.products.save(product);
 
         // ── ¿Ya puede salir? Con las mismas reglas de la publicación real ──

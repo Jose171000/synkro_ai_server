@@ -12,6 +12,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
 import { huellaDeFotos } from '../ai/vision-fotos';
+import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
 
 /**
  * Dónde debe ser único un SKU: dentro de una tienda. Un producto que todavía no tiene tienda (los de antes de las tiendas)
@@ -291,7 +292,17 @@ export class ProductsService {
 
         // Regenerar no borra lo que el producto ya tenía (marca, categoría elegida, atributos revisados…): la IA solo rellena lo vacío.
         // Se rehacen a propósito lo que esta acción pide: la ficha HTML y lo que se ve en las fotos.
+        const marcasNuevas: string[] = Array.isArray((product.aiAttributes as any)?._ia) ? (product.aiAttributes as any)._ia : [];
         const combinados = combinarAtributos(previos, product.aiAttributes as any);
+        // Quién escribió cada campo: lo que se rehízo ahora es de la IA; la marca solo si sigue siendo la que ya había o la que vieron las fotos.
+        const marcasPrevias: string[] = Array.isArray(previos._ia) ? previos._ia : [];
+        const rehechos = ['aiTitle', 'aiDescription', 'descriptionHtml'];
+        const marcaVigente = String(previos.brand ?? '').trim() ? marcasPrevias.includes('brand') : marcasNuevas.includes('brand');
+        combinados._ia = [...new Set([
+            ...marcasPrevias.filter((c) => !rehechos.includes(c) && c !== 'brand'),
+            ...marcasNuevas.filter((c) => rehechos.includes(c)),
+            ...(marcaVigente ? ['brand'] : []),
+        ])];
         if (aiContent?.htmlDescription) combinados.descriptionHtml = aiContent.htmlDescription;
         if (aiContent?.vision) {
             combinados.vision = aiContent.vision;
@@ -533,8 +544,10 @@ export class ProductsService {
 
         // Lo que se vio en las fotos: la marca y el color quedan listos para publicar.
         const vision = aiContent?.vision;
+        let marcaDeLasFotos = false;
         if (vision) {
             const actuales = (product.aiAttributes as any) || {};
+            marcaDeLasFotos = !String(actuales.brand ?? '').trim() && !!vision.brand;
             product.aiAttributes = {
                 ...actuales,
                 brand: actuales.brand || vision.brand || undefined,
@@ -559,6 +572,14 @@ export class ProductsService {
             else atributos._categoriaDudosa = { id: chequeo.id ?? null, motivo: chequeo.motivo ?? 'revisa que la categoría sea la correcta' };
             product.aiAttributes = atributos as any;
         }
+
+        // Lo que la IA acaba de escribir queda anotado: la Ficha lo muestra con su etiqueta hasta que una persona lo edite.
+        const escritoPorIA: CampoGeneral[] = [];
+        if (primero?.title || primero?.name) escritoPorIA.push('aiTitle');
+        if (primero?.description || (listings as any).falabella?.description) escritoPorIA.push('aiDescription');
+        if (aiContent?.htmlDescription) escritoPorIA.push('descriptionHtml');
+        if (marcaDeLasFotos) escritoPorIA.push('brand');
+        if (escritoPorIA.length) product.aiAttributes = marcarComoIA(product.aiAttributes as any, escritoPorIA) as any;
     }
 
 }
