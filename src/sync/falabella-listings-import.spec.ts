@@ -353,6 +353,26 @@ describe('importFalabellaListings', () => {
         expect(enlaces[0].salePrice).toBe(149.9);
     });
 
+    it('el descuento vigente con sus fechas pasa también al producto, para que un envío de contenido no lo quite', async () => {
+        await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90', SpecialFromDate: '2020-01-01', SpecialToDate: '2099-12-31' })]);
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(productos[0].salePrice).toBe(149.9);
+        expect(productos[0].saleStartDate).toBe('2020-01-01');
+        expect(productos[0].saleEndDate).toBe('2099-12-31');
+        expect(enlaces[0].lastPromoSynced).toBe('149.9|2020-01-01|2099-12-31');
+    });
+
+    it('un descuento que el producto ya tenía fijado no se pisa con el del canal', async () => {
+        await construir([ficha({}, { Price: '199.90', SpecialPrice: '149.90' })]);
+        productos.push({ id: 'p-con-descuento', sku: 'SKU-1', name: 'Gafas', price: 199.9, salePrice: 120 });
+
+        await service.importFalabellaListings(SCOPE, undefined);
+
+        expect(productos[0].salePrice).toBe(120);
+    });
+
     it('trae la imagen de cada variante y su nombre de variante', async () => {
         await construir([ficha({
             SellerSku: 'CAMISA-M-ROJO',

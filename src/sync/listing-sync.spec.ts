@@ -864,6 +864,19 @@ describe('campos de sistema y atributos que Falabella dijo que no aplican', () =
         expect(Object.keys(r.input.extraAttributes)).toEqual(['garantia']);
     });
 
+    it('el envío de contenido conserva el descuento que Falabella ya tiene y respeta el precio fijado para la cuenta', async () => {
+        const { service } = await construir({ conexiones: [fal()] });
+        const sinDescuento = base({ garantia: '12 meses' });
+        const conservado: any = (service as any).toFalabellaInput(sinDescuento, 'active', [atributo('garantia')], { salePrice: 85 });
+        expect(conservado.input.salePrice).toBe(85);
+
+        const propio: any = (service as any).toFalabellaInput(sinDescuento, 'active', [atributo('garantia')], { priceOverride: 150, salePriceOverride: 120, saleEndOverride: '2099-01-01' });
+        expect(propio.input).toMatchObject({ price: 150, salePrice: 120, saleEnd: '2099-01-01' });
+
+        const sinEnlace: any = (service as any).toFalabellaInput(sinDescuento, 'active', [atributo('garantia')]);
+        expect(sinEnlace.input.salePrice).toBeNull();
+    });
+
     it('un atributo que Falabella ya dijo que no aplica a la categoría se deja de enviar', async () => {
         const { service } = await construir({ conexiones: [fal()] });
         const r: any = (service as any).toFalabellaInput(

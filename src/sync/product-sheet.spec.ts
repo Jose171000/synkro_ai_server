@@ -12,6 +12,7 @@ function construir(producto: any, enlaces: any[] = []) {
         buscarAtributo: jest.fn((a: any, n: string) => a[n]),
         atributosParaMeli: jest.fn(() => [{ id: 'BRAND', value_name: 'GENERICO' }, { id: 'COLOR', value_name: 'Azul' }]),
         runContentSync: jest.fn(async () => ({ ok: true, message: 'ok' })),
+        programarEnvioDeInventario: jest.fn(async () => undefined),
     };
     const falabella: any = {
         getCategoryAttributes: jest.fn(async () => [
@@ -21,9 +22,13 @@ function construir(producto: any, enlaces: any[] = []) {
         ]),
         getCategories: jest.fn(async () => [{ id: '956', path: 'Juguetes › Torres' }]),
     };
-    const links: any = { find: jest.fn(async () => enlaces) };
+    const links: any = {
+        find: jest.fn(async () => enlaces),
+        findOne: jest.fn(async ({ where }: any) => enlaces.find((e) => e.connection.id === where.connection.id) ?? null),
+        save: jest.fn(async (e: any) => e),
+    };
     const products: any = { save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }), findOne: jest.fn(async () => ({ id: producto.id, group: producto.groupDelTest ?? null })) };
-    return { service: new ProductSheetService(sync, falabella, links, products), sync, guardados };
+    return { service: new ProductSheetService(sync, falabella, links, products), sync, guardados, links };
 }
 
 const SCOPE = { userId: 'u1', storeId: 't1' };
@@ -73,7 +78,7 @@ describe('la ficha de un producto', () => {
             mercadolibreAttributes: { COLOR: 'Rojo' }, measures: { width: 50, length: 40, height: 90, weight: 10 },
         });
 
-        expect(r).toEqual({ saved: true, willUpdate: ['falabella'] });
+        expect(r).toEqual({ saved: true, willUpdate: ['falabella'], pricesSent: [] });
         expect(sync.scheduleContentSync).toHaveBeenCalledWith('p1');
         const g = guardados[0];
         expect(g.aiTitle).toBe('Nuevo título');
@@ -136,6 +141,54 @@ describe('la ficha de un producto', () => {
         const r = await service.syncNow(SCOPE, 'p1');
         expect(sync.runContentSync).toHaveBeenCalledTimes(2);
         expect(r.results.map((x) => x.marketplace)).toEqual(['falabella', 'mercadolibre']);
+    });
+});
+
+describe('precios por canal en la ficha', () => {
+    it('muestra por cada cuenta lo que se envía, de dónde sale y lo que el canal muestra hoy', async () => {
+        const fal = enlace('falabella', { regularPrice: 500, salePrice: 450, lastStockSynced: 3 });
+        const { service } = construir(producto(), [fal, enlace('mercadolibre', { priceOverride: 520 })]);
+        const hoja: any = await service.getSheet(SCOPE, 'p1');
+        expect(hoja.prices).toHaveLength(2);
+        expect(hoja.prices[0]).toMatchObject({
+            marketplace: 'falabella', productPrice: 480, canSetSale: true,
+            sent: { price: 480, salePrice: 450, origin: { price: 'producto', promo: 'canal' } },
+            channel: { price: 500, salePrice: 450, stock: 3 },
+        });
+        expect(hoja.prices[1]).toMatchObject({ marketplace: 'mercadolibre', canSetSale: false, sent: { price: 520, origin: { price: 'propio' } } });
+    });
+
+    it('guardar precios fija el de esa cuenta, lo envía a su canal y no toca el contenido', async () => {
+        const fal = enlace('falabella');
+        const { service, sync, links } = construir(producto(), [fal]);
+        const r = await service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-falabella', price: 500, salePrice: 420, saleStart: '2026-11-01', saleEnd: '2026-11-30' }] });
+        expect(r).toEqual({ saved: true, willUpdate: [], pricesSent: ['falabella'] });
+        expect(links.save).toHaveBeenCalledWith(expect.objectContaining({ priceOverride: 500, salePriceOverride: 420, saleStartOverride: '2026-11-01', saleEndOverride: '2026-11-30' }));
+        expect(sync.programarEnvioDeInventario).toHaveBeenCalledWith('u1', 'p1', 'falabella', 'c-falabella');
+        expect(sync.scheduleContentSync).not.toHaveBeenCalled();
+    });
+
+    it('si los precios no cambiaron no envía nada, y un valor vacío vuelve a usar el del producto', async () => {
+        const fal = enlace('falabella', { priceOverride: 500, salePriceOverride: 420 });
+        const igual = construir(producto(), [fal]);
+        await igual.service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-falabella', price: 500, salePrice: 420 }] });
+        expect(igual.sync.programarEnvioDeInventario).not.toHaveBeenCalled();
+
+        const quitar = construir(producto(), [enlace('falabella', { priceOverride: 500 })]);
+        await quitar.service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-falabella', price: null }] });
+        expect(quitar.links.save).toHaveBeenCalledWith(expect.objectContaining({ priceOverride: null }));
+    });
+
+    it('rechaza un descuento que no es menor que el precio y no guarda nada', async () => {
+        const { service, links } = construir(producto(), [enlace('falabella')]);
+        await expect(service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-falabella', price: 400, salePrice: 400 }] })).rejects.toThrow(/menor que su precio regular/);
+        expect(links.save).not.toHaveBeenCalled();
+    });
+
+    it('en Mercado Libre el descuento no se guarda desde aquí', async () => {
+        const { service, links } = construir(producto(), [enlace('mercadolibre')]);
+        await service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-mercadolibre', price: 600, salePrice: 100 }] });
+        expect(links.save).toHaveBeenCalledWith(expect.objectContaining({ priceOverride: 600, salePriceOverride: null }));
     });
 });
 

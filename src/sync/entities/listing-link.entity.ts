@@ -65,6 +65,22 @@ export class ListingLink {
     @Column('decimal', { precision: 10, scale: 2, nullable: true })
     salePrice: number | null;
 
+    /**
+     * Precio y descuento que la persona fijó SOLO para este canal. Vacíos: se usa el del producto.
+     * No son lo que muestra el canal (eso es regularPrice/salePrice) sino lo que se le quiere enviar.
+     */
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    priceOverride: number | null;
+
+    @Column('decimal', { precision: 10, scale: 2, nullable: true })
+    salePriceOverride: number | null;
+
+    @Column({ type: 'date', nullable: true })
+    saleStartOverride: string | null;
+
+    @Column({ type: 'date', nullable: true })
+    saleEndOverride: string | null;
+
     /** Imagen principal de esta publicación (cada variante tiene la suya). */
     @Column('text', { nullable: true })
     imageUrl: string | null;

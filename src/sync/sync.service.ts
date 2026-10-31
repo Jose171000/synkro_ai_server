@@ -30,7 +30,8 @@ import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, categoriaDeFicha, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
-import { chunkProducts, fechaDeFalabella, FalabellaProductInput, promocionValida } from './falabella/falabella-product-xml';
+import { chunkProducts, fechaDeFalabella, FalabellaProductInput } from './falabella/falabella-product-xml';
+import { firmaDePromo, PreciosDelEnlace, preciosParaCanal } from './precios-por-canal';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api.service';
@@ -856,6 +857,19 @@ export class SyncService implements OnModuleInit {
                 await this.productRepository.save(product);
             }
 
+            // El descuento vigente en Falabella (con sus fechas) pasa al producto si este no tiene uno propio: sin eso, el
+            // siguiente envío de contenido salía sin descuento y Falabella lo quitaba. Nunca se pisa un descuento ya fijado.
+            if (descuento !== null && (product.salePrice === null || product.salePrice === undefined)) {
+                const desde = fechaDeFalabella(unidad.SpecialFromDate);
+                const hasta = fechaDeFalabella(unidad.SpecialToDate);
+                product.salePrice = descuento as any;
+                product.saleStartDate = desde;
+                product.saleEndDate = hasta;
+                product = await this.productRepository.save(product);
+                // Ya está en Falabella: no hace falta enviárselo de vuelta.
+                enlace.lastPromoSynced = `${Math.round(descuento * 100) / 100}|${desde ?? ''}|${hasta ?? ''}`;
+            }
+
             enlace.externalId = externalId;
             enlace.permalink = producto.Url ?? enlace.permalink ?? null as any;
             enlace.syncStatus = estado;
@@ -1513,7 +1527,11 @@ export class SyncService implements OnModuleInit {
 
         const categoria = this.categoriaFalabella(product);
         const atributos = categoria ? await this.falabellaApi.getCategoryAttributes(credentials, categoria).catch(() => []) : [];
-        const resultado = this.toFalabellaInput(product, 'active', atributos);
+        // El enlace de esta cuenta aporta su precio propio y el descuento que Falabella ya muestra: actualizar el contenido no debe quitarlo.
+        const enlace = await this.listingLinkRepository.findOne({
+            where: { product: { id: productId }, connection: { id: connection.id }, marketplace: 'falabella' },
+        });
+        const resultado = this.toFalabellaInput(product, 'active', atributos, enlace);
         if ('reason' in resultado) {
             throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
         }
@@ -1799,7 +1817,10 @@ export class SyncService implements OnModuleInit {
         product: Product,
         status: 'active' | 'inactive' = 'active',
         categoryAttributes: FalabellaAttribute[] = [],
+        enlace?: PreciosDelEnlace | null,
     ): { input: FalabellaProductInput } | { reason: string } {
+        // Precio y descuento de ESTA cuenta: el que se fijó para el canal, el del producto o, como último recurso, el que el canal ya tiene.
+        const precios = preciosParaCanal(product, enlace);
         // Los valores de ESTA variante (Color: Negro) ganan a los del molde del grupo (color: Azul).
         const attributes = atributosConVariante((product.aiAttributes as any) || {}, product.variantValues);
         const marketplaceIds = (product.marketplaceIds as any) || {};
@@ -1884,11 +1905,11 @@ export class SyncService implements OnModuleInit {
                 description,
                 brand: attributes.brand || 'GENERICO',
                 primaryCategory: category,
-                price: Number(product.price),
+                price: precios.price,
                 images: (product.images ?? []).map(i => i.url).filter(Boolean),
-                salePrice: product.salePrice != null ? Number(product.salePrice) : null,
-                saleStart: product.saleStartDate,
-                saleEnd: product.saleEndDate,
+                salePrice: precios.promo?.salePrice ?? null,
+                saleStart: precios.promo?.start ?? null,
+                saleEnd: precios.promo?.end ?? null,
                 stock: product.stock,
                 status,
                 packageWidth: Number(width),
@@ -2499,6 +2520,11 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /** Programa el envío de stock y precio (con su descuento) de un producto a una cuenta de un canal. */
+    async programarEnvioDeInventario(userId: string, productId: string, marketplace: string, connectionId: string): Promise<void> {
+        await this.syncQueue.add('inventory', { productId, userId, marketplace, connectionId });
+    }
+
     /** Executed by the queue processor: pushes current stock/price to Mercado Libre. */
     async pushInventoryToMeli(productId: string, connectionId?: string): Promise<void> {
         const product = await this.productRepository.findOne({ where: { id: productId } });
@@ -2518,15 +2544,16 @@ export class SyncService implements OnModuleInit {
             const connection = await this.getValidConnectionById(link.connection.id);
             // Con variantes, Mercado Libre pide stock y precio de CADA variante:
             // mandarlos a nivel de publicación lo rechaza.
+            const precio = preciosParaCanal(product, link).price; // el fijado para esta cuenta o, si no hay, el del producto
             await this.meliApi.updateItem(
                 connection.accessToken,
                 link.externalId,
                 link.variationId
-                    ? { variations: [{ id: link.variationId, available_quantity: product.stock, price: Number(product.price) }] }
-                    : { available_quantity: product.stock, price: Number(product.price) },
+                    ? { variations: [{ id: link.variationId, available_quantity: product.stock, price: precio }] }
+                    : { available_quantity: product.stock, price: precio },
             );
             link.lastStockSynced = product.stock;
-            link.lastPriceSynced = product.price;
+            link.lastPriceSynced = precio as any;
             link.lastSyncedAt = new Date();
             link.lastError = null as any;
         } catch (error: any) {
@@ -2563,14 +2590,18 @@ export class SyncService implements OnModuleInit {
         if (!product || !link || !link.connection) return { status: 'omitido', feeds: [] };
         if (link.pausedByUser) return { status: 'pausada', feeds: [] }; // pausada con stock 0: un envío normal la reactivaría
 
+        // El precio de ESTA cuenta: el fijado para el canal o, si no hay, el del producto.
+        const precios = preciosParaCanal(product, link);
+        const precio = precios.price;
         const precioCambio =
             link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
-            Number(link.lastPriceSynced) !== Number(product.price);
+            Number(link.lastPriceSynced) !== precio;
         const stockCambio = link.lastStockSynced !== product.stock;
         // Promoción: solo se envía cuando hay una válida y distinta de la última enviada (quitarla se hace en el Seller Center).
-        const promo = promocionValida(Number(product.price), { salePrice: product.salePrice, saleStart: product.saleStartDate, saleEnd: product.saleEndDate });
-        const firmaPromo = promo ? `${promo.salePrice}|${promo.start ?? ''}|${promo.end ?? ''}` : '';
-        const promoCambio = !!promo && (link.lastPromoSynced ?? '') !== firmaPromo;
+        // Si lo único que hay es el descuento que el canal ya muestra, no cuenta como un cambio, pero viaja con el precio para no quitarlo.
+        const promo = precios.promo;
+        const firmaPromo = firmaDePromo(promo);
+        const promoCambio = !!promo && precios.origen.promo !== 'canal' && (link.lastPromoSynced ?? '') !== firmaPromo;
         if (!precioCambio && !stockCambio && !promoCambio) return { status: 'sin-cambios', feeds: [] };
 
         // El SKU del vendedor es lo que casa con la ficha de Falabella.
@@ -2585,7 +2616,7 @@ export class SyncService implements OnModuleInit {
             if (precioCambio || promoCambio) {
                 feeds.push(await this.registrarFeedFalabella(
                     ownerId, link.connection.id, 'ProductUpdate', sellerSku,
-                    await this.falabellaApi.updatePrice(credentials, sellerSku, Number(product.price), {
+                    await this.falabellaApi.updatePrice(credentials, sellerSku, precio, {
                         ...opts,
                         promo: promo ? { salePrice: promo.salePrice, saleStart: promo.start, saleEnd: promo.end } : undefined,
                     }),
@@ -2603,7 +2634,7 @@ export class SyncService implements OnModuleInit {
             throw error;
         }
 
-        if (precioCambio) link.lastPriceSynced = product.price;
+        if (precioCambio) link.lastPriceSynced = precio as any;
         if (promoCambio) link.lastPromoSynced = firmaPromo;
         if (stockCambio) link.lastStockSynced = product.stock;
         link.lastSyncedAt = new Date();

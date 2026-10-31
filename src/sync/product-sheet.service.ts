@@ -7,6 +7,8 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
+import { preciosParaCanal } from './precios-por-canal';
+import { fechaDeFalabella } from './falabella/falabella-product-xml';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
 import { origenDeAtributo, origenesGenerales, quitarEstimado, quitarMarcaIA, CampoGeneral } from './origen-de-datos';
@@ -27,6 +29,23 @@ export interface SheetChannel {
     sent: Record<string, any>;
     listo: boolean;
     motivo?: string;
+}
+
+/** Precio y descuento de un producto en una cuenta de un canal. */
+export interface SheetPrice {
+    marketplace: string;
+    connectionId: string;
+    account: string;
+    productPrice: number | null;
+    productSalePrice: number | null;
+    /** Lo que se envía a ese canal y de dónde sale: propio del canal, del producto, o lo que el canal ya tiene. */
+    sent: { price: number; salePrice: number | null; saleStart: string | null; saleEnd: string | null; origin: { price: string; promo: string | null } };
+    /** Lo que la persona fijó solo para este canal (vacío: se usa el del producto). */
+    own: { price: number | null; salePrice: number | null; saleStart: string | null; saleEnd: string | null };
+    /** Lo que el canal muestra hoy. */
+    channel: { price: number | null; salePrice: number | null; stock: number | null };
+    stock: number;
+    canSetSale: boolean;
 }
 
 /**
@@ -58,9 +77,11 @@ export class ProductSheetService {
         });
 
         const canales: SheetChannel[] = [];
+        const precios: SheetPrice[] = [];
         for (const enlace of enlaces) {
             const cuenta = enlace.connection;
             if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(enlace.marketplace)) continue;
+            precios.push(this.preciosDeEnlace(product, enlace, cuenta));
             const base = {
                 marketplace: enlace.marketplace,
                 connectionId: cuenta.id,
@@ -100,6 +121,37 @@ export class ProductSheetService {
                 },
             },
             channels: canales,
+            prices: precios,
+        };
+    }
+
+    /** Lo que se envía y lo que el canal muestra, de precio y descuento, para una cuenta. */
+    private preciosDeEnlace(product: Product, enlace: ListingLink, cuenta: MarketplaceConnection): SheetPrice {
+        const efectivos = preciosParaCanal(product, enlace);
+        const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+        return {
+            marketplace: enlace.marketplace,
+            connectionId: cuenta.id,
+            account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
+            productPrice: num(product.price),
+            productSalePrice: num(product.salePrice),
+            sent: {
+                price: efectivos.price,
+                salePrice: efectivos.promo?.salePrice ?? null,
+                saleStart: efectivos.promo?.start ?? null,
+                saleEnd: efectivos.promo?.end ?? null,
+                origin: efectivos.origen,
+            },
+            own: {
+                price: num(enlace.priceOverride),
+                salePrice: num(enlace.salePriceOverride),
+                saleStart: enlace.saleStartOverride ?? null,
+                saleEnd: enlace.saleEndOverride ?? null,
+            },
+            channel: { price: num(enlace.regularPrice), salePrice: num(enlace.salePrice), stock: enlace.lastStockSynced ?? null },
+            stock: product.stock,
+            // El descuento puede tener una ventana de fechas que Synkro envía; sin precio de Falabella en el producto no hay nada que mostrar.
+            canSetSale: enlace.marketplace === 'falabella',
         };
     }
 
@@ -218,8 +270,58 @@ export class ProductSheetService {
         product.aiAttributes = attrs;
         await this.products.save(product);
 
-        const canales = await this.sync.scheduleContentSync(productId);
-        return { saved: true, willUpdate: canales.map((c) => c.marketplace) };
+        const preciosEnviados = dto.prices ? await this.guardarPrecios(scope, product, dto.prices) : [];
+        // Guardar solo precios no toca el contenido de los canales.
+        const soloPrecios = !!dto.prices && Object.keys(dto).every((k) => k === 'prices');
+        const canales = soloPrecios ? [] : await this.sync.scheduleContentSync(productId);
+        return { saved: true, willUpdate: canales.map((c) => c.marketplace), pricesSent: preciosEnviados };
+    }
+
+    /**
+     * Guarda el precio y el descuento propios de cada cuenta y programa su envío a ese canal.
+     * Un valor vacío quita el propio y vuelve a usarse el del producto. Devuelve las cuentas a las que se enviará.
+     */
+    private async guardarPrecios(scope: SyncScope, product: Product, prices: NonNullable<SaveSheetDto['prices']>): Promise<string[]> {
+        const enviados: string[] = [];
+        for (const p of prices) {
+            const enlace = await this.links.findOne({
+                where: { product: { id: product.id }, connection: { id: p.connectionId } },
+                relations: { connection: { store: true } },
+            });
+            if (!enlace || enlace.connection?.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(enlace.marketplace)) {
+                throw new BadRequestException('Esa cuenta no tiene este producto publicado.');
+            }
+            const vacio = (v: unknown) => v === null || v === undefined || v === '';
+            const precio = vacio(p.price) ? null : Number(p.price);
+            // Mercado Libre no recibe descuentos desde aquí: se maneja en su propia herramienta de promociones.
+            const conDescuento = enlace.marketplace === 'falabella' && !vacio(p.salePrice);
+            const descuento = conDescuento ? Number(p.salePrice) : null;
+            const inicio = conDescuento ? fechaDeFalabella(p.saleStart) : null;
+            const fin = conDescuento ? fechaDeFalabella(p.saleEnd) : null;
+            if (conDescuento && p.saleStart && !inicio) throw new BadRequestException('La fecha de inicio no es válida (usa AAAA-MM-DD).');
+            if (conDescuento && p.saleEnd && !fin) throw new BadRequestException('La fecha de fin no es válida (usa AAAA-MM-DD).');
+            if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
+            const base = precio ?? Number(product.price);
+            if (descuento !== null && !(descuento > 0 && descuento < base)) {
+                throw new BadRequestException(`El descuento en ${enlace.marketplace === 'falabella' ? 'Falabella' : 'este canal'} debe ser menor que su precio regular (${base.toFixed(2)}).`);
+            }
+
+            const antes = [enlace.priceOverride, enlace.salePriceOverride, enlace.saleStartOverride, enlace.saleEndOverride].map((v) => (vacio(v) ? null : String(v)));
+            const despues = [precio, descuento, inicio, fin].map((v) => (vacio(v) ? null : String(v)));
+            if (antes.every((v, i) => v === despues[i])) continue;
+
+            enlace.priceOverride = precio;
+            enlace.salePriceOverride = descuento;
+            enlace.saleStartOverride = inicio;
+            enlace.saleEndOverride = fin;
+            await this.links.save(enlace);
+            // Si el precio cambió, el siguiente envío debe mandarlo aunque coincida con el último anotado.
+            if (enlace.syncStatus === 'published' || enlace.syncStatus === 'paused') {
+                await this.sync.programarEnvioDeInventario(scope.userId, product.id, enlace.marketplace, enlace.connection!.id);
+                enviados.push(enlace.marketplace);
+            }
+        }
+        return enviados;
     }
 
     /** Envía ya, sin esperar el retraso, el contenido actual a cada canal publicado. */
