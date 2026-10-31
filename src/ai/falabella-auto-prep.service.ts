@@ -272,6 +272,9 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             if (ficha) {
                 attrs.descriptionHtml = ficha.html;
                 descripcionGenerada = true;
+                // La descripción en texto (Mercado Libre y canales sin HTML) sale del mismo contenido: se redacta si el producto no tiene
+                // una (la que trajo un canal o escribió una persona no se pisa) o si la persona pidió volver a redactar.
+                if (ficha.texto && (opciones.regenerar || !String(product.aiDescription ?? '').trim())) product.aiDescription = ficha.texto;
                 // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
                 if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) product.aiTitle = this.sync.nombreParaFalabella(ficha.title);
             }

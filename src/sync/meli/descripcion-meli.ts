@@ -4,7 +4,29 @@
  * propia descripción y no se reemplaza con esta.
  */
 export function descripcionDeTexto(producto: { aiDescription?: string | null; description?: string | null; aiAttributes?: any }): string {
-    return descripcionEnTextoPlano(producto.aiDescription || producto.description || producto.aiAttributes?.descriptionHtml);
+    return descripcionEnTextoPlano(producto.aiDescription || sinEnlaces(producto.description) || producto.aiAttributes?.descriptionHtml);
+}
+
+/**
+ * El texto de la descripción que se manda a una publicación de Mercado Libre que ya existe: la del producto o, si no tiene,
+ * lo que escribió el cliente sin enlaces. No cae a la ficha HTML: la descripción que tenga la publicación no se reemplaza
+ * con un texto derivado.
+ */
+export function descripcionParaActualizar(producto: { aiDescription?: string | null; description?: string | null }): string {
+    return descripcionEnTextoPlano(producto.aiDescription || sinEnlaces(producto.description));
+}
+
+/**
+ * Lo que el cliente escribe en «descripción» sirve para alimentar a la IA y trae enlaces (GIFs, imágenes) pensados para la ficha
+ * HTML. En texto plano no pintan nada y Mercado Libre no admite enlaces: se quitan, conservando los saltos de línea.
+ */
+export function sinEnlaces(texto: string | null | undefined): string {
+    return String(texto ?? '')
+        .replace(/https?:\/\/[^\s<>"')\]]+/gi, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 /**

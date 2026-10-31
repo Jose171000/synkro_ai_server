@@ -1,4 +1,4 @@
-import { elegirImagenes, escaparHtml, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
+import { elegirImagenes, escaparHtml, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml, textoPlanoDeContenido } from './description-html';
 
 const contenido = () => normalizarContenido({
     title: 'Torre de aprendizaje Montessori de madera',
@@ -54,6 +54,17 @@ describe('ficha HTML estándar de la agencia', () => {
         expect(html).not.toContain('<img');
         expect(html).not.toContain('Especificaciones Técnicas');
         expect(escaparHtml(null)).toBe('');
+    });
+
+    it('el texto plano para canales sin HTML sale del mismo contenido: introducción, beneficios y datos técnicos, sin etiquetas ni enlaces', () => {
+        const c = normalizarContenido({
+            title: 'T', intro1: 'Primer párrafo.', intro2: 'Segundo párrafo.',
+            benefits: [{ subtitle: 'Seguro', text: 'Madera lisa', alt: 'a' }],
+            specs: [{ label: 'Material', value: 'Pino' }],
+        }, 'N')!;
+        const texto = textoPlanoDeContenido(c);
+        expect(texto).toBe('Primer párrafo.\n\nSegundo párrafo.\n\n- Seguro: Madera lisa\n\nDatos técnicos:\n- Material: Pino');
+        expect(texto).not.toMatch(/<|>|https?:/);
     });
 
     it('descarta una respuesta sin contenido útil', () => {

@@ -7,7 +7,7 @@ import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/m
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
-import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml } from './description-html';
+import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml, textoPlanoDeContenido } from './description-html';
 import { soloElNumero } from '../sync/falabella/falabella-fields';
 import { medidasQueFaltan } from '../sync/meli/unidades-meli';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
@@ -319,7 +319,7 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
   public async generarDescripcionHtml(datos: {
     nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
     imagenesDelProducto: string[]; urlsDelCliente: string[];
-  }): Promise<{ html: string; title: string } | null> {
+  }): Promise<{ html: string; title: string; texto: string } | null> {
     try {
       const respuesta = await this.openai.chat.completions.create({
         model: modeloDeepseek(),
@@ -358,7 +358,7 @@ Responde únicamente este JSON:
       });
       const contenido = normalizarContenido(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), datos.nombre);
       if (!contenido) return null;
-      return { html: renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto)), title: contenido.title };
+      return { html: renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto)), title: contenido.title, texto: textoPlanoDeContenido(contenido) };
     } catch (error) {
       console.warn('[AiService] No se pudo generar la descripción HTML:', error);
       return null;

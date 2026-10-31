@@ -80,6 +80,17 @@ export function normalizarContenido(crudo: any, nombre: string): DescripcionCont
     };
 }
 
+/**
+ * La misma ficha, en texto plano, para los canales que no aceptan HTML (Mercado Libre): introducción, beneficios y datos
+ * técnicos con viñetas, sin enlaces ni imágenes. Sale del mismo contenido que redactó la IA para el HTML.
+ */
+export function textoPlanoDeContenido(c: DescripcionContenido): string {
+    const partes = [c.intro1, c.intro2].filter(Boolean);
+    if (c.benefits.length) partes.push(c.benefits.map((b) => `- ${b.subtitle}: ${b.text}`).join('\n'));
+    if (c.specs.length) partes.push(`Datos técnicos:\n${c.specs.map((s) => `- ${s.label}: ${s.value}`).join('\n')}`);
+    return partes.join('\n\n').trim();
+}
+
 const CELDA_BENEFICIO = (b: { subtitle: string; text: string; alt: string }, url: string | undefined) => `
       <td width="50%" valign="top" align="center">${url ? `
         <img src="${escaparHtml(url)}" alt="${escaparHtml(b.alt)}" style="max-width: 100%; height: auto; border-radius: 8px; margin-bottom: 15px;">` : ''}

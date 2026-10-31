@@ -26,7 +26,7 @@ function construir(producto: any) {
         elegirCategoriaVerificada: jest.fn(async () => ({ id: '2804', confianza: 'alta' })),
         verificarCategoria: jest.fn(async () => ({ ok: true, motivo: '' })),
         estimarPaquete: jest.fn(async () => ({ width: 30, length: 40, height: 20, weight: 3 })),
-        generarDescripcionHtml: jest.fn(async () => ({ html: '<div>ficha</div>', title: 'Torre de aprendizaje Montessori de madera 4 en 1' })),
+        generarDescripcionHtml: jest.fn(async () => ({ html: '<div>ficha</div>', title: 'Torre de aprendizaje Montessori de madera 4 en 1', texto: 'Texto generado para canales sin HTML.' })),
         completarAtributos: jest.fn(async () => ({ values: { material: 'Madera' }, estimated: ['material'] })),
     };
     const canales: any = {
@@ -109,6 +109,23 @@ describe('preparar usa todo lo que el producto ya tiene', () => {
         await service.preparar(SCOPE, 'p1');
         expect(ai.completarAtributos.mock.invocationCallOrder[0]).toBeLessThan(ai.generarDescripcionHtml.mock.invocationCallOrder[0]);
         expect(ai.generarDescripcionHtml.mock.calls[0][0].atributos).toMatchObject({ material: 'Madera' });
+    });
+
+    it('la descripción en texto (Mercado Libre y canales sin HTML) se redacta si el producto no tenía una, y no se copia lo que escribió el cliente', async () => {
+        const { service, guardados } = construir(producto({ description: 'Proteína vainilla https://giphy.com/x.gif', aiDescription: null }));
+        await service.preparar(SCOPE, 'p1');
+        expect(guardados[0].aiDescription).toBe('Texto generado para canales sin HTML.');
+        expect(guardados[0].description).toBe('Proteína vainilla https://giphy.com/x.gif');
+    });
+
+    it('una descripción en texto que el producto ya tenía (la del canal o una escrita a mano) no se pisa, salvo que se pida volver a redactar', async () => {
+        const normal = construir(producto({ aiDescription: 'La real del canal' }));
+        await normal.service.preparar(SCOPE, 'p1');
+        expect(normal.guardados[0].aiDescription).toBe('La real del canal');
+
+        const rehacer = construir(producto({ aiDescription: 'La real del canal' }));
+        await rehacer.service.preparar(SCOPE, 'p1', undefined, { regenerar: true });
+        expect(rehacer.guardados[0].aiDescription).toBe('Texto generado para canales sin HTML.');
     });
 
     it('la IA recibe el texto del cliente y el que ya tenía el producto, sin repetirlos ni los enlaces, y los GIFs van a la plantilla', async () => {

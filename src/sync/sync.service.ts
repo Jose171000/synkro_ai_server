@@ -5,7 +5,7 @@ import { planearGruposDeMeli } from './meli/variantes-meli';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
-import { descripcionDeTexto, descripcionEnTextoPlano } from './meli/descripcion-meli';
+import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
@@ -1279,7 +1279,7 @@ export class SyncService implements OnModuleInit {
                 avisos.push(`${que}: ${motivo}`);
             }
         };
-        const descripcion = descripcionEnTextoPlano(product.aiDescription || product.description);
+        const descripcion = descripcionParaActualizar(product);
         // Una publicación recién creada aún no tiene descripción: se crea; si ya la tiene, se reemplaza.
         if (descripcion) {
             await intentar('descripción', async () => {
@@ -1601,7 +1601,7 @@ export class SyncService implements OnModuleInit {
         const connection = await this.getValidConnectionById(connectionId);
 
         // Mercado Libre solo acepta texto plano (el HTML es para los canales que lo admiten, como Falabella).
-        const descripcion = descripcionEnTextoPlano(product.aiDescription || product.description);
+        const descripcion = descripcionParaActualizar(product);
         if (descripcion) await this.meliApi.updateItemDescription(connection.accessToken, link.externalId, descripcion);
         await this.meliApi.updateItemAttributes(connection.accessToken, link.externalId, this.atributosParaMeli(product));
         link.lastSyncedAt = new Date();
