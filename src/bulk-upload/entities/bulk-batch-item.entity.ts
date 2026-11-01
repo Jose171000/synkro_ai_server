@@ -25,9 +25,13 @@ export class BulkBatchItem {
     @Column('uuid', { nullable: true })
     productId: string | null;
 
-    /** Estado del envío a Falabella de este producto (lo usa la publicación por tandas); nulo si no va a Falabella. */
+    /** Estado del envío a Falabella: «pendiente» (esperando su tanda), «enviado» o «rechazado»; nulo si no va a Falabella. */
     @Column({ type: 'varchar', nullable: true })
     falabellaStatus: string | null;
+
+    /** Por qué Falabella no lo aceptó (solo si `falabellaStatus` es «rechazado»). */
+    @Column({ type: 'text', nullable: true })
+    falabellaError: string | null;
 
     /** Los datos del trabajo de la cola (precio, fotos ya subidas, canales…), para poder reintentarlo. */
     @Column('jsonb', { nullable: true })

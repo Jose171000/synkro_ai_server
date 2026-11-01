@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { BulkBatch } from './entities/bulk-batch.entity';
 import { BulkBatchItem } from './entities/bulk-batch-item.entity';
 
@@ -64,6 +64,33 @@ export class BulkBatchService {
                     : { status: 'fallido', error: (resultado.error ?? 'error desconocido').slice(0, 500) },
             );
         });
+    }
+
+    /** El producto quedó esperando su tanda de envío a Falabella. */
+    async falabellaPendiente(batchId: string, productId: string): Promise<void> {
+        await this.seguro('anotar el producto pendiente de Falabella', async () => {
+            await this.items.update({ batchId, productId }, { falabellaStatus: 'pendiente', falabellaError: null });
+        });
+    }
+
+    /**
+     * Resultado de una tanda: todos los productos de la tanda pasan a «enviado» y los que Falabella no aceptó, a «rechazado» con su motivo.
+     * Lo que ya existía en Falabella (se vincula, no se vuelve a publicar) cuenta como enviado.
+     */
+    async falabellaResultado(batchId: string, productIds: string[], rechazados: { sku: string; motivo: string }[]): Promise<void> {
+        await this.seguro('anotar el resultado de la tanda de Falabella', async () => {
+            if (productIds.length) await this.items.update({ batchId, productId: In(productIds) }, { falabellaStatus: 'enviado', falabellaError: null });
+            for (const r of rechazados) {
+                if (/^ya (está publicado|existía)/i.test(r.motivo)) continue;
+                await this.items.update({ batchId, sku: r.sku }, { falabellaStatus: 'rechazado', falabellaError: r.motivo.slice(0, 500) });
+            }
+        });
+    }
+
+    /** Productos del lote que siguen esperando su envío a Falabella (por ejemplo, si Redis perdió la lista). */
+    async pendientesDeFalabella(batchId: string): Promise<string[]> {
+        const filas = await this.seguro('leer los pendientes de Falabella', () => this.items.find({ where: { batchId, falabellaStatus: 'pendiente' }, select: ['productId'] }));
+        return (filas ?? []).map((f) => f.productId).filter((id): id is string => !!id);
     }
 
     /** Cierra el lote (cuando Redis dice que llegó al total). */

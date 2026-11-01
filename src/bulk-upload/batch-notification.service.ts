@@ -103,15 +103,23 @@ export class BatchNotificationService {
     }
 
     /** Deja anotado un producto para publicarlo en el canal cuando termine todo el lote. */
-    async deferPublish(batchId: string, channel: string, productId: string): Promise<void> {
+    async deferPublish(batchId: string, channel: string, productId: string): Promise<number> {
         const key = `batch:${batchId}:publish:${channel}`;
-        await this.redis.sadd(key, productId);
-        await this.redis.expire(key, this.TTL_SECONDS);
+        const res = await this.redis.multi().sadd(key, productId).expire(key, this.TTL_SECONDS).scard(key).exec();
+        const cuantos = Number(res?.[2]?.[1]);
+        return Number.isFinite(cuantos) ? cuantos : 0;
     }
 
-    /** Saca (y borra) los productos anotados: solo quien lo pida primero los recibe. */
-    async takeDeferred(batchId: string, channel: string): Promise<string[]> {
+    /**
+     * Saca (y borra) los productos anotados: solo quien lo pida primero los recibe.
+     * Con `max` saca como mucho esa cantidad (una tanda) y deja el resto anotado.
+     */
+    async takeDeferred(batchId: string, channel: string, max?: number): Promise<string[]> {
         const key = `batch:${batchId}:publish:${channel}`;
+        if (max && max > 0) {
+            const ids = await this.redis.spop(key, max);
+            return Array.isArray(ids) ? ids : ids ? [String(ids)] : [];
+        }
         const res = await this.redis.multi().smembers(key).del(key).exec();
         const ids = res?.[0]?.[1];
         return Array.isArray(ids) ? (ids as string[]) : [];

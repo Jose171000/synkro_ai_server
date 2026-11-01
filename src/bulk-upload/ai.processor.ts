@@ -9,6 +9,7 @@ import { BatchNotificationService, BatchMeta } from './batch-notification.servic
 import { CuentasElegidas, cuentasParaPublicar, leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { CONCURRENCIA_IA } from './concurrencia-cola';
 import { BulkBatchService } from './bulk-batch.service';
+import { tamanoDeTandaFalabella } from './tanda-falabella';
 
 @Processor('generate-listings-queue', { concurrency: CONCURRENCIA_IA })
 export class AiProcessor extends WorkerHost {
@@ -80,12 +81,14 @@ export class AiProcessor extends WorkerHost {
 
             console.log(`[AiProcessor] ✓ Job ${job.id} done -> Product ${updatedProduct.id}`);
 
+            // Se anota ya en el registro del lote (antes de publicar: el envío por tandas a Falabella busca el producto por su id).
+            if (batchMeta) await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: true, productId: updatedProduct.id });
+
             // 4. Publicación automática en los canales conectados (los errores no tumban el producto).
             await this.publicar(updatedProduct.id, publishTo, { userId, storeId }, batchMeta?.batchId, cuentas);
 
             // Track batch progress — notify user when all jobs in this upload are done
             if (batchMeta) {
-                await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: true, productId: updatedProduct.id });
                 const terminado = await this.batchNotification.trackAndNotify(batchMeta, true);
                 if (terminado) await this.bulkBatch.cerrar(batchMeta.batchId);
                 if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId }, cuentas);
@@ -124,7 +127,11 @@ export class AiProcessor extends WorkerHost {
         for (const canal of canales) {
             try {
                 if (canal === 'falabella' && batchId) {
-                    await this.batchNotification.deferPublish(batchId, 'falabella', productId);
+                    const esperando = await this.batchNotification.deferPublish(batchId, 'falabella', productId);
+                    await this.bulkBatch.falabellaPendiente(batchId, productId);
+                    // Con FALABELLA_BATCH_SIZE, cada vez que se juntan los productos de una tanda se envía, sin esperar al final del lote.
+                    const tanda = tamanoDeTandaFalabella(process.env.FALABELLA_BATCH_SIZE);
+                    if (tanda && esperando >= tanda) await this.enviarAFalabella(batchId, await this.batchNotification.takeDeferred(batchId, 'falabella', tanda), scope, elegidas);
                     continue;
                 }
                 for (const connectionId of cuentasParaPublicar(await this.cuentasDe(scope.storeId, canal), elegidas[canal])) {
@@ -136,12 +143,21 @@ export class AiProcessor extends WorkerHost {
         }
     }
 
-    /** Un solo envío a Falabella con todo lo del lote. Lo hace quien cierra el lote. */
+    /**
+     * Lo que quede por mandar a Falabella al terminar el lote. Lo hace quien cierra el lote. Además de la lista de Redis se
+     * toma lo que la base tiene como pendiente: si Redis perdió la lista, no se pierde ningún producto.
+     */
     private async publicarFalabellaDelLote(batchId: string, canales: string[], scope: { userId: string; storeId?: string }, elegidas: CuentasElegidas = {}) {
         if (!scope.storeId || !canales.includes('falabella')) return;
+        const deRedis = await this.batchNotification.takeDeferred(batchId, 'falabella');
+        const deLaBase = await this.bulkBatch.pendientesDeFalabella(batchId);
+        await this.enviarAFalabella(batchId, [...new Set([...deRedis, ...deLaBase])], scope, elegidas);
+    }
+
+    /** Deja listos para Falabella los productos de una tanda y la envía; cada producto queda anotado como enviado o rechazado. */
+    private async enviarAFalabella(batchId: string, ids: string[], scope: { userId: string; storeId?: string }, elegidas: CuentasElegidas = {}) {
+        if (!scope.storeId || !ids.length) return;
         try {
-            const ids = await this.batchNotification.takeDeferred(batchId, 'falabella');
-            if (!ids.length) return;
             const cuentas = cuentasParaPublicar(await this.cuentasDe(scope.storeId, 'falabella'), elegidas['falabella']);
             if (!cuentas.length) return;
             // Cada producto se deja listo para Falabella (marca contra su catálogo, atributos, medidas, descripción HTML)
@@ -158,10 +174,14 @@ export class AiProcessor extends WorkerHost {
                 });
             }
             if (porRevisar.length) await this.syncService.avisarProductosPorRevisar(scope.userId, porRevisar).catch(() => undefined);
+            const rechazados: { sku: string; motivo: string }[] = [];
             for (const connectionId of cuentas) {
                 const r = await this.syncService.publishBatchToFalabella({ userId: scope.userId, storeId: scope.storeId }, connectionId, ids);
-                console.log(`[AiProcessor] Lote ${batchId} → Falabella: ${r.enviados} enviados, ${r.rechazados?.length ?? 0} rechazados.`);
+                console.log(`[AiProcessor] Lote ${batchId} → Falabella: ${r.enviados} enviados, ${r.rechazados?.length ?? 0} rechazados (tanda de ${ids.length}).`);
+                rechazados.push(...(r.rechazados ?? []));
             }
+            // Solo si el envío no falló: un producto cuya tanda falló sigue «pendiente» en la base y se reintenta.
+            await this.bulkBatch.falabellaResultado(batchId, ids, rechazados);
         } catch (error: any) {
             console.warn(`[AiProcessor] No se pudo publicar el lote ${batchId} en Falabella: ${error?.message}`);
         }
