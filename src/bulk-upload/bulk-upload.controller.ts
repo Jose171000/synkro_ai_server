@@ -25,6 +25,7 @@ import { ProductsService } from '../products/products.service';
 import { SkuGeneratorService } from '../products/sku-generator.service';
 import { StoresService } from '../stores/stores.service';
 import { BatchNotificationService } from './batch-notification.service';
+import { allSettledConLimite, concurrenciaDeFotos } from './concurrencia-fotos';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
@@ -236,7 +237,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             }
 
             // 2) Fotos de las filas que pasaron: se suben antes de encolar (puede tardar).
-            const fotos = await Promise.allSettled(validas.map(f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus)));
+            // Con BULK_PHOTO_CONCURRENCY se limita cuántos productos suben fotos a la vez; sin la variable, todos a la vez como siempre.
+            const fotos = await allSettledConLimite(validas, concurrenciaDeFotos(process.env.BULK_PHOTO_CONCURRENCY), f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus));
             const listas: { fila: Fila; urls: string[] }[] = [];
             fotos.forEach((r, k) => {
                 const fila = validas[k];
