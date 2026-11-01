@@ -8,6 +8,7 @@ import { InternalServerErrorException } from '@nestjs/common';
 import { BatchNotificationService, BatchMeta } from './batch-notification.service';
 import { CuentasElegidas, cuentasParaPublicar, leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { CONCURRENCIA_IA } from './concurrencia-cola';
+import { BulkBatchService } from './bulk-batch.service';
 
 @Processor('generate-listings-queue', { concurrency: CONCURRENCIA_IA })
 export class AiProcessor extends WorkerHost {
@@ -17,6 +18,7 @@ export class AiProcessor extends WorkerHost {
         private readonly syncService: SyncService,
         private readonly falabellaPrep: FalabellaAutoPrepService,
         private readonly batchNotification: BatchNotificationService,
+        private readonly bulkBatch: BulkBatchService,
     ) {
         super();
         console.log(`[AiProcessor] Productos procesados a la vez: ${CONCURRENCIA_IA} (AI_QUEUE_CONCURRENCY)`);
@@ -83,7 +85,9 @@ export class AiProcessor extends WorkerHost {
 
             // Track batch progress — notify user when all jobs in this upload are done
             if (batchMeta) {
+                await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: true, productId: updatedProduct.id });
                 const terminado = await this.batchNotification.trackAndNotify(batchMeta, true);
+                if (terminado) await this.bulkBatch.cerrar(batchMeta.batchId);
                 if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId }, cuentas);
             }
 
@@ -94,7 +98,9 @@ export class AiProcessor extends WorkerHost {
 
             // Track failed job too — batch must still complete
             if (batchMeta) {
+                await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: false, error: (error as any)?.message });
                 const terminado = await this.batchNotification.trackAndNotify(batchMeta, false);
+                if (terminado) await this.bulkBatch.cerrar(batchMeta.batchId);
                 if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, { userId, storeId }, cuentas);
             }
 

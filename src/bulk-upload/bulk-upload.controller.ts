@@ -26,6 +26,7 @@ import { SkuGeneratorService } from '../products/sku-generator.service';
 import { StoresService } from '../stores/stores.service';
 import { BatchNotificationService } from './batch-notification.service';
 import { allSettledConLimite, concurrenciaDeFotos } from './concurrencia-fotos';
+import { BulkBatchService } from './bulk-batch.service';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
@@ -49,6 +50,7 @@ export class BulkUploadController {
         private readonly stores: StoresService,
         private readonly skuGenerator: SkuGeneratorService,
         private readonly batchNotification: BatchNotificationService,
+        private readonly bulkBatch: BulkBatchService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -256,27 +258,30 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             if (batchTotal) await this.batchNotification.iniciar(batchId, batchTotal, req.user.id);
             // Cuentas elegidas por canal (si la tienda tiene varias): { mercadolibre: [idCuenta] }. Sin elección, todas las activas.
             const cuentas = leerCuentasElegidas(req.body?.cuentas);
-            for (const { fila, urls } of listas) {
-                await this.listingsQueue.add('process-product', {
-                    sku: fila.sku,
-                    productName: fila.nombre,
-                    description: fila.descripcion,
-                    price: fila.precio,
-                    salePrice: fila.precioDescuento,
-                    saleStartDate: fila.desde,
-                    saleEndDate: fila.hasta,
-                    stock: fila.stock,
-                    targetMarketplaces: fila.canales,
-                    // Se publica solo donde la tienda tiene cuenta conectada.
-                    publishTo: fila.canales.filter(t => conectados.includes(t)),
-                    cuentas,
-                    storeId,
-                    userId:     req.user.id,
-                    userEmail:  req.user.email,
-                    imageUrls: urls,
-                    batchId,
-                    batchTotal,
-                }, {
+            const trabajos = listas.map(({ fila, urls }) => ({
+                sku: fila.sku,
+                productName: fila.nombre,
+                description: fila.descripcion,
+                price: fila.precio,
+                salePrice: fila.precioDescuento,
+                saleStartDate: fila.desde,
+                saleEndDate: fila.hasta,
+                stock: fila.stock,
+                targetMarketplaces: fila.canales,
+                // Se publica solo donde la tienda tiene cuenta conectada.
+                publishTo: fila.canales.filter(t => conectados.includes(t)),
+                cuentas,
+                storeId,
+                userId:     req.user.id,
+                userEmail:  req.user.email,
+                imageUrls: urls,
+                batchId,
+                batchTotal,
+            }));
+            // El lote queda anotado en la base (con lo necesario para reintentar cada producto) antes de encolar.
+            if (batchTotal) await this.bulkBatch.crear(batchId, req.user.id, storeId, trabajos.map(t => ({ sku: t.sku, payload: t })), rechazos);
+            for (const trabajo of trabajos) {
+                await this.listingsQueue.add('process-product', trabajo, {
                     // Un fallo pasajero de la IA (límite de llamadas, red) se reintenta antes de dar el producto por fallido.
                     attempts: 3,
                     backoff: { type: 'exponential', delay: 15_000 },
@@ -304,9 +309,15 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     @Get('products/progress/:batchId')
     @ApiOperation({ summary: 'Avance de una carga masiva de productos (cuántos van listos y cuántos fallaron)' })
     async progresoDeLaCarga(@Param('batchId') batchId: string, @Req() req) {
-        const p = await this.batchNotification.progreso(batchId, req.user.id);
-        if (!p) throw new NotFoundException('No se encontró esa carga (puede haber caducado).');
-        return p;
+        // Redis lleva el avance en vivo; pasadas 24 h (o tras un reinicio) la respuesta sale del registro de la base.
+        const enVivo = await this.batchNotification.progreso(batchId, req.user.id);
+        const guardado = await this.bulkBatch.resumen(batchId, req.user.id);
+        if (!enVivo && !guardado) throw new NotFoundException('No se encontró esa carga.');
+        return {
+            ...(enVivo ?? { total: guardado!.total, processed: guardado!.processed, failed: guardado!.failed, terminado: guardado!.terminado }),
+            fallidos: guardado?.fallidos ?? [],
+            rechazadas: guardado?.rechazadas ?? [],
+        };
     }
 
     @Post('products/edit')

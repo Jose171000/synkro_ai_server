@@ -19,6 +19,9 @@ import { MailModule } from '../mail/mail.module';
 import { RedisModule } from '../redis/redis.module';
 import { SyncModule } from '../sync/sync.module';
 import { StoresModule } from '../stores/stores.module';
+import { BulkBatch } from './entities/bulk-batch.entity';
+import { BulkBatchItem } from './entities/bulk-batch-item.entity';
+import { BulkBatchService } from './bulk-batch.service';
 
 @Module({
     imports: [
@@ -28,7 +31,7 @@ import { StoresModule } from '../stores/stores.module';
             { name: 'product-edit-queue' },
             { name: 'category-edit-queue' },
         ),
-        TypeOrmModule.forFeature([Product, MarketplaceCategory, User]),
+        TypeOrmModule.forFeature([Product, MarketplaceCategory, User, BulkBatch, BulkBatchItem]),
         AiModule,
         ProductModule,
         CategoryModule,
@@ -44,6 +47,6 @@ import { StoresModule } from '../stores/stores.module';
         CategoryProcessor,
         ProductEditProcessor,
         CategoryEditProcessor,
-        BatchNotificationService, SectionAccessGuard],
+        BatchNotificationService, BulkBatchService, SectionAccessGuard],
 })
 export class BulkUploadModule { }
