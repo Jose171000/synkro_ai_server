@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -29,6 +30,8 @@ import { FalabellaVariantImportService } from './falabella-variant-import.servic
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
+import { ManualSalesService } from './manual-sales.service';
+import { plantillaDeVentas, ventasDeFilas } from './ventas-manuales';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
@@ -53,6 +56,7 @@ export class SyncController {
         private readonly syncService: SyncService,
         private readonly changeRequests: ChangeRequestsService,
         private readonly ordersQuery: OrdersQueryService,
+        private readonly manualSales: ManualSalesService,
         private readonly ecommerce: EcommerceSyncService,
         private readonly sheets: ProductSheetService,
         private readonly listingActions: ListingActionsService,
@@ -646,6 +650,50 @@ export class SyncController {
             limit: limit ? Number(limit) : undefined,
             offset: offset ? Number(offset) : undefined,
         });
+    }
+
+    @Get('orders/manual/template')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Plantilla de Excel para registrar ventas de canales no conectados' })
+    async manualSalesTemplate(@Req() req, @Res() res: Response) {
+        const buffer = await plantillaDeVentas(req.store?.name ?? '');
+        // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="plantilla-ventas.xlsx"',
+        });
+        return res.send(buffer);
+    }
+
+    @Post('orders/manual')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Registra a mano una venta de un canal no conectado',
+        description:
+            'Body: { filas: [...] } con las mismas columnas de la plantilla (numero_pedido, fecha, canal, sku, producto, cantidad, precio_unitario, envio, estado, cliente, telefono, documento, direccion, notas, descontar_stock, moneda). ' +
+            'Varias filas con el mismo numero_pedido son productos de una misma venta. Descuenta el stock salvo descontar_stock = NO.',
+    })
+    registerManualSale(@Req() req, @Body() body: { filas?: Record<string, any>[] }) {
+        const filas = Array.isArray(body?.filas) ? body.filas : [];
+        if (!filas.length) throw new BadRequestException('Falta la venta: envía al menos un producto en filas.');
+        const { ventas, errores } = ventasDeFilas(filas);
+        const scope = scopeOf(req);
+        return this.manualSales.registrar(scope, ventas).then(r => ({ registradas: r.registradas, rechazadas: [...errores, ...r.rechazadas] }));
+    }
+
+    @Post('orders/manual/import')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @UseInterceptors(FileInterceptor('excel'))
+    @ApiOperation({ summary: 'Registra ventas de canales no conectados desde un Excel (plantilla de ventas)' })
+    importManualSales(@Req() req, @UploadedFile() excel: Express.Multer.File) {
+        if (!excel) throw new BadRequestException('Falta el archivo Excel (campo «excel»).');
+        return this.manualSales.importarExcel(scopeOf(req), excel.buffer);
     }
 
     @Get('orders/:id')
