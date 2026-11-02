@@ -195,13 +195,23 @@ describe('variante de cada línea de la venta', () => {
             { Sku: 'A-3', Name: 'Protector', Variation: 'Not Specified' },
             { Sku: 'A-4', Name: 'Protector' },
         ], 'PEN');
-        expect(n.lines.map(l => l.variant)).toEqual(['Talla: Queen', '...', null, null]);
+        expect(n.lines.map(l => l.variant)).toEqual(['Talla: Queen', null, null, null]);
     });
 
     it('Mercado Libre: une los atributos de la variación vendida', () => {
         const n = normalizeMeliOrder({ id: 1, order_items: [{ item: { id: 'MPE1', title: 'Polo', variation_attributes: [{ name: 'Color', value_name: 'Rojo' }, { name: 'Talla', value_name: 'M' }] }, quantity: 1, unit_price: 10 }] });
         expect(n.lines[0].variant).toBe('Color: Rojo · Talla: M');
         expect(variantesDeMeli(undefined)).toBeNull();
+    });
+
+    it('Falabella manda a veces la variante como JSON: se muestra legible, sin códigos de color ni llaves', () => {
+        expect(textoDeVariante('{"color":{"name":"Naranja","code":"#FF8800"}}')).toBe('Color: Naranja');
+        expect(textoDeVariante('{"color":{"name":"Rojo","code":"#F00"},"size":{"name":"M"}}')).toBe('Color: Rojo · Size: M');
+        expect(textoDeVariante('{"talla":"King"}')).toBe('Talla: King');
+        expect(textoDeVariante('[{"name":"color","value":"Azul"}]')).toBe('Color: Azul');
+        expect(textoDeVariante('{"color":{"code":"#FF8800"}}')).toBeNull();
+        expect(textoDeVariante('{esto no es json')).toBeNull();
+        expect(textoDeVariante('Talla: M')).toBe('Talla: M');
     });
 
     it('los valores de una variante del catálogo se ven como texto', () => {

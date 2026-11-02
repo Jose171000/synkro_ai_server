@@ -47,6 +47,14 @@ function construir(ordenes: any[] = [ORDEN]) {
     return { service, qb, llamadas, repoProductos, repoEnlaces };
 }
 
+describe('variante guardada como JSON de Falabella', () => {
+    it('una venta guardada con el JSON crudo se muestra limpia', async () => {
+        const { service } = construir([{ ...ORDEN, items: [{ sku: 'SIN-CATALOGO', title: 'Banco', quantity: 1, unitPrice: 25, variant: '{"color":{"name":"Naranja","code":"#FF8800"}}' }] }]);
+        const r = await service.list('t1', 'owner', {});
+        expect(r.items[0].lines[0].variant).toBe('Color: Naranja');
+    });
+});
+
 describe('descarga de las ventas filtradas', () => {
     it('da una fila por producto vendido, con el envío solo en la primera, y aplica los mismos filtros', async () => {
         const { service, llamadas } = construir([{ ...ORDEN, saleState: 'enviado', details: { ...ORDEN.details, shippingAmount: 12 } }]);

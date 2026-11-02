@@ -129,10 +129,43 @@ export function desfasePorMoneda(currency?: string | null): string {
 // Falabella
 // ─────────────────────────────────────────────────────────────
 
-/** Texto de variante que trae el canal; ignora los vacíos y los «no especificado». */
+const mayuscula = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** El valor de un atributo de variante: un texto, o un objeto como { name: 'Naranja', code: '#FF8800' }. */
+function valorDeAtributo(v: any): string | null {
+    if (typeof v === 'string' || typeof v === 'number') return texto(v);
+    if (v && typeof v === 'object') return texto(v.name) ?? texto(v.value) ?? texto(v.label) ?? texto(v.text) ?? null;
+    return null;
+}
+
+/**
+ * Texto de variante que trae el canal, legible: ignora los vacíos y los «no especificado». Falabella a veces manda un JSON
+ * ({"color":{"name":"Naranja","code":"#FF8800"}}); se muestra como «Color: Naranja».
+ */
 export function textoDeVariante(valor: unknown): string | null {
     const t = texto(valor);
-    return t && !/^(-+|n\/a|na|none|null|not specified|no especificad[oa]|sin variante)$/i.test(t) ? t : null;
+    if (!t || /^(-+|\.+|n\/a|na|none|null|not specified|no especificad[oa]|sin variante)$/i.test(t)) return null;
+    if (!/^[{\[]/.test(t)) return t;
+    try {
+        const json = JSON.parse(t);
+        const partes: string[] = [];
+        if (Array.isArray(json)) {
+            for (const a of json) {
+                const nombre = texto(a?.name) ?? texto(a?.key) ?? texto(a?.attribute);
+                const valor = valorDeAtributo(a?.value ?? a?.value_name ?? a);
+                if (nombre && valor) partes.push(`${mayuscula(nombre)}: ${valor}`);
+            }
+        } else if (json && typeof json === 'object') {
+            for (const [k, v] of Object.entries(json)) {
+                const valor = valorDeAtributo(v);
+                if (valor) partes.push(`${mayuscula(k)}: ${valor}`);
+            }
+        }
+        return partes.length ? partes.join(' · ') : null;
+    } catch {
+        // Un texto que parece JSON pero no lo es: no se muestra basura.
+        return null;
+    }
 }
 
 /** Mercado Libre: [{ name: 'Color', value_name: 'Rojo' }] → «Color: Rojo · Talla: M». */

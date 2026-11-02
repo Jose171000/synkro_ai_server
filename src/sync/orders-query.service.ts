@@ -5,7 +5,7 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { StoreRole } from '../stores/entities/store-member.entity';
-import { OrderDetails, OrderLine, ocultarContacto, textoDeValores } from './order-details';
+import { OrderDetails, OrderLine, ocultarContacto, textoDeValores, textoDeVariante } from './order-details';
 import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
 
 export interface OrdersQuery {
@@ -260,7 +260,8 @@ export class OrdersQueryService {
                 imageUrl: p?.imageUrl ?? null,
                 productName: p?.name ?? null,
                 // La variante del catálogo manda (es la misma venga de donde venga la venta); si no está, la que dijo el canal.
-                variant: p?.variant ?? l?.variant ?? null,
+                // Las ventas guardadas antes de este arreglo pueden traer el JSON crudo de Falabella: se limpia al mostrarlas.
+                variant: p?.variant ?? textoDeVariante(l?.variant),
             };
         });
 
