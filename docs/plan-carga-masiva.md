@@ -95,6 +95,8 @@ Subida escalonada: todo apagado y comprobar que nada cambia → concurrencia 2 c
 4. Informe del lote y «Reintentar fallidos».
 5. **Prueba de carga con canales simulados**: 1000 productos con Mercado Libre y Falabella falsos, para medir memoria, tiempos y profundidad de cola sin tocar productos reales.
 
+**Estado de la Fase 2:** 2.1 (tabla de lote e ítems) hecho; 3 (Falabella por tandas, `FALABELLA_BATCH_SIZE`) hecho; 4 (informe y «Reintentar fallidos») hecho; 5 (prueba de carga) hecha en su versión simulada: `npm run simular:carga -- 1000 6 200 3` (total, concurrencia, tanda, % de fallos de la IA). Pasa el `AiProcessor` real con IA, canales, Redis y base falsos y comprueba que no se pierde ningún producto; **no mide velocidad ni memoria reales** (eso solo se ve en Railway). Falta el punto 2 (subida directa a almacenamiento de objetos).
+
 ### Fase 3 — Calidad: validar antes de publicar
 
 1. Capa de validación entre la IA y el canal (unidades, listas de opciones, obligatorios, longitudes) y reparación con el mensaje de error del canal, un reintento.

@@ -20,6 +20,7 @@
     "migration:revert": "npm run typeorm -- migration:revert",
     "credentials:check": "ts-node -r tsconfig-paths/register src/scripts/encrypt-credentials.ts --check",
     "credentials:encrypt": "ts-node -r tsconfig-paths/register src/scripts/encrypt-credentials.ts",
+    "simular:carga": "ts-node -r tsconfig-paths/register src/scripts/simular-carga.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
