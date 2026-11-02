@@ -132,3 +132,81 @@ describe('registro de ventas de canales no conectados', () => {
         expect(ordenes).toHaveLength(1);
     });
 });
+
+describe('editar y eliminar ventas manuales', () => {
+    const uuid = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`;
+    const construirConId = () => {
+        const base = construir();
+        const repo: any = (base.servicio as any).orders;
+        repo.save = jest.fn(async (o: any) => { o.id = uuid(base.ordenes.length + 1); base.ordenes.push(o); return o; });
+        repo.findOne = jest.fn(async ({ where }: any) => base.ordenes.find((o: any) => (where.id ? o.id === where.id : o.marketplace === where.marketplace && o.externalId === where.externalId)) ?? null);
+        repo.delete = jest.fn(async (id: string) => { const i = base.ordenes.findIndex((o: any) => o.id === id); if (i >= 0) base.ordenes.splice(i, 1); });
+        return base;
+    };
+    const filas = (extra: any = {}) => [{ numero_pedido: 'R-1', fecha: '2026-10-25', canal: 'Ripley', sku: 'SKU-1', cantidad: 2, precio_unitario: 50, ...extra }];
+
+    it('al editar se devuelve el stock anterior y se descuenta el nuevo, y la venta cambia de datos', async () => {
+        const { servicio, ordenes, producto } = construirConId();
+        await servicio.registrar(scope, venta(filas()));
+        expect(producto.stock).toBe(3);
+
+        await servicio.editar(scope, ordenes[0].id, filas({ cantidad: 1, precio_unitario: 80, cliente: 'Luis', estado: 'enviado' }));
+
+        expect(producto.stock).toBe(4);
+        expect(ordenes).toHaveLength(1);
+        expect(ordenes[0]).toMatchObject({ productsAmount: 80, totalAmount: 80, customerName: 'Luis', saleState: 'enviado', externalId: 'MAN-ripley-R-1' });
+        expect(ordenes[0].items[0]).toMatchObject({ quantity: 1, unitPrice: 80, stockBefore: 5, stockAfter: 4 });
+    });
+
+    it('pasar una venta a cancelada devuelve el stock y ya no lo descuenta', async () => {
+        const { servicio, ordenes, producto } = construirConId();
+        await servicio.registrar(scope, venta(filas()));
+        await servicio.editar(scope, ordenes[0].id, filas({ estado: 'cancelado' }));
+        expect(producto.stock).toBe(5);
+        expect(ordenes[0].saleState).toBe('cancelado');
+    });
+
+    it('una edición con error no toca el stock ni la venta', async () => {
+        const { servicio, ordenes, producto } = construirConId();
+        await servicio.registrar(scope, venta(filas()));
+        await expect(servicio.editar(scope, ordenes[0].id, filas({ sku: 'NO-EXISTE' }))).rejects.toThrow('no está en el catálogo');
+        await expect(servicio.editar(scope, ordenes[0].id, filas({ precio_unitario: 'mucho' }))).rejects.toThrow('precio_unitario');
+        expect(producto.stock).toBe(3);
+        expect(ordenes[0].items[0]).toMatchObject({ sku: 'SKU-1', quantity: 2 });
+    });
+
+    it('cambiar el número a uno que ya existe en el canal se rechaza; el propio número no choca consigo mismo', async () => {
+        const { servicio, ordenes } = construirConId();
+        await servicio.registrar(scope, venta(filas()));
+        await servicio.registrar(scope, venta(filas({ numero_pedido: 'R-2' })));
+        await expect(servicio.editar(scope, ordenes[1].id, filas({ numero_pedido: 'R-1' }))).rejects.toThrow('ya está registrado');
+        await expect(servicio.editar(scope, ordenes[1].id, filas({ numero_pedido: 'R-2', cliente: 'Ana' }))).resolves.toBeDefined();
+    });
+
+    it('solo se editan y eliminan las ventas manuales: una que trajo un canal se rechaza', async () => {
+        const { servicio, ordenes } = construirConId();
+        ordenes.push({ id: uuid(99), marketplace: 'falabella', externalId: '100', details: { shipping: {} }, items: [] });
+        await expect(servicio.editar(scope, uuid(99), filas())).rejects.toThrow('Solo se pueden editar');
+        await expect(servicio.eliminar(scope, uuid(99))).rejects.toThrow('Solo se pueden editar');
+        await expect(servicio.eliminar(scope, 'no-es-un-id')).rejects.toThrow('Venta no encontrada');
+        expect(ordenes).toHaveLength(1);
+    });
+
+    it('eliminar borra la venta y devuelve el stock que había descontado', async () => {
+        const { servicio, ordenes, producto, trabajos } = construirConId();
+        await servicio.registrar(scope, venta(filas()));
+        expect(producto.stock).toBe(3);
+        trabajos.length = 0;
+        await expect(servicio.eliminar(scope, ordenes[0].id)).resolves.toEqual({ eliminada: true });
+        expect(ordenes).toHaveLength(0);
+        expect(producto.stock).toBe(5);
+        expect(trabajos).toEqual([{ n: 'inventory', d: { productId: 'p1', userId: 'u1', marketplace: 'falabella', connectionId: 'c9' } }]);
+    });
+
+    it('una venta registrada sin descontar stock no devuelve nada al eliminarla', async () => {
+        const { servicio, ordenes, producto } = construirConId();
+        await servicio.registrar(scope, venta(filas({ descontar_stock: 'NO' })));
+        await servicio.eliminar(scope, ordenes[0].id);
+        expect(producto.stock).toBe(5);
+    });
+});

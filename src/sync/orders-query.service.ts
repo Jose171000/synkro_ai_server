@@ -59,6 +59,33 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
     }));
 }
 
+/** Lo que el formulario necesita para editar una venta manual, en el mismo formato con que se registró. */
+export function datosParaEditar(o: any, lines: any[]) {
+    const d = o.details ?? {};
+    return {
+        canal: o.marketplace,
+        // Fecha de la venta en Lima: se guarda a mediodía de ese día.
+        fecha: new Date(new Date(o.orderDate).getTime() - 5 * 3600_000).toISOString().slice(0, 10),
+        numeroPedido: o.orderNumber ?? '',
+        estado: o.saleState,
+        envio: Number(d.shippingAmount ?? 0),
+        cliente: o.customerName ?? '',
+        telefono: d.customer?.phone ?? '',
+        documento: d.customer?.document ?? '',
+        direccion: d.shipping?.address?.line ?? '',
+        notas: d.notes ?? '',
+        moneda: o.currency,
+        lineas: lines.map(l => ({
+            sku: l.sku ?? '',
+            cantidad: Number(l.quantity ?? 1),
+            precio: Number(l.unitPrice ?? 0),
+            // Si la venta descontó stock, esa línea tiene «stock antes» anotado.
+            descontar: l.stockBefore != null,
+            producto: { sku: l.sku ?? '', name: l.productName || l.title, variant: l.variant ?? null, price: Number(l.unitPrice ?? 0), stock: l.currentStock ?? 0, imageUrl: l.imageUrl ?? null },
+        })),
+    };
+}
+
 /** Estados pedidos en la consulta, sin repetidos y solo los que existen. */
 export function estadosPedidos(texto?: string): EstadoDeVenta[] {
     const pedidos = String(texto ?? '').toLowerCase().split(',').map(e => e.trim());
@@ -250,6 +277,8 @@ export class OrdersQueryService {
                 : null,
             orderDate: o.orderDate,
             status: o.status,
+            /** Registrada a mano o desde Excel: es la única que se puede editar o eliminar. */
+            manual: !!(o.details as any)?.manual,
             saleState: o.saleState,
             customerName: o.customerName,
             shipByDate: o.shipByDate,
@@ -259,6 +288,8 @@ export class OrdersQueryService {
             shipping: visibles ? { status: visibles.shipping.status, method: visibles.shipping.method } : null,
             lines,
             ...(conDetalle ? { details: visibles } : {}),
+            // Solo quien puede editarla recibe los datos para precargar el formulario.
+            ...(conDetalle && role === 'owner' && (o.details as any)?.manual ? { manualEdit: datosParaEditar(o, lines) } : {}),
         };
     }
 }

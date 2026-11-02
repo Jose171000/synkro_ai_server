@@ -206,3 +206,28 @@ describe('quién ve los datos de contacto', () => {
         await expect(construir().service.detail('t1', 'owner', 'no-es-un-id')).rejects.toBeInstanceOf(NotFoundException);
     });
 });
+
+describe('ventas manuales en la consulta', () => {
+    const manual = { ...ORDEN, marketplace: 'ripley', saleState: 'enviado', orderNumber: 'R-1', details: { ...ORDEN.details, manual: true, shippingAmount: 12, notes: 'regalo' } };
+
+    it('se marcan como manuales y quien es dueño recibe lo necesario para editarlas', async () => {
+        const { service } = construir([manual]);
+        const lista = await service.list('t1', 'owner', {});
+        expect(lista.items[0].manual).toBe(true);
+        const d: any = await service.detail('t1', 'owner', ORDEN.id);
+        expect(d.manualEdit).toMatchObject({ canal: 'ripley', fecha: '2026-10-09', numeroPedido: 'R-1', estado: 'enviado', envio: 12, cliente: 'Lucía Paredes', telefono: '999', notas: 'regalo' });
+        expect(d.manualEdit.lineas[0]).toMatchObject({ sku: 'GAF-01', cantidad: 1, precio: 149.9, descontar: true });
+        expect(d.manualEdit.lineas[1]).toMatchObject({ sku: 'SIN-CATALOGO', descontar: false });
+    });
+
+    it('quien solo lee no recibe los datos de edición, y una venta de un canal no es manual', async () => {
+        const { service } = construir([manual]);
+        const d: any = await service.detail('t1', 'viewer', ORDEN.id);
+        expect(d.manualEdit).toBeUndefined();
+        const normal = construir([ORDEN]);
+        const lista = await normal.service.list('t1', 'owner', {});
+        expect(lista.items[0].manual).toBe(false);
+        const dn: any = await normal.service.detail('t1', 'owner', ORDEN.id);
+        expect(dn.manualEdit).toBeUndefined();
+    });
+});

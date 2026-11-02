@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -95,26 +95,54 @@ export class ManualSalesService {
 
     /** Devuelve el motivo si no se registró. */
     private async registrarUna(scope: { userId: string; storeId: string }, v: VentaManual): Promise<string | null> {
-        if (!v.lineas.length) return 'no tiene productos.';
+        const prep = await this.prepararVenta(scope, v);
+        if ('motivo' in prep) return prep.motivo;
+        const guardada = await this.orders.save(this.orders.create({
+            ...prep.campos,
+            owner: { id: scope.userId } as any,
+            store: { id: scope.storeId } as any,
+            connection: null,
+        }));
+        if (this.cuenta(v)) await this.descontarStock(scope, guardada, prep.lineas, v.lineas);
+        return null;
+    }
+
+    /** Una venta cancelada o devuelta no es venta: no descuenta stock. */
+    private cuenta(v: VentaManual) {
+        return v.estado !== 'cancelado' && v.estado !== 'devuelto';
+    }
+
+    private async canalConectado(scope: { storeId: string }, canal: string): Promise<boolean> {
+        if (!CANALES_CONECTABLES.includes(canal)) return false;
+        return (await this.connections.find({ where: { store: { id: scope.storeId }, status: 'active' } })).some(c => c.marketplace === canal);
+    }
+
+    /**
+     * Valida la venta y arma todo lo que se guarda, sin guardar nada. `propia` es la venta que se está editando: su número
+     * de pedido no cuenta como repetido contra sí misma.
+     */
+    private async prepararVenta(scope: { userId: string; storeId: string }, v: VentaManual, propia?: MarketplaceOrder): Promise<{ motivo: string } | { campos: Partial<MarketplaceOrder>; lineas: OrderLine[] }> {
+        if (!v.lineas.length) return { motivo: 'no tiene productos.' };
         // Una venta con fecha de mañana no aparecería en las listas hasta entonces: se pide corregirla.
-        if (v.fecha && v.fecha > hoyEnLima()) return `la fecha ${v.fecha} es futura; usa hoy (${hoyEnLima()}) o una anterior.`;
-        const externalId = v.numeroPedido ? `MAN-${v.canal}-${v.numeroPedido}` : `MAN-${v.canal}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
-        if (v.numeroPedido && await this.orders.findOne({ where: { marketplace: v.canal, externalId } })) return 'ya está registrado.';
+        if (v.fecha && v.fecha > hoyEnLima()) return { motivo: `la fecha ${v.fecha} es futura; usa hoy (${hoyEnLima()}) o una anterior.` };
+        const externalId = v.numeroPedido
+            ? `MAN-${v.canal}-${v.numeroPedido}`
+            : (propia?.externalId ?? `MAN-${v.canal}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`);
+        if (v.numeroPedido) {
+            const otra = await this.orders.findOne({ where: { marketplace: v.canal, externalId } });
+            if (otra && otra.id !== propia?.id) return { motivo: 'ya está registrado.' };
+        }
 
         const armadas = await this.armarLineas(scope, v.lineas);
-        if ('motivo' in armadas) return armadas.motivo;
+        if ('motivo' in armadas) return armadas;
         const lineas = armadas.lineas;
-        const cuenta = v.estado !== 'cancelado' && v.estado !== 'devuelto';
         const productos = lineas.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
         const redondo = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
         const iso = v.fecha ?? hoyEnLima();
 
-        const guardada = await this.orders.save(this.orders.create({
+        const campos: Partial<MarketplaceOrder> = {
             marketplace: v.canal,
             externalId,
-            owner: { id: scope.userId } as any,
-            store: { id: scope.storeId } as any,
-            connection: null,
             totalAmount: redondo(productos + v.envio),
             productsAmount: redondo(productos),
             currency: v.moneda,
@@ -139,10 +167,47 @@ export class ManualSalesService {
             } as any,
             // Mediodía de Lima: el día no cambia con el huso horario al mostrarlo ni al agrupar por día.
             orderDate: new Date(`${iso}T12:00:00-05:00`),
-        }));
+        };
+        return { campos, lineas };
+    }
 
-        if (cuenta) await this.descontarStock(scope, guardada, lineas, v.lineas);
-        return null;
+    /** La venta, solo si es de la tienda y se registró a mano (o desde el Excel): las que traen los canales no se tocan. */
+    private async laManual(scope: { storeId: string }, id: string): Promise<MarketplaceOrder> {
+        if (!/^[0-9a-f-]{36}$/i.test(String(id))) throw new NotFoundException('Venta no encontrada');
+        const orden = await this.orders.findOne({ where: { id, store: { id: scope.storeId } } });
+        if (!orden) throw new NotFoundException('Venta no encontrada');
+        if (!(orden.details as any)?.manual) throw new BadRequestException('Solo se pueden editar o eliminar las ventas registradas a mano o desde Excel.');
+        return orden;
+    }
+
+    /**
+     * Cambia una venta manual. `filas` trae lo mismo que al registrarla (todas las filas son productos de ESTA venta).
+     * El stock que descontó se devuelve y se descuenta de nuevo con los datos nuevos.
+     */
+    async editar(scope: { userId: string; storeId: string }, id: string, filas: Record<string, any>[]): Promise<ResultadoManual> {
+        if (!Array.isArray(filas) || !filas.length) throw new BadRequestException('Falta la venta: envía al menos un producto en filas.');
+        const orden = await this.laManual(scope, id);
+        const { ventas, errores } = ventasDeFilas(filas.map(f => ({ ...f, numero_pedido: '__una_sola_venta__' })));
+        if (errores.length || ventas.length !== 1) throw new BadRequestException(errores.join(' ') || 'La venta no es válida.');
+        const v = ventas[0];
+        v.numeroPedido = String(filas[0].numero_pedido ?? '').trim() || null;
+        if (await this.canalConectado(scope, v.canal)) throw new BadRequestException(`${nombreDeCanalManual(v.canal)} está conectado, sus ventas entran solas.`);
+
+        const prep = await this.prepararVenta(scope, v, orden);
+        if ('motivo' in prep) throw new BadRequestException(prep.motivo);
+        // Solo con todo validado se toca el stock: un error no deja la venta a medias.
+        await this.reponerStock(scope, orden.items as OrderLine[]);
+        await this.orders.update(orden.id, prep.campos as any);
+        if (this.cuenta(v)) await this.descontarStock(scope, orden, prep.lineas, v.lineas);
+        return { registradas: 1, rechazadas: [] };
+    }
+
+    /** Borra una venta manual y devuelve al stock lo que había descontado. */
+    async eliminar(scope: { userId: string; storeId: string }, id: string): Promise<{ eliminada: boolean }> {
+        const orden = await this.laManual(scope, id);
+        await this.reponerStock(scope, orden.items as OrderLine[]);
+        await this.orders.delete(orden.id);
+        return { eliminada: true };
     }
 
     /**
@@ -173,26 +238,40 @@ export class ManualSalesService {
         return { lineas };
     }
 
-    /** Baja el stock de lo vendido (las líneas que lo piden y están en el catálogo) y avisa a los canales conectados. */
+    /** Mueve el stock de un producto y avisa a los canales conectados donde está publicado. Devuelve el stock de antes y de después. */
+    private async moverStock(scope: { userId: string }, productId: string, delta: number): Promise<{ antes: number; despues: number } | null> {
+        const producto = await this.products.findOne({ where: { id: productId } });
+        if (!producto) return null;
+        const antes = producto.stock;
+        producto.stock = Math.max(0, antes + delta);
+        await this.products.save(producto);
+        const enlaces = await this.links.find({ where: { product: { id: producto.id }, syncStatus: In(['published', 'paused']) }, relations: { connection: true } });
+        for (const e of enlaces) {
+            if (!e.connection) continue;
+            await this.syncQueue.add('inventory', { productId: producto.id, userId: scope.userId, marketplace: e.marketplace, connectionId: e.connection.id });
+        }
+        return { antes, despues: producto.stock };
+    }
+
+    /** Baja el stock de lo vendido (las líneas que lo piden y están en el catálogo). */
     private async descontarStock(scope: { userId: string; storeId: string }, orden: MarketplaceOrder, lineas: OrderLine[], entrada: LineaManual[]) {
         let cambio = false;
         for (let i = 0; i < lineas.length; i++) {
             const l = lineas[i];
             if (!entrada[i].descontarStock || !l.productId) continue;
-            const producto = await this.products.findOne({ where: { id: l.productId } });
-            if (!producto) continue;
-            const antes = producto.stock;
-            producto.stock = Math.max(0, antes - l.quantity);
-            await this.products.save(producto);
-            lineas[i] = { ...l, stockBefore: antes, stockAfter: producto.stock };
+            const r = await this.moverStock(scope, l.productId, -l.quantity);
+            if (!r) continue;
+            lineas[i] = { ...l, stockBefore: r.antes, stockAfter: r.despues };
             cambio = true;
-
-            const enlaces = await this.links.find({ where: { product: { id: producto.id }, syncStatus: In(['published', 'paused']) }, relations: { connection: true } });
-            for (const e of enlaces) {
-                if (!e.connection) continue;
-                await this.syncQueue.add('inventory', { productId: producto.id, userId: scope.userId, marketplace: e.marketplace, connectionId: e.connection.id });
-            }
         }
         if (cambio) await this.orders.update(orden.id, { items: lineas as any });
+    }
+
+    /** Devuelve al stock lo que esta venta había descontado (las líneas con «stock antes» anotado). */
+    private async reponerStock(scope: { userId: string }, items: OrderLine[] | null) {
+        for (const l of items ?? []) {
+            if (!l?.productId || l.stockBefore == null) continue;
+            await this.moverStock(scope, l.productId, Number(l.quantity) || 0);
+        }
     }
 }

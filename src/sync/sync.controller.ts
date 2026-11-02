@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
@@ -698,6 +698,27 @@ export class SyncController {
     @ApiQuery({ name: 'search', required: true })
     searchManualSaleProducts(@Req() req, @Query('search') search?: string) {
         return this.manualSales.buscarProductos(scopeOf(req), search ?? '');
+    }
+
+    @Put('orders/manual/:id')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({
+        summary: 'Edita una venta registrada a mano o desde Excel',
+        description: 'Body: { filas: [...] } con las columnas de la plantilla; todas las filas son productos de esta venta. Devuelve el stock anterior y descuenta el nuevo. Las ventas que traen los canales no se pueden editar.',
+    })
+    editManualSale(@Req() req, @Param('id') id: string, @Body() body: { filas?: Record<string, any>[] }) {
+        return this.manualSales.editar(scopeOf(req), id, Array.isArray(body?.filas) ? body.filas : []);
+    }
+
+    @Delete('orders/manual/:id')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Elimina una venta registrada a mano o desde Excel y devuelve al stock lo que descontó' })
+    deleteManualSale(@Req() req, @Param('id') id: string) {
+        return this.manualSales.eliminar(scopeOf(req), id);
     }
 
     @Get('orders/manual/template')
