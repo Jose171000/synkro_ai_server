@@ -27,6 +27,38 @@ export interface OrderLineView extends OrderLine {
     productName: string | null;
 }
 
+/** Una fila por producto vendido de una venta: lo que se descarga en Excel. El envío cobrado va en la primera fila de cada venta. */
+export function filasDeExportacion(v: any): Record<string, string | number>[] {
+    const fecha = v.orderDate ? new Date(v.orderDate).toISOString().slice(0, 10) : '';
+    const limite = v.shipByDate ? new Date(v.shipByDate).toISOString().slice(0, 10) : '';
+    const d = v.details;
+    const lineas: any[] = v.lines?.length ? v.lines : [{ sku: null, title: 'Sin detalle de productos', quantity: 1, unitPrice: v.totalAmount }];
+    return lineas.map((l, i) => ({
+        fecha,
+        canal: v.marketplace,
+        cuenta: v.account?.label ?? '',
+        numero_pedido: v.orderNumber ?? '',
+        estado: v.saleState ?? '',
+        estado_en_el_canal: v.status ?? '',
+        cliente: v.customerName ?? '',
+        telefono: d?.customer?.phone ?? '',
+        documento: d?.customer?.document ?? '',
+        direccion: d?.shipping?.address?.line ?? '',
+        sku: l.sku ?? '',
+        producto: l.productName || l.title || '',
+        variante: l.variant ?? '',
+        cantidad: Number(l.quantity ?? 1),
+        precio_unitario: Number(l.unitPrice ?? 0),
+        importe_productos: Math.round(Number(l.quantity ?? 1) * Number(l.unitPrice ?? 0) * 100) / 100,
+        envio_cobrado: i === 0 ? Number(d?.shippingAmount ?? 0) : 0,
+        total_del_pedido: i === 0 ? Number(v.totalAmount ?? 0) : 0,
+        moneda: v.currency ?? '',
+        enviar_antes_de: limite,
+        stock_tras_la_venta: l.stockAfter ?? '',
+        stock_actual: l.currentStock ?? '',
+    }));
+}
+
 /** Estados pedidos en la consulta, sin repetidos y solo los que existen. */
 export function estadosPedidos(texto?: string): EstadoDeVenta[] {
     const pedidos = String(texto ?? '').toLowerCase().split(',').map(e => e.trim());
@@ -35,6 +67,8 @@ export function estadosPedidos(texto?: string): EstadoDeVenta[] {
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_LIMITE = 200;
+/** Tope de ventas por descarga. */
+const MAX_EXPORTADAS = 5000;
 
 /**
  * Lectura de las ventas de una tienda para la pantalla «Ventas»: cada venta
@@ -52,15 +86,14 @@ export class OrdersQueryService {
         @InjectRepository(ListingLink) private readonly links: Repository<ListingLink>,
     ) { }
 
-    async list(storeId: string, role: StoreRole, query: OrdersQuery) {
+    /** Las ventas de la tienda con los filtros de la pantalla (fechas, canal, cuenta, búsqueda), sin el de estado. */
+    private filtrar(storeId: string, query: OrdersQuery) {
         const hoy = new Date();
         const hasta = query.to ?? new Date(hoy.getTime() + 86_400_000).toISOString().slice(0, 10);
         const desde = query.from ?? new Date(hoy.getTime() - 29 * 86_400_000).toISOString().slice(0, 10);
         if (!FECHA.test(desde) || !FECHA.test(hasta)) {
             throw new BadRequestException('Las fechas deben tener el formato AAAA-MM-DD.');
         }
-        const limit = Math.min(Math.max(Number(query.limit) || 50, 1), MAX_LIMITE);
-        const offset = Math.max(Number(query.offset) || 0, 0);
 
         const qb = this.orders.createQueryBuilder('o')
             .leftJoinAndSelect('o.connection', 'c')
@@ -80,6 +113,13 @@ export class OrdersQueryService {
                 { q: `%${texto.replace(/[%_]/g, m => `\\${m}`)}%` },
             );
         }
+        return { qb, desde, hasta };
+    }
+
+    async list(storeId: string, role: StoreRole, query: OrdersQuery) {
+        const limit = Math.min(Math.max(Number(query.limit) || 50, 1), MAX_LIMITE);
+        const offset = Math.max(Number(query.offset) || 0, 0);
+        const { qb } = this.filtrar(storeId, query);
 
         // Cuántas ventas hay en cada estado con los demás filtros puestos (para mostrar el número en cada opción).
         const porEstado: Record<string, number> = Object.fromEntries(ESTADOS_DE_VENTA.map(e => [e, 0]));
@@ -104,6 +144,22 @@ export class OrdersQueryService {
             porEstado,
             items: filas.map(o => this.aVista(o, vista, role, false)),
         };
+    }
+
+    /**
+     * Las ventas que coinciden con los filtros, listas para descargar: una fila por producto vendido. Quien solo tiene
+     * lectura no recibe los datos de contacto de quien compró. Con un tope, para no armar un archivo gigante.
+     */
+    async exportar(storeId: string, role: StoreRole, query: OrdersQuery): Promise<{ filas: Record<string, string | number>[]; ventas: number; incompleto: boolean }> {
+        const { qb } = this.filtrar(storeId, query);
+        const estados = estadosPedidos(query.status);
+        if (estados.length) qb.andWhere('o."saleState" IN (:...estados)', { estados });
+        const todas = await qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.id', 'ASC').take(MAX_EXPORTADAS + 1).getMany();
+        const incompleto = todas.length > MAX_EXPORTADAS;
+        const filasDb = todas.slice(0, MAX_EXPORTADAS);
+        const vista = await this.enriquecer(storeId, filasDb);
+        const filas = filasDb.flatMap(o => filasDeExportacion(this.aVista(o, vista, role, true)));
+        return { filas, ventas: filasDb.length, incompleto };
     }
 
     async detail(storeId: string, role: StoreRole, id: string) {

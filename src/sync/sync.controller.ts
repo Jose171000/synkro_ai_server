@@ -32,6 +32,7 @@ import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
 import { plantillaDeVentas, ventasDeFilas } from './ventas-manuales';
+import { escribirHoja } from '../common/excel/excel';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
@@ -650,6 +651,43 @@ export class SyncController {
             limit: limit ? Number(limit) : undefined,
             offset: offset ? Number(offset) : undefined,
         });
+    }
+
+    @Get('orders/export')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('viewer')
+    @ApiOperation({
+        summary: 'Descarga en Excel las ventas que coinciden con los filtros',
+        description: 'Los mismos filtros que GET /sync/orders (fechas, canal, cuenta, búsqueda y estado). Una fila por producto vendido, hasta 5000 ventas. Quien solo tiene lectura no recibe los datos de contacto del comprador.',
+    })
+    @ApiQuery({ name: 'from', required: false })
+    @ApiQuery({ name: 'to', required: false })
+    @ApiQuery({ name: 'marketplace', required: false })
+    @ApiQuery({ name: 'connectionId', required: false })
+    @ApiQuery({ name: 'search', required: false })
+    @ApiQuery({ name: 'status', required: false })
+    async exportOrders(
+        @Req() req,
+        @Res() res: Response,
+        @Query('from') from?: string,
+        @Query('to') to?: string,
+        @Query('marketplace') marketplace?: string,
+        @Query('connectionId') connectionId?: string,
+        @Query('search') search?: string,
+        @Query('status') status?: string,
+    ) {
+        const r = await this.ordersQuery.exportar(scopeOf(req).storeId, req.store.role, { from, to, marketplace, connectionId, search, status });
+        const buffer = await escribirHoja(r.filas, 'Ventas');
+        // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="ventas-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+            'X-Ventas': String(r.ventas),
+            'X-Incompleto': r.incompleto ? '1' : '0',
+            'Access-Control-Expose-Headers': 'X-Ventas, X-Incompleto, Content-Disposition',
+        });
+        return res.send(buffer);
     }
 
     @Get('orders/manual/template')

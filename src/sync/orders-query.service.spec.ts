@@ -33,6 +33,7 @@ function construir(ordenes: any[] = [ORDEN]) {
         andWhere: jest.fn((w: string, p: any) => { llamadas.where.push(w); llamadas.params.push(p); return qb; }),
         orderBy: jest.fn(() => qb), addOrderBy: jest.fn(() => qb), take: jest.fn(() => qb), skip: jest.fn(() => qb),
         getManyAndCount: jest.fn(async () => [ordenes, ordenes.length]),
+        getMany: jest.fn(async () => ordenes),
         getOne: jest.fn(async () => ordenes[0] ?? null),
         clone: jest.fn(() => qb), select: jest.fn(() => qb), groupBy: jest.fn(() => qb),
         getRawMany: jest.fn(async () => [{ estado: 'pendiente', n: '3' }, { estado: 'enviado', n: '2' }]),
@@ -45,6 +46,35 @@ function construir(ordenes: any[] = [ORDEN]) {
     const service = new OrdersQueryService(repoOrdenes as any, repoProductos as any, repoEnlaces as any);
     return { service, qb, llamadas, repoProductos, repoEnlaces };
 }
+
+describe('descarga de las ventas filtradas', () => {
+    it('da una fila por producto vendido, con el envío solo en la primera, y aplica los mismos filtros', async () => {
+        const { service, llamadas } = construir([{ ...ORDEN, saleState: 'enviado', details: { ...ORDEN.details, shippingAmount: 12 } }]);
+        const r = await service.exportar('t1', 'owner', { status: 'enviado', marketplace: 'falabella', search: 'gafas' });
+        expect(r).toMatchObject({ ventas: 1, incompleto: false });
+        expect(r.filas).toHaveLength(2);
+        expect(r.filas[0]).toMatchObject({ canal: 'falabella', numero_pedido: '7001', estado: 'enviado', cliente: 'Lucía Paredes', telefono: '999', sku: 'GAF-01', producto: 'Gafas de sol', cantidad: 1, precio_unitario: 149.9, envio_cobrado: 12, total_del_pedido: 149.9, fecha: '2026-10-09' });
+        expect(r.filas[1]).toMatchObject({ sku: 'SIN-CATALOGO', envio_cobrado: 0, total_del_pedido: 0 });
+        expect(llamadas.where.some(w => w.includes('saleState" IN'))).toBe(true);
+        expect(llamadas.where.some(w => w.includes('o.marketplace'))).toBe(true);
+        expect(llamadas.where.some(w => w.includes('ILIKE'))).toBe(true);
+    });
+
+    it('quien solo tiene lectura no recibe teléfono, documento ni dirección', async () => {
+        const { service } = construir();
+        const r = await service.exportar('t1', 'viewer', {});
+        expect(r.filas[0]).toMatchObject({ telefono: '', documento: '', direccion: '' });
+        expect(r.filas[0].cliente).toBe('Lucía Paredes');
+    });
+
+    it('avisa si hay más ventas que el tope de la descarga', async () => {
+        const muchas = Array.from({ length: 5001 }, (_, i) => ({ ...ORDEN, id: String(i) }));
+        const { service } = construir(muchas);
+        const r = await service.exportar('t1', 'owner', {});
+        expect(r.incompleto).toBe(true);
+        expect(r.ventas).toBe(5000);
+    });
+});
 
 describe('variante de cada línea', () => {
     it('muestra la variante del catálogo para cada SKU, aunque el canal use el mismo nombre para todas', async () => {
