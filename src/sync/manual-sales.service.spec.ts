@@ -56,11 +56,36 @@ describe('registro de ventas de canales no conectados', () => {
         expect(trabajos).toHaveLength(0);
     });
 
-    it('un producto que no está en el catálogo se registra con su nombre y sin tocar stock', async () => {
+    it('un SKU que no está en el catálogo se rechaza: el producto se identifica solo por su SKU', async () => {
         const { servicio, ordenes } = construir({ productos: [] });
-        const r = await servicio.registrar(scope, venta([{ canal: 'WhatsApp', producto: 'Cosa suelta', precio_unitario: 20 }]));
+        const r = await servicio.registrar(scope, venta([{ canal: 'WhatsApp', sku: 'NO-EXISTE', precio_unitario: 20 }]));
+        expect(r.registradas).toBe(0);
+        expect(r.rechazadas[0]).toContain('el SKU NO-EXISTE no está en el catálogo');
+        expect(ordenes).toHaveLength(0);
+    });
+
+    it('sin precio escrito se usa el del catálogo, el SKU no distingue mayúsculas y la variante queda en la línea', async () => {
+        const { servicio, ordenes } = construir({ productos: [{ id: 'p1', sku: 'ALM-01', name: 'Almohada', stock: 9, price: 79.9, variantValues: { Tamaño: 'King' } }] });
+        const r = await servicio.registrar(scope, venta([{ canal: 'Ripley', sku: 'alm-01', cantidad: 2 }]));
         expect(r.registradas).toBe(1);
-        expect(ordenes[0].items[0]).toMatchObject({ sku: null, title: 'Cosa suelta', productId: null });
+        expect(ordenes[0].items[0]).toMatchObject({ sku: 'ALM-01', title: 'Almohada', unitPrice: 79.9, variant: 'Tamaño: King' });
+        expect(ordenes[0].productsAmount).toBe(159.8);
+    });
+
+    it('un producto sin precio en el catálogo pide escribir el precio', async () => {
+        const { servicio } = construir({ productos: [{ id: 'p1', sku: 'ALM-01', name: 'Almohada', stock: 9, price: null }] });
+        const r = await servicio.registrar(scope, venta([{ canal: 'Ripley', sku: 'ALM-01' }]));
+        expect(r.registradas).toBe(0);
+        expect(r.rechazadas[0]).toContain('no tiene precio en el catálogo');
+    });
+
+    it('el buscador encuentra por SKU o por nombre y devuelve lo necesario para elegir', async () => {
+        const { servicio } = construir();
+        const qb: any = { where: () => qb, andWhere: () => qb, orderBy: () => qb, addOrderBy: () => qb, setParameter: () => qb, take: () => qb,
+            getMany: async () => [{ sku: 'ALM-01', name: 'Almohada', price: '79.90', stock: 9, variantValues: { Tamaño: 'King' }, images: [{ url: 'http://x/a.jpg' }] }] };
+        (servicio as any).products.createQueryBuilder = () => qb;
+        expect(await servicio.buscarProductos(scope, 'alm')).toEqual([{ sku: 'ALM-01', name: 'Almohada', variant: 'Tamaño: King', price: 79.9, stock: 9, imageUrl: 'http://x/a.jpg' }]);
+        expect(await servicio.buscarProductos(scope, '  ')).toEqual([]);
     });
 
     it('el mismo número de pedido en el mismo canal no se registra dos veces', async () => {
@@ -71,6 +96,18 @@ describe('registro de ventas de canales no conectados', () => {
         expect(r).toEqual({ registradas: 0, rechazadas: ['Pedido R-1: ya está registrado.'] });
         expect(ordenes).toHaveLength(1);
         expect(producto.stock).toBe(4);
+    });
+
+    it('una fecha futura se rechaza (no aparecería en las listas) y la de hoy en Lima sí se acepta', async () => {
+        const { servicio, ordenes } = construir();
+        const mañana = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+        const rechazada = await servicio.registrar(scope, venta([{ canal: 'Ripley', sku: 'SKU-1', precio_unitario: 5, fecha: mañana }]));
+        expect(rechazada.registradas).toBe(0);
+        expect(rechazada.rechazadas[0]).toContain('es futura');
+        const hoyLima = new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
+        const aceptada = await servicio.registrar(scope, venta([{ canal: 'Ripley', sku: 'SKU-1', precio_unitario: 5, fecha: hoyLima }]));
+        expect(aceptada.registradas).toBe(1);
+        expect(ordenes).toHaveLength(1);
     });
 
     it('un canal que la tienda tiene conectado se rechaza: sus ventas entran solas', async () => {

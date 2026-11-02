@@ -690,6 +690,16 @@ export class SyncController {
         return res.send(buffer);
     }
 
+    @Get('orders/manual/products')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequireStoreRole('owner')
+    @ApiOperation({ summary: 'Busca productos del catálogo por SKU o nombre para elegir el de una venta manual' })
+    @ApiQuery({ name: 'search', required: true })
+    searchManualSaleProducts(@Req() req, @Query('search') search?: string) {
+        return this.manualSales.buscarProductos(scopeOf(req), search ?? '');
+    }
+
     @Get('orders/manual/template')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

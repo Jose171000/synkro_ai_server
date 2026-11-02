@@ -2,14 +2,16 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { In, IsNull, Repository } from 'typeorm';
+import { In, IsNull, Raw, Repository } from 'typeorm';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { Product } from '../products/entities/product.entity';
 import { LineaManual, VentaManual, nombreDeCanalManual, ventasDeFilas } from './ventas-manuales';
+import { textoDeValores } from './order-details';
 import { OrderLine } from './order-details';
 import { leerPrimeraHoja } from '../common/excel/excel';
+import { hoyEnLima } from '../admin/plan-comercial';
 
 export interface ResultadoManual {
     registradas: number;
@@ -34,6 +36,29 @@ export class ManualSalesService {
         @InjectQueue('marketplace-sync-queue') private readonly syncQueue: Queue,
     ) { }
 
+    /** Productos del catálogo que coinciden con lo escrito (SKU o nombre), para elegir el de la venta. El SKU exacto va primero. */
+    async buscarProductos(scope: { userId: string; storeId: string }, texto: string) {
+        const q = String(texto ?? '').trim();
+        if (!q) return [];
+        const patron = `%${q.replace(/[%_\\]/g, m => `\\${m}`)}%`;
+        const productos = await this.products.createQueryBuilder('p')
+            .where('(p."storeId" = :storeId OR (p."storeId" IS NULL AND p."ownerId" = :userId))', { storeId: scope.storeId, userId: scope.userId })
+            .andWhere('(p.sku ILIKE :patron OR p.name ILIKE :patron)', { patron })
+            .orderBy('(LOWER(p.sku) = LOWER(:exacto))', 'DESC')
+            .addOrderBy('p.sku', 'ASC')
+            .setParameter('exacto', q)
+            .take(8)
+            .getMany();
+        return productos.map(p => ({
+            sku: p.sku,
+            name: p.name,
+            variant: textoDeValores(p.variantValues),
+            price: p.price != null ? Number(p.price) : null,
+            stock: p.stock,
+            imageUrl: p.images?.[0]?.url ?? null,
+        }));
+    }
+
     /** Lee un Excel con la plantilla y registra sus ventas. */
     async importarExcel(scope: { userId: string; storeId: string }, buffer: Buffer): Promise<ResultadoManual> {
         let filas: Record<string, any>[];
@@ -53,7 +78,7 @@ export class ManualSalesService {
         let registradas = 0;
         const rechazadas: string[] = [];
         for (const v of ventas) {
-            const etiqueta = v.numeroPedido ? `Pedido ${v.numeroPedido}` : `Venta de ${v.cliente ?? 'sin cliente'} (${v.lineas[0]?.sku ?? v.lineas[0]?.producto})`;
+            const etiqueta = v.numeroPedido ? `Pedido ${v.numeroPedido}` : `Venta de ${v.cliente ?? 'sin cliente'} (${v.lineas[0]?.sku})`;
             if (CANALES_CONECTABLES.includes(v.canal) && conectados.has(v.canal)) {
                 rechazadas.push(`${etiqueta}: ${nombreDeCanalManual(v.canal)} está conectado, sus ventas entran solas.`);
                 continue;
@@ -71,14 +96,18 @@ export class ManualSalesService {
     /** Devuelve el motivo si no se registró. */
     private async registrarUna(scope: { userId: string; storeId: string }, v: VentaManual): Promise<string | null> {
         if (!v.lineas.length) return 'no tiene productos.';
+        // Una venta con fecha de mañana no aparecería en las listas hasta entonces: se pide corregirla.
+        if (v.fecha && v.fecha > hoyEnLima()) return `la fecha ${v.fecha} es futura; usa hoy (${hoyEnLima()}) o una anterior.`;
         const externalId = v.numeroPedido ? `MAN-${v.canal}-${v.numeroPedido}` : `MAN-${v.canal}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
         if (v.numeroPedido && await this.orders.findOne({ where: { marketplace: v.canal, externalId } })) return 'ya está registrado.';
 
-        const lineas = await this.armarLineas(scope, v.lineas);
+        const armadas = await this.armarLineas(scope, v.lineas);
+        if ('motivo' in armadas) return armadas.motivo;
+        const lineas = armadas.lineas;
         const cuenta = v.estado !== 'cancelado' && v.estado !== 'devuelto';
         const productos = lineas.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
         const redondo = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-        const iso = v.fecha ?? new Date().toISOString().slice(0, 10);
+        const iso = v.fecha ?? hoyEnLima();
 
         const guardada = await this.orders.save(this.orders.create({
             marketplace: v.canal,
@@ -116,23 +145,32 @@ export class ManualSalesService {
         return null;
     }
 
-    /** Cada línea con su producto del catálogo (si lo hay) y el nombre que se mostrará. */
-    private async armarLineas(scope: { userId: string; storeId: string }, entrada: LineaManual[]): Promise<OrderLine[]> {
-        const skus = [...new Set(entrada.map(l => l.sku).filter((s): s is string => !!s))];
-        const productos = skus.length
-            ? await this.products.find({ where: [{ sku: In(skus), store: { id: scope.storeId } }, { sku: In(skus), store: IsNull(), owner: { id: scope.userId } }] })
-            : [];
-        const porSku = new Map(productos.map(p => [p.sku, p]));
-        return entrada.map(l => {
-            const p = l.sku ? porSku.get(l.sku) : undefined;
-            return {
-                sku: l.sku,
-                title: p?.name ?? l.producto ?? l.sku ?? 'Producto',
-                quantity: l.cantidad,
-                unitPrice: l.precioUnitario,
-                productId: p?.id ?? null,
-            };
+    /**
+     * Cada línea con su producto del catálogo, identificado solo por el SKU (sin distinguir mayúsculas). Un SKU que no está
+     * en el catálogo de la tienda impide registrar la venta; sin precio escrito se usa el actual del producto.
+     */
+    private async armarLineas(scope: { userId: string; storeId: string }, entrada: LineaManual[]): Promise<{ lineas: OrderLine[] } | { motivo: string }> {
+        const skus = [...new Set(entrada.map(l => l.sku.toLowerCase()))];
+        const productos = await this.products.find({
+            where: [
+                { sku: Raw(a => `LOWER(${a}) IN (:...skus)`, { skus }), store: { id: scope.storeId } },
+                { sku: Raw(a => `LOWER(${a}) IN (:...skus)`, { skus }), store: IsNull(), owner: { id: scope.userId } },
+            ],
         });
+        const porSku = new Map(productos.map(p => [p.sku.toLowerCase(), p]));
+        const faltan = skus.filter(s => !porSku.has(s));
+        if (faltan.length) {
+            const originales = entrada.filter(l => faltan.includes(l.sku.toLowerCase())).map(l => l.sku);
+            return { motivo: `el SKU ${[...new Set(originales)].join(', ')} no está en el catálogo de la tienda.` };
+        }
+        const lineas: OrderLine[] = [];
+        for (const l of entrada) {
+            const p = porSku.get(l.sku.toLowerCase())!;
+            const precio = l.precioUnitario ?? (p.price != null ? Number(p.price) : null);
+            if (precio === null || !Number.isFinite(precio)) return { motivo: `el SKU ${p.sku} no tiene precio en el catálogo: escribe el precio_unitario.` };
+            lineas.push({ sku: p.sku, title: p.name, quantity: l.cantidad, unitPrice: precio, productId: p.id, variant: textoDeValores(p.variantValues) });
+        }
+        return { lineas };
     }
 
     /** Baja el stock de lo vendido (las líneas que lo piden y están en el catálogo) y avisa a los canales conectados. */

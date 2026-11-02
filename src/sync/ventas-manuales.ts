@@ -18,12 +18,11 @@ export const CANALES_SUGERIDOS = [
 ];
 
 export interface LineaManual {
-    sku: string | null;
-    /** Nombre mostrado cuando el SKU no está en el catálogo. */
-    producto: string | null;
+    /** El producto se identifica solo por su SKU del catálogo de la tienda. */
+    sku: string;
     cantidad: number;
-    /** Lo que pagó el cliente por unidad (sin envío). */
-    precioUnitario: number;
+    /** Lo que pagó el cliente por unidad (sin envío). Sin valor, se usa el precio actual del catálogo. */
+    precioUnitario: number | null;
     descontarStock: boolean;
 }
 
@@ -133,17 +132,18 @@ export function ventasDeFilas(filas: Record<string, any>[]): LecturaDeFilas {
         const falla = (motivo: string) => errores.push(`Fila ${fila}: ${motivo}`);
 
         const sku = texto(f.sku);
-        const producto = texto(f.producto);
-        if (!sku && !producto) return falla('falta el sku (o el nombre del producto).');
-        const precio = numero(f.precio_unitario ?? f.precio);
-        if (precio === null || precio < 0) return falla('el precio_unitario es obligatorio (número, sin envío).');
+        if (!sku) return falla('falta el sku.');
+        const precioCrudo = f.precio_unitario ?? f.precio;
+        const precio = numero(precioCrudo);
+        // Vacío = precio actual del catálogo; si escribió algo, tiene que ser un número válido.
+        if (texto(precioCrudo) !== null && (precio === null || precio < 0)) return falla('el precio_unitario debe ser un número (lo que pagó el cliente por unidad, sin envío).');
         const cantidadCruda = numero(f.cantidad);
         const cantidad = cantidadCruda === null ? 1 : cantidadCruda;
         if (!Number.isInteger(cantidad) || cantidad < 1) return falla('la cantidad debe ser un número entero de 1 o más.');
         const descontarTxt = (texto(f.descontar_stock) ?? 'si').toLowerCase();
         const descontarStock = !['no', 'n', '0', 'false'].includes(sinTildes(descontarTxt));
 
-        const linea: LineaManual = { sku, producto, cantidad, precioUnitario: precio, descontarStock };
+        const linea: LineaManual = { sku, cantidad, precioUnitario: precio, descontarStock };
         const numeroPedido = texto(f.numero_pedido);
         const existente = numeroPedido ? porNumero.get(numeroPedido.toLowerCase()) : undefined;
         if (existente) { existente.lineas.push(linea); return; }
@@ -187,7 +187,6 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
         { header: 'fecha', key: 'fecha', width: 12 },
         { header: 'canal', key: 'canal', width: 16 },
         { header: 'sku', key: 'sku', width: 16 },
-        { header: 'producto', key: 'producto', width: 30 },
         { header: 'cantidad', key: 'cantidad', width: 10 },
         { header: 'precio_unitario', key: 'precio_unitario', width: 16 },
         { header: 'envio', key: 'envio', width: 10 },
@@ -203,9 +202,9 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
     hoja.getRow(1).font = { bold: true };
     hoja.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCCB34' } };
     hoja.views = [{ state: 'frozen', ySplit: 1 }];
-    hoja.addRow({ numero_pedido: 'R-1001', fecha: '2026-10-25', canal: 'Ripley', sku: 'EJEMPLO-1', producto: '', cantidad: 2, precio_unitario: 89.9, envio: 10, estado: 'entregado', cliente: 'Ana Pérez', telefono: '999888777', documento: '12345678', direccion: 'Av. Primavera 123, Surco', notas: '', descontar_stock: 'SI', moneda: 'PEN' });
+    hoja.addRow({ numero_pedido: 'R-1001', fecha: '2026-10-25', canal: 'Ripley', sku: 'EJEMPLO-1', cantidad: 2, precio_unitario: 89.9, envio: 10, estado: 'entregado', cliente: 'Ana Pérez', telefono: '999888777', documento: '12345678', direccion: 'Av. Primavera 123, Surco', notas: '', descontar_stock: 'SI', moneda: 'PEN' });
     hoja.addRow({ numero_pedido: 'R-1001', sku: 'EJEMPLO-2', cantidad: 1, precio_unitario: 45 });
-    hoja.addRow({ numero_pedido: '', fecha: '2026-10-26', canal: 'WhatsApp', sku: '', producto: 'Producto que no está en el catálogo', cantidad: 1, precio_unitario: 120, estado: 'enviado', cliente: 'Luis Soto', descontar_stock: 'NO' });
+    hoja.addRow({ numero_pedido: '', fecha: '2026-10-26', canal: 'WhatsApp', sku: 'EJEMPLO-3', cantidad: 1, estado: 'enviado', cliente: 'Luis Soto', descontar_stock: 'NO' });
 
     // Listas desplegables (primeras 1000 filas): canal (se puede escribir otro) y estado.
     const listas = libro.addWorksheet('Listas', { state: 'veryHidden' });
@@ -231,9 +230,9 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
         '     Con número, la venta no se puede registrar dos veces. Sin número, cada fila es una venta.',
         'fecha: AAAA-MM-DD (2026-10-25). Vacía = hoy.',
         'canal: obligatorio. Elige de la lista o escribe el que quieras. Aparece así en Ventas y en Analíticas.',
-        'sku: el producto del catálogo. Si no está en el catálogo (o no tiene SKU), escribe el nombre en la columna producto.',
+        'sku: obligatorio. El producto se identifica solo por su SKU del catálogo de la tienda (da igual mayúsculas o minúsculas). Un SKU que no esté en el catálogo se rechaza.',
         'cantidad: entero, 1 si la dejas vacía.',
-        'precio_unitario: obligatorio. Lo que pagó el cliente por UNA unidad, sin el envío.',
+        'precio_unitario: lo que pagó el cliente por UNA unidad, sin el envío. Si lo dejas vacío se usa el precio actual del producto en el catálogo.',
         'envio: lo cobrado por envío. Se suma a lo pagado, pero NO cuenta para la comisión de la agencia.',
         `estado: ${ESTADOS_DE_VENTA.join(', ')}. Vacío = entregado. Cancelado y devuelto no cuentan como venta ni descuentan stock.`,
         'descontar_stock: SI (por defecto) baja el stock del producto y lo actualiza en los canales conectados. NO deja el stock como está',

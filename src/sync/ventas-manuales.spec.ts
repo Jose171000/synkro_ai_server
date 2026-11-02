@@ -6,7 +6,7 @@ describe('lectura de ventas manuales', () => {
         const { ventas, errores } = ventasDeFilas([{ canal: 'Ripley', sku: 'A1', precio_unitario: 50 }]);
         expect(errores).toEqual([]);
         expect(ventas[0]).toMatchObject({ canal: 'ripley', estado: 'entregado', envio: 0, moneda: 'PEN', numeroPedido: null });
-        expect(ventas[0].lineas).toEqual([{ sku: 'A1', producto: null, cantidad: 1, precioUnitario: 50, descontarStock: true }]);
+        expect(ventas[0].lineas).toEqual([{ sku: 'A1', cantidad: 1, precioUnitario: 50, descontarStock: true }]);
     });
 
     it('varias filas con el mismo número de pedido son líneas de una sola venta, con los datos de la primera', () => {
@@ -41,10 +41,16 @@ describe('lectura de ventas manuales', () => {
         expect(errores.map(e => e.slice(0, 7))).toEqual(['Fila 2:', 'Fila 3:', 'Fila 4:', 'Fila 5:', 'Fila 6:', 'Fila 7:']);
     });
 
-    it('un producto fuera del catálogo se registra con su nombre', () => {
-        const { ventas, errores } = ventasDeFilas([{ canal: 'WhatsApp', producto: 'Cosa suelta', precio_unitario: 20 }]);
-        expect(errores).toEqual([]);
-        expect(ventas[0].lineas[0]).toMatchObject({ sku: null, producto: 'Cosa suelta' });
+    it('el producto se identifica solo por el SKU, y el precio vacío queda para tomar el del catálogo', () => {
+        const { ventas, errores } = ventasDeFilas([
+            { canal: 'WhatsApp', sku: 'ALM-01', cantidad: 2 },
+            { canal: 'WhatsApp', producto: 'Solo el nombre', precio_unitario: 20 },
+            { canal: 'WhatsApp', sku: 'ALM-02', precio_unitario: 'mucho' },
+        ]);
+        expect(ventas).toHaveLength(1);
+        expect(ventas[0].lineas[0]).toMatchObject({ sku: 'ALM-01', cantidad: 2, precioUnitario: null });
+        expect(errores.map(e => e.slice(0, 7))).toEqual(['Fila 3:', 'Fila 4:']);
+        expect(errores[0]).toContain('falta el sku');
     });
 
     it('fechas: AAAA-MM-DD, día/mes/año y fechas de Excel; vacía = null', () => {
