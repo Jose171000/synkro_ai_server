@@ -27,6 +27,8 @@ export interface OrderLine {
     channelItemId?: string | null;
     /** Variante de la publicación (Mercado Libre), si la hay. */
     channelVariationId?: string | null;
+    /** Qué variante se vendió, en texto: «Color: Rojo · Talla: M». */
+    variant?: string | null;
     /** Referencia solo para mostrar cuando el canal no usa SKU (Yavendió: «YV-500»). No es un SKU ni se escribe en el canal. */
     reference?: string | null;
     /** Se completan al descontar el stock de la venta. */
@@ -127,6 +129,25 @@ export function desfasePorMoneda(currency?: string | null): string {
 // Falabella
 // ─────────────────────────────────────────────────────────────
 
+/** Texto de variante que trae el canal; ignora los vacíos y los «no especificado». */
+export function textoDeVariante(valor: unknown): string | null {
+    const t = texto(valor);
+    return t && !/^(-+|n\/a|na|none|null|not specified|no especificad[oa]|sin variante)$/i.test(t) ? t : null;
+}
+
+/** Mercado Libre: [{ name: 'Color', value_name: 'Rojo' }] → «Color: Rojo · Talla: M». */
+export function variantesDeMeli(atributos: any): string | null {
+    if (!Array.isArray(atributos)) return null;
+    const partes = atributos.map(a => (texto(a?.name) && texto(a?.value_name) ? `${texto(a.name)}: ${texto(a.value_name)}` : null)).filter((p): p is string => !!p);
+    return partes.length ? partes.join(' · ') : null;
+}
+
+/** Valores de una variante del catálogo: {Color:'Rojo', Talla:'M'} → «Color: Rojo · Talla: M». */
+export function textoDeValores(valores: Record<string, string> | null | undefined): string | null {
+    const partes = Object.entries(valores ?? {}).filter(([, v]) => String(v ?? '').trim()).map(([k, v]) => `${k}: ${v}`);
+    return partes.length ? partes.join(' · ') : null;
+}
+
 export function normalizeFalabellaOrder(pedido: any, items: any[], currency?: string | null): NormalizedOrder {
     const desfase = desfasePorMoneda(currency);
     const envio = pedido?.AddressShipping ?? {};
@@ -149,6 +170,7 @@ export function normalizeFalabellaOrder(pedido: any, items: any[], currency?: st
         carrier: texto(i?.ShipmentProvider),
         shippingType: texto(i?.ShippingType),
         channelItemId: texto(i?.OrderItemId),
+        variant: textoDeVariante(i?.Variation),
     }));
 
     // La fecha límite puede venir en el pedido o solo en sus líneas: gana la más próxima.
@@ -236,6 +258,7 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
         shippingType: texto(opcion?.name) ?? texto(shipment?.logistic_type),
         channelItemId: texto(i?.item?.id),
         channelVariationId: texto(i?.item?.variation_id),
+        variant: variantesDeMeli(i?.item?.variation_attributes),
     }));
 
     const limite = texto(opcion?.estimated_handling_limit?.date);

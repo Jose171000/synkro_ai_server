@@ -46,6 +46,23 @@ function construir(ordenes: any[] = [ORDEN]) {
     return { service, qb, llamadas, repoProductos, repoEnlaces };
 }
 
+describe('variante de cada línea', () => {
+    it('muestra la variante del catálogo para cada SKU, aunque el canal use el mismo nombre para todas', async () => {
+        const { service, repoProductos } = construir([{ ...ORDEN, items: [
+            { sku: 'GAF-01', title: 'Protector', quantity: 1, unitPrice: 10 },
+            { sku: 'GAF-02', title: 'Protector', quantity: 1, unitPrice: 20, variant: 'Talla: King' },
+            { sku: 'GAF-03', title: 'Protector', quantity: 1, unitPrice: 30 },
+        ] }]);
+        (repoProductos.find as any).mockResolvedValue([
+            { id: 'p1', sku: 'GAF-01', name: 'Protector', stock: 4, images: [], variantValues: { Talla: 'Queen' } },
+            { id: 'p2', sku: 'GAF-02', name: 'Protector', stock: 4, images: [], variantValues: { Talla: 'Doble' } },
+        ]);
+        const r = await service.list('t1', 'owner', {});
+        // El catálogo manda; sin catálogo se usa lo que dijo el canal; sin ninguno, nada.
+        expect(r.items[0].lines.map(l => l.variant)).toEqual(['Talla: Queen', 'Talla: Doble', null]);
+    });
+});
+
 describe('filtro por estado de la venta', () => {
     it('sin estado trae todas; con estados filtra solo por los que existen', async () => {
         const todos = construir();

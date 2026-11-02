@@ -5,7 +5,7 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { StoreRole } from '../stores/entities/store-member.entity';
-import { OrderDetails, OrderLine, ocultarContacto } from './order-details';
+import { OrderDetails, OrderLine, ocultarContacto, textoDeValores } from './order-details';
 import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
 
 export interface OrdersQuery {
@@ -124,7 +124,7 @@ export class OrdersQueryService {
         const skus = [...new Set(
             filas.flatMap(o => (Array.isArray(o.items) ? o.items : []).map((l: OrderLine) => l?.sku).filter(Boolean) as string[]),
         )];
-        const porSku = new Map<string, { productId: string; name: string; stock: number; imageUrl: string | null }>();
+        const porSku = new Map<string, { productId: string; name: string; stock: number; imageUrl: string | null; variant: string | null }>();
         if (!skus.length) return porSku;
 
         const owners = [...new Set(filas.map(o => (o as any).owner?.id).filter(Boolean))];
@@ -152,6 +152,7 @@ export class OrdersQueryService {
                 name: p.name,
                 stock: p.stock,
                 imageUrl: p.images?.[0]?.url ?? fotoDeEnlace.get(p.id) ?? null,
+                variant: textoDeValores(p.variantValues),
             });
         }
         return porSku;
@@ -159,7 +160,7 @@ export class OrdersQueryService {
 
     private aVista(
         o: MarketplaceOrder,
-        productos: Map<string, { productId: string; name: string; stock: number; imageUrl: string | null }>,
+        productos: Map<string, { productId: string; name: string; stock: number; imageUrl: string | null; variant: string | null }>,
         role: StoreRole,
         conDetalle: boolean,
     ) {
@@ -175,6 +176,8 @@ export class OrdersQueryService {
                 currentStock: p ? p.stock : null,
                 imageUrl: p?.imageUrl ?? null,
                 productName: p?.name ?? null,
+                // La variante del catálogo manda (es la misma venga de donde venga la venta); si no está, la que dijo el canal.
+                variant: p?.variant ?? l?.variant ?? null,
             };
         });
 

@@ -184,3 +184,30 @@ describe('importe de los productos (base de la comisión)', () => {
         expect(importeDeProductos([{ unitPrice: 25 }], 99)).toBe(25);
     });
 });
+
+import { textoDeValores, textoDeVariante, variantesDeMeli } from './order-details';
+
+describe('variante de cada línea de la venta', () => {
+    it('Falabella: toma la variación del artículo y descarta los vacíos', () => {
+        const n = normalizeFalabellaOrder({ OrderId: 1 }, [
+            { Sku: 'A-1', Name: 'Protector', Variation: 'Talla: Queen' },
+            { Sku: 'A-2', Name: 'Protector', Variation: '...' },
+            { Sku: 'A-3', Name: 'Protector', Variation: 'Not Specified' },
+            { Sku: 'A-4', Name: 'Protector' },
+        ], 'PEN');
+        expect(n.lines.map(l => l.variant)).toEqual(['Talla: Queen', '...', null, null]);
+    });
+
+    it('Mercado Libre: une los atributos de la variación vendida', () => {
+        const n = normalizeMeliOrder({ id: 1, order_items: [{ item: { id: 'MPE1', title: 'Polo', variation_attributes: [{ name: 'Color', value_name: 'Rojo' }, { name: 'Talla', value_name: 'M' }] }, quantity: 1, unit_price: 10 }] });
+        expect(n.lines[0].variant).toBe('Color: Rojo · Talla: M');
+        expect(variantesDeMeli(undefined)).toBeNull();
+    });
+
+    it('los valores de una variante del catálogo se ven como texto', () => {
+        expect(textoDeValores({ Color: 'Rojo', Talla: 'M' })).toBe('Color: Rojo · Talla: M');
+        expect(textoDeValores({})).toBeNull();
+        expect(textoDeValores(null)).toBeNull();
+        expect(textoDeVariante('  ')).toBeNull();
+    });
+});
