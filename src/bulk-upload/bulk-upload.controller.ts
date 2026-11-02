@@ -317,6 +317,43 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             ...(enVivo ?? { total: guardado!.total, processed: guardado!.processed, failed: guardado!.failed, terminado: guardado!.terminado }),
             fallidos: guardado?.fallidos ?? [],
             rechazadas: guardado?.rechazadas ?? [],
+            falabella: guardado?.falabella,
+            falabellaRechazados: guardado?.falabellaRechazados ?? [],
+            reintentados: guardado?.reintentados ?? 0,
+        };
+    }
+
+    @Post('products/retry/:batchId')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiOperation({ summary: 'Reintentar una carga masiva terminada: vuelve a mandar los productos fallidos (en un lote nuevo) y reenvía a Falabella los que quedaron sin enviar' })
+    async reintentarCarga(@Param('batchId') batchId: string, @Req() req) {
+        const lote = await this.bulkBatch.paraReintentar(batchId, req.user.id);
+        if (!lote) throw new NotFoundException('No se encontró esa carga.');
+        if (!lote.puedeReintentarse) throw new BadRequestException('Esa carga todavía está en proceso. Espera a que termine para reintentar.');
+        if (!lote.fallidos.length && !lote.falabellaPendientes.length) throw new BadRequestException('Esa carga no tiene productos por reintentar.');
+
+        let nuevoLote: string | undefined;
+        if (lote.fallidos.length) {
+            nuevoLote = randomUUID();
+            const total = lote.fallidos.length;
+            await this.batchNotification.iniciar(nuevoLote, total, req.user.id);
+            const trabajos = lote.fallidos.map(({ sku, payload }) => ({ sku, payload: { ...payload, batchId: nuevoLote, batchTotal: total, reintento: true } }));
+            await this.bulkBatch.crear(nuevoLote, req.user.id, lote.storeId ?? undefined, trabajos);
+            for (const trabajo of trabajos) {
+                await this.listingsQueue.add('process-product', trabajo.payload, { attempts: 3, backoff: { type: 'exponential', delay: 15_000 } });
+            }
+            await this.bulkBatch.marcarReintentados(batchId, lote.fallidos.map((f) => f.sku));
+        }
+        if (lote.falabellaPendientes.length && lote.payloadBase) {
+            await this.listingsQueue.add('enviar-falabella', {
+                batchId, userId: req.user.id, storeId: lote.storeId, productIds: lote.falabellaPendientes, cuentas: lote.payloadBase.cuentas,
+            }, { attempts: 2, backoff: { type: 'exponential', delay: 60_000 } });
+        }
+        return {
+            message: `${lote.fallidos.length} productos fallidos vueltos a encolar. ${lote.falabellaPendientes.length} reenviados a Falabella.`,
+            batchId: nuevoLote,
+            reintentados: lote.fallidos.length,
+            falabellaReenviados: lote.falabellaPendientes.length,
         };
     }
 

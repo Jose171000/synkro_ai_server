@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
-export type EstadoDeItem = 'pendiente' | 'listo' | 'fallido';
+/** «reintentado»: falló y se volvió a mandar en un lote nuevo (ya no cuenta como fallido de este). */
+export type EstadoDeItem = 'pendiente' | 'listo' | 'fallido' | 'reintentado';
 
 /** Un producto de una carga masiva y cómo le fue. `payload` guarda lo necesario para reintentarlo sin volver a subir el Excel. */
 @Entity('bulk_batch_items')

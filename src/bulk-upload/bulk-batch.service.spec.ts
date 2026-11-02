@@ -85,3 +85,43 @@ describe('registro durable de las cargas masivas', () => {
         await expect(service.cerrar('b1')).resolves.toBeUndefined();
     });
 });
+
+describe('informe y reintento de una carga', () => {
+    it('el resumen cuenta cómo le fue a Falabella y lista los rechazados con su motivo', async () => {
+        const { service, items } = construir();
+        await service.crear('b1', 'u1', 's1', datos(3));
+        items[0].falabellaStatus = 'enviado';
+        items[1].falabellaStatus = 'rechazado'; items[1].falabellaError = 'marca no existe';
+        items[2].falabellaStatus = 'pendiente';
+        const r = await service.resumen('b1', 'u1');
+        expect(r!.falabella).toEqual({ pendientes: 1, enviados: 1, rechazados: 1 });
+        expect(r!.falabellaRechazados).toEqual([{ sku: 'SKU-1', error: 'marca no existe' }]);
+    });
+
+    it('un lote en marcha no se puede reintentar; uno cerrado sí, con los datos de cada fallido', async () => {
+        const { service, items } = construir();
+        await service.crear('b1', 'u1', 's1', datos(3));
+        await service.marcar('b1', 'SKU-0', { ok: false, error: 'timeout' });
+        await service.marcar('b1', 'SKU-1', { ok: true, productId: 'p1' });
+        items[1].falabellaStatus = 'pendiente';
+        expect((await service.paraReintentar('b1', 'u1'))!.puedeReintentarse).toBe(false);
+        await service.cerrar('b1');
+        const r = (await service.paraReintentar('b1', 'u1'))!;
+        expect(r.puedeReintentarse).toBe(true);
+        expect(r.fallidos).toEqual([{ sku: 'SKU-0', payload: { sku: 'SKU-0', price: 10 } }]);
+        expect(r.falabellaPendientes).toEqual(['p1']);
+    });
+
+    it('un lote que sigue «en marcha» pasadas 2 horas se da por trabado y se puede reintentar', async () => {
+        const { service, lotes } = construir();
+        await service.crear('b1', 'u1', 's1', datos(1));
+        lotes[0].createdAt = new Date(Date.now() - 3 * 3_600_000);
+        expect((await service.paraReintentar('b1', 'u1'))!.puedeReintentarse).toBe(true);
+    });
+
+    it('no entrega el lote de otro usuario', async () => {
+        const { service } = construir();
+        await service.crear('b1', 'u1', 's1', datos(1));
+        expect(await service.paraReintentar('b1', 'otro')).toBeNull();
+    });
+});

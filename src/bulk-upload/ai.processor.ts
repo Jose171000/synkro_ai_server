@@ -26,6 +26,12 @@ export class AiProcessor extends WorkerHost {
     }
 
     async process(job: Job<any, any, string>): Promise<any> {
+        // «Reintentar» de una carga: reenvía a Falabella los productos que quedaron sin enviar.
+        if (job.name === 'enviar-falabella') {
+            const { userId, storeId, productIds, cuentas } = job.data;
+            await this.enviarAFalabella(job.data.batchId, productIds ?? [], { userId, storeId }, leerCuentasElegidas(cuentas));
+            return { status: 'completed', enviados: (productIds ?? []).length };
+        }
         console.log(`[AiProcessor] Processing job ${job.id} for product: ${job.data.productName}`);
 
         const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId, price, stock, salePrice, saleStartDate, saleEndDate } = job.data;
@@ -46,7 +52,8 @@ export class AiProcessor extends WorkerHost {
 
         try {
             // 1. Create the product with the resolved image URL (if any). En un reintento ya existe: se retoma sin duplicar.
-            const existente = job.attemptsMade > 0 ? await this.productsService.findBySku({ userId, storeId }, sku) : null;
+            // Un producto reenviado desde «Reintentar» pudo haberse creado en la carga anterior.
+            const existente = job.attemptsMade > 0 || job.data.reintento ? await this.productsService.findBySku({ userId, storeId }, sku) : null;
             const product = existente ?? await this.productsService.create({
                 name: productName || sku,
                 description: description || '',
