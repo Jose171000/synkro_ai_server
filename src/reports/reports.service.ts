@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
+import { ESTADOS_DE_VENTA } from '../sync/estado-de-venta';
+import { estadosPedidos } from '../sync/orders-query.service';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { parseAmount } from '../common/parse-amount';
 import { Store } from '../stores/entities/store.entity';
@@ -114,7 +116,8 @@ export class ReportsService {
      *  - marketplace_orders (real orders synced from marketplaces)
      *  - the client's Google Sheet published as CSV (legacy AppScript data)
      */
-    async getSalesReport(storeId: string, from?: string, to?: string) {
+    async getSalesReport(storeId: string, from?: string, to?: string, status?: string) {
+        const estados = estadosPedidos(status);
         const end = to || new Date().toISOString().slice(0, 10);
         const start = from || new Date(Date.now() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -183,6 +186,16 @@ export class ReportsService {
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
             .orderBy('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'DESC')
+            .getRawMany();
+
+        // Cuántas ventas y cuánto hay en cada estado en el rango (para mostrar el número en cada opción del filtro).
+        const porEstado = await this.orderRepository.createQueryBuilder('o')
+            .select('"o"."saleState"', 'estado')
+            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
+            .addSelect('COUNT(*)', 'orders')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .groupBy('"o"."saleState"')
             .getRawMany();
 
         const ultima = await this.orderRepository.createQueryBuilder('o')

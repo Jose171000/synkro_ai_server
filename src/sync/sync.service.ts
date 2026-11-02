@@ -9,7 +9,7 @@ import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcio
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { Between, In, IsNull, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, PlanDeGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
 import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
@@ -39,6 +39,7 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
 import { importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { ESTADOS_FINALES, EstadoDeVenta, estadoDeVenta, estadoDeVentaMeli, estadosDePedidoFalabella } from './estado-de-venta';
 import { filasDeItemMeli, MeliListingRow, publicacionesSinSku, PublicacionSinSku } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
 
@@ -2993,14 +2994,18 @@ export class SyncService implements OnModuleInit {
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
         const desde = new Date(Date.now() - (options.desdeHoras ?? 48) * 60 * 60 * 1000);
 
-        const pedidos = await this.falabellaApi.getOrders(credentials, {
-            createdAfter: desde,
-            limit: 100,
-        });
+        // Por fecha de ACTUALIZACIÓN y no de creación: un pedido que se envió o se canceló hoy aparece aunque se haya
+        // creado hace días (con la fecha de creación su estado se quedaba en «pendiente» para siempre).
+        const pedidos: any[] = [];
+        for (let offset = 0; offset < SyncService.FALABELLA_ORDERS_MAX; offset += 100) {
+            const pagina = await this.falabellaApi.getOrders(credentials, { updatedAfter: desde, limit: 100, offset });
+            pedidos.push(...pagina);
+            if (pagina.length < 100) break;
+        }
 
         const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false);
-        if (r.nuevos) {
-            console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados.`);
+        if (r.nuevos || r.actualizados) {
+            console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados (${r.actualizados} con estado nuevo).`);
         }
         return { ...r, revisados: pedidos.length };
     }
@@ -3015,12 +3020,13 @@ export class SyncService implements OnModuleInit {
         connection: MarketplaceConnection,
         pedidos: any[],
         soloRegistro: boolean,
-    ): Promise<{ nuevos: number; repetidos: number; completados: number }> {
+    ): Promise<{ nuevos: number; repetidos: number; completados: number; actualizados: number }> {
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
         const monedaCuenta = connection.currency ?? undefined;
         let nuevos = 0;
         let repetidos = 0;
         let completados = 0;
+        let actualizados = 0;
 
         for (const pedido of pedidos) {
             const externalId = String((pedido as any).OrderId ?? '');
@@ -3031,6 +3037,8 @@ export class SyncService implements OnModuleInit {
             });
             if (yaRegistrado) {
                 repetidos++;
+                // El estado del pedido cambia en el canal (enviado, entregado, cancelado): se refleja aquí.
+                if (await this.actualizarEstadoDePedido(yaRegistrado, estadosDePedidoFalabella(pedido))) actualizados++;
                 // Ventas guardadas antes de que se registraran sus detalles
                 // (cliente, envío...): se completan sin tocar el stock.
                 if (!yaRegistrado.details) {
@@ -3074,7 +3082,8 @@ export class SyncService implements OnModuleInit {
                 customerName: norm.customerName,
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
-                status: String((pedido as any).Statuses?.Status ?? 'pending'),
+                status: (estadosDePedidoFalabella(pedido) || 'pending').slice(0, 30),
+                saleState: estadoDeVenta(estadosDePedidoFalabella(pedido)),
                 orderDate: (pedido as any).CreatedAt ? new Date((pedido as any).CreatedAt) : new Date(),
             }));
             nuevos++;
@@ -3090,7 +3099,7 @@ export class SyncService implements OnModuleInit {
                 });
             }
         }
-        return { nuevos, repetidos, completados };
+        return { nuevos, repetidos, completados, actualizados };
     }
 
     /** Descuenta stock y avisa por cada línea vendida en Falabella. */
@@ -3223,7 +3232,11 @@ export class SyncService implements OnModuleInit {
         const userId = connection.owner.id;
         const orderId = String(order.id);
 
-        if (order.status !== 'paid') return false; // only confirmed sales move stock
+        // Solo las ventas confirmadas mueven el stock; pero una que ya teníamos y se canceló debe quedar cancelada.
+        if (order.status !== 'paid') {
+            await this.refrescarEstadoMeli(connection, order);
+            return false;
+        }
 
         // Idempotency: never apply the same order twice to the same account (webhooks can repeat)
         const dedupeKey = `meli:order-applied:${connection.id}:${orderId}`;
@@ -3231,6 +3244,7 @@ export class SyncService implements OnModuleInit {
         if (!firstTime) {
             // Ya aplicada: si se guardó antes de registrar sus detalles, se completan.
             await this.completeMeliOrderDetails(connection, order);
+            await this.refrescarEstadoMeli(connection, order);
             return false;
         }
 
@@ -3258,6 +3272,7 @@ export class SyncService implements OnModuleInit {
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
                 status: order.status,
+                saleState: estadoDeVentaMeli(order.status, shipment?.status),
                 orderDate: order.date_closed ? new Date(order.date_closed) : (order.date_created ? new Date(order.date_created) : new Date()),
             }));
         } catch (error: any) {
@@ -3378,6 +3393,76 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /**
+     * Si el canal dice otro estado que el guardado, lo actualiza (también el del envío, que se ve en la ficha de la venta).
+     * Devuelve true si cambió algo.
+     */
+    private async actualizarEstadoDePedido(
+        orden: MarketplaceOrder,
+        estadoDelCanal: string,
+        opciones: { estado?: EstadoDeVenta; envio?: string | null } = {},
+    ): Promise<boolean> {
+        const texto = (estadoDelCanal ?? '').trim();
+        if (!texto) return false;
+        const estado = opciones.estado ?? estadoDeVenta(texto);
+        const envio = opciones.envio === undefined ? texto : opciones.envio;
+        const det: any = orden.details;
+        const envioActual = det?.shipping?.status ?? null;
+        if (orden.status === texto.slice(0, 30) && orden.saleState === estado && (!det || envioActual === envio)) return false;
+        await this.orderRepository.update(orden.id, {
+            status: texto.slice(0, 30),
+            saleState: estado,
+            ...(det ? { details: { ...det, channelStatus: texto, shipping: { ...det.shipping, status: envio } } as any } : {}),
+        });
+        return true;
+    }
+
+    /**
+     * Estado de una venta de Mercado Libre que ya tenemos: la cancelación sale de la venta; si salió o llegó, lo dice el envío.
+     * Una venta ya entregada, cancelada o devuelta no se vuelve a consultar. Si el envío no se puede leer, no se toca el estado.
+     */
+    private async refrescarEstadoMeli(connection: MarketplaceConnection, order: any): Promise<void> {
+        const existente = await this.orderRepository.findOne({ where: { marketplace: 'mercadolibre', externalId: String(order.id) } });
+        if (!existente) return;
+        const cancelada = /cancel/i.test(String(order.status ?? ''));
+        if (!cancelada && ESTADOS_FINALES.includes(existente.saleState)) return;
+        const envio = cancelada ? null : await this.fetchMeliShipment(connection, order);
+        if (!cancelada && order?.shipping?.id && !envio) return;
+        const estado = estadoDeVentaMeli(order.status, envio?.status);
+        const textoEnvio = envio ? [envio.status, envio.substatus ? `(${envio.substatus})` : null].filter(Boolean).join(' ') : (existente.details as any)?.shipping?.status ?? null;
+        await this.actualizarEstadoDePedido(existente, String(order.status ?? existente.status), { estado, envio: textoEnvio });
+    }
+
+    /**
+     * Ventas de Mercado Libre de hace más de la ventana de consulta que siguen sin entregarse: se vuelve a leer su estado,
+     * porque salir, llegar o cancelarse ocurre días después de la venta. Pocas por pasada, para no saturar al canal.
+     */
+    private async refrescarAbiertasMeli(connection: MarketplaceConnection, antesDe: Date): Promise<number> {
+        const abiertas = await this.orderRepository.find({
+            where: {
+                marketplace: 'mercadolibre',
+                connection: { id: connection.id },
+                saleState: In(['pendiente', 'enviado']),
+                orderDate: Between(new Date(antesDe.getTime() - 45 * 24 * 3600_000), antesDe),
+            },
+            order: { orderDate: 'DESC' },
+            take: 40,
+        });
+        let cambiadas = 0;
+        for (const venta of abiertas) {
+            try {
+                const orden = await this.meliApi.getOrder(connection.accessToken, venta.externalId);
+                const antes = venta.saleState;
+                await this.refrescarEstadoMeli(connection, orden);
+                const despues = await this.orderRepository.findOne({ where: { id: venta.id } });
+                if (despues && despues.saleState !== antes) cambiadas++;
+            } catch (error: any) {
+                console.warn(`[Sync] Estado de la venta ${venta.externalId} de Mercado Libre: ${error?.message}`);
+            }
+        }
+        return cambiadas;
+    }
+
     /** Completa los detalles de una venta de Mercado Libre guardada antes de que existieran. */
     private async completeMeliOrderDetails(connection: MarketplaceConnection, order: any): Promise<void> {
         const existente = await this.orderRepository.findOne({
@@ -3408,6 +3493,8 @@ export class SyncService implements OnModuleInit {
 
     /** Ventana que se revisa en cada pasada: sobra para cubrir una caída de varias horas. */
     private static readonly ORDER_LOOKBACK_HOURS = 48;
+    /** Tope de pedidos de Falabella que se leen en una pasada (varias páginas de 100). */
+    private static readonly FALABELLA_ORDERS_MAX = 1000;
 
     /** Trae las ventas recientes de una cuenta de Mercado Libre y aplica las nuevas. */
     async pollMeliOrders(connectionId: string): Promise<{ nuevos: number; revisados: number }> {
@@ -3419,6 +3506,8 @@ export class SyncService implements OnModuleInit {
         for (const orden of ordenes) {
             if (await this.applyMeliOrderData(connection, orden)) nuevos++;
         }
+        // Las ventas más viejas que la ventana también cambian de estado (enviada, entregada, cancelada).
+        await this.refrescarAbiertasMeli(connection, desde).catch(e => console.warn(`[Sync] Estados de Mercado Libre: ${e?.message}`));
         if (ordenes.length) {
             const estados = [...new Set(ordenes.map((o: any) => o?.status))].join(',');
             console.log(`[Sync] Mercado Libre ${connection.externalNickname}: ${ordenes.length} ventas leídas (${estados}), ${nuevos} nuevas`);

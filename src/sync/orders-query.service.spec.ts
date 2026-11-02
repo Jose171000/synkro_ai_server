@@ -34,6 +34,8 @@ function construir(ordenes: any[] = [ORDEN]) {
         orderBy: jest.fn(() => qb), addOrderBy: jest.fn(() => qb), take: jest.fn(() => qb), skip: jest.fn(() => qb),
         getManyAndCount: jest.fn(async () => [ordenes, ordenes.length]),
         getOne: jest.fn(async () => ordenes[0] ?? null),
+        clone: jest.fn(() => qb), select: jest.fn(() => qb), groupBy: jest.fn(() => qb),
+        getRawMany: jest.fn(async () => [{ estado: 'pendiente', n: '3' }, { estado: 'enviado', n: '2' }]),
     };
     const repoOrdenes = { createQueryBuilder: jest.fn(() => qb) };
     const repoProductos = {
@@ -43,6 +45,26 @@ function construir(ordenes: any[] = [ORDEN]) {
     const service = new OrdersQueryService(repoOrdenes as any, repoProductos as any, repoEnlaces as any);
     return { service, qb, llamadas, repoProductos, repoEnlaces };
 }
+
+describe('filtro por estado de la venta', () => {
+    it('sin estado trae todas; con estados filtra solo por los que existen', async () => {
+        const todos = construir();
+        await todos.service.list('t1', 'owner', {});
+        expect(todos.llamadas.where.some(w => w.includes('saleState" IN'))).toBe(false);
+
+        const filtrado = construir();
+        await filtrado.service.list('t1', 'owner', { status: 'entregado, enviado,inventado' });
+        const i = filtrado.llamadas.where.findIndex(w => w.includes('saleState" IN'));
+        expect(filtrado.llamadas.params[i]).toEqual({ estados: ['enviado', 'entregado'] });
+    });
+
+    it('devuelve cuántas ventas hay en cada estado (con los demás filtros) y el estado de cada venta', async () => {
+        const { service } = construir([{ ...ORDEN, saleState: 'enviado' }]);
+        const r = await service.list('t1', 'owner', {});
+        expect(r.porEstado).toEqual({ pendiente: 3, enviado: 2, entregado: 0, cancelado: 0, devuelto: 0 });
+        expect(r.items[0].saleState).toBe('enviado');
+    });
+});
 
 describe('listado de ventas', () => {
     it('cada línea trae el stock de después, el stock de ahora y la foto del producto', async () => {

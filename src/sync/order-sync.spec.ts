@@ -53,6 +53,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
         create: jest.fn((d: any) => ({ ...d })),
         save: jest.fn(async (v: any) => { v.id = v.id ?? `venta-${ventas.length + 1}`; ventas.push(v); return v; }),
         update: jest.fn(async (id: string, datos: any) => { Object.assign(ventas.find(x => x.id === id) ?? {}, datos); }),
+        find: jest.fn(async (): Promise<any[]> => []),
     };
     const repoProductos = {
         findOne: jest.fn(async () => producto),
@@ -60,7 +61,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
     };
     const repoEnlaces = {
         findOne: jest.fn(async () => (opts.enlaces ?? [{ product: producto }])[0]),
-        find: jest.fn(async () => []),
+        find: jest.fn(async (): Promise<any[]> => []),
     };
     const vacio = { findOne: jest.fn(), find: jest.fn(), save: jest.fn(), create: jest.fn() };
     const redis = {
@@ -94,7 +95,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
         ],
     }).compile();
 
-    return { service: modulo.get(SyncService), ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones };
+    return { service: modulo.get(SyncService), ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones, repoVentas };
 }
 
 const pedidoFalabella = { OrderId: 100, OrderNumber: 9001, Price: '50.00', ItemsCount: 1, CreatedAt: '2026-10-09T12:00:00Z', Statuses: { Status: 'pending' } };
@@ -136,6 +137,46 @@ describe('ventas de Falabella', () => {
         await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
 
         expect(avisos.find(a => a.type === 'sale')).toMatchObject({ u: 'u1', marketplace: 'falabella' });
+    });
+});
+
+describe('estado de las ventas de Falabella', () => {
+    it('un pedido que ya teníamos como pendiente pasa a enviado y a entregado cuando el canal lo dice, sin tocar el stock', async () => {
+        const { service, ventas, producto, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        expect(ventas[0]).toMatchObject({ status: 'pending', saleState: 'pendiente' });
+
+        falabella.getOrders.mockResolvedValue([{ ...pedidoFalabella, Statuses: { Status: 'shipped' } }]);
+        const enviado = await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        expect(enviado).toMatchObject({ nuevos: 0, repetidos: 1, actualizados: 1 });
+        expect(ventas[0]).toMatchObject({ status: 'shipped', saleState: 'enviado' });
+        expect(ventas[0].details.shipping.status).toBe('shipped');
+
+        falabella.getOrders.mockResolvedValue([{ ...pedidoFalabella, Statuses: { Status: 'delivered' } }]);
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        expect(ventas[0].saleState).toBe('entregado');
+        expect(producto.stock).toBe(4);
+    });
+
+    it('pide los pedidos por fecha de actualización, para ver los que cambiaron aunque se crearon hace días', async () => {
+        const { service, falabella } = await construir();
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        const opciones = falabella.getOrders.mock.calls[0][1];
+        expect(opciones.updatedAfter).toBeInstanceOf(Date);
+        expect(opciones.createdAfter).toBeUndefined();
+    });
+
+    it('un pedido cancelado en el canal queda cancelado y sin cambios si el estado es el mismo', async () => {
+        const { service, ventas, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        falabella.getOrders.mockResolvedValue([{ ...pedidoFalabella, Statuses: { Status: ['canceled'] } }]);
+        expect((await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' })).actualizados).toBe(1);
+        expect(ventas[0].saleState).toBe('cancelado');
+        expect((await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' })).actualizados).toBe(0);
     });
 });
 
@@ -274,6 +315,64 @@ describe('ventas de Mercado Libre', () => {
         expect(r.nuevos).toBe(0);
         expect(ventas).toHaveLength(0);
         expect(producto.stock).toBe(5);
+    });
+
+    it('una venta pagada pasa de pendiente a enviada y a entregada según el envío, sin descontar stock de nuevo', async () => {
+        const { service, ventas, producto, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({ shipping: { id: 4455 } })]);
+        meli.getShipment.mockResolvedValue({ status: 'ready_to_ship' });
+        await service.pollMeliOrders('ml1');
+        expect(ventas[0].saleState).toBe('pendiente');
+
+        meli.getShipment.mockResolvedValue({ status: 'shipped' });
+        await service.pollMeliOrders('ml1');
+        expect(ventas[0].saleState).toBe('enviado');
+
+        meli.getShipment.mockResolvedValue({ status: 'delivered' });
+        await service.pollMeliOrders('ml1');
+        expect(ventas[0].saleState).toBe('entregado');
+        expect(producto.stock).toBe(3);
+
+        // Ya entregada: no se vuelve a consultar el envío.
+        meli.getShipment.mockClear();
+        await service.pollMeliOrders('ml1');
+        expect(meli.getShipment).not.toHaveBeenCalled();
+    });
+
+    it('una venta que ya teníamos y se cancela queda cancelada', async () => {
+        const { service, ventas, producto, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden()]);
+        await service.pollMeliOrders('ml1');
+        meli.searchOrders.mockResolvedValue([orden({ status: 'cancelled' })]);
+        await service.pollMeliOrders('ml1');
+        expect(ventas[0]).toMatchObject({ status: 'cancelled', saleState: 'cancelado' });
+        expect(producto.stock).toBe(3);
+    });
+
+    it('si el envío no se puede leer, el estado que ya tenía no retrocede', async () => {
+        const { service, ventas, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({ shipping: { id: 4455 } })]);
+        meli.getShipment.mockResolvedValue({ status: 'shipped' });
+        await service.pollMeliOrders('ml1');
+        meli.getShipment.mockRejectedValue(new Error('403'));
+        await service.pollMeliOrders('ml1');
+        expect(ventas[0].saleState).toBe('enviado');
+    });
+
+    it('las ventas abiertas más viejas que la ventana se vuelven a consultar y se actualizan', async () => {
+        const { service, ventas, meli, repoVentas } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([orden({ shipping: { id: 4455 } })]);
+        meli.getShipment.mockResolvedValue({ status: 'ready_to_ship' });
+        await service.pollMeliOrders('ml1');
+        repoVentas.find.mockResolvedValue([ventas[0]]);
+        meli.searchOrders.mockResolvedValue([]); // ya no sale en la ventana de 48 h
+        meli.getOrder.mockResolvedValue(orden({ shipping: { id: 4455 } }));
+        meli.getShipment.mockResolvedValue({ status: 'delivered' });
+
+        await service.pollMeliOrders('ml1');
+
+        expect(meli.getOrder).toHaveBeenCalledWith('clave', '777');
+        expect(ventas[0].saleState).toBe('entregado');
     });
 
     it('pide a Mercado Libre las ventas de las últimas 48 horas de ESA cuenta', async () => {

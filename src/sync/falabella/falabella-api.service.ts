@@ -745,7 +745,7 @@ export class FalabellaApiService {
     /** Pedidos del vendedor, opcionalmente desde una fecha. */
     async getOrders(
         credentials: FalabellaCredentials,
-        options: { createdAfter?: Date; createdBefore?: Date; limit?: number; offset?: number } = {},
+        options: { createdAfter?: Date; createdBefore?: Date; updatedAfter?: Date; limit?: number; offset?: number } = {},
     ): Promise<FalabellaOrder[]> {
         const extra: Record<string, string | number> = {
             Limit: options.limit ?? 100,
@@ -756,6 +756,10 @@ export class FalabellaApiService {
         }
         if (options.createdBefore) {
             extra.CreatedBefore = falabellaTimestamp(options.createdBefore);
+        }
+        // Los pedidos que cambiaron de estado (enviado, entregado, cancelado) aunque se hayan creado hace días.
+        if (options.updatedAfter) {
+            extra.UpdatedAfter = falabellaTimestamp(options.updatedAfter);
         }
 
         const body = await this.call<any>(credentials, 'GetOrders', extra);

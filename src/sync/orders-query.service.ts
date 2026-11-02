@@ -6,6 +6,7 @@ import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { StoreRole } from '../stores/entities/store-member.entity';
 import { OrderDetails, OrderLine, ocultarContacto } from './order-details';
+import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
 
 export interface OrdersQuery {
     from?: string;
@@ -13,6 +14,8 @@ export interface OrdersQuery {
     marketplace?: string;
     connectionId?: string;
     search?: string;
+    /** Estados a mostrar, separados por coma: pendiente, enviado, entregado, cancelado, devuelto. Vacío = todos. */
+    status?: string;
     limit?: number;
     offset?: number;
 }
@@ -22,6 +25,12 @@ export interface OrderLineView extends OrderLine {
     currentStock: number | null;
     imageUrl: string | null;
     productName: string | null;
+}
+
+/** Estados pedidos en la consulta, sin repetidos y solo los que existen. */
+export function estadosPedidos(texto?: string): EstadoDeVenta[] {
+    const pedidos = String(texto ?? '').toLowerCase().split(',').map(e => e.trim());
+    return ESTADOS_DE_VENTA.filter(e => pedidos.includes(e));
 }
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -72,6 +81,14 @@ export class OrdersQueryService {
             );
         }
 
+        // Cuántas ventas hay en cada estado con los demás filtros puestos (para mostrar el número en cada opción).
+        const porEstado: Record<string, number> = Object.fromEntries(ESTADOS_DE_VENTA.map(e => [e, 0]));
+        const conteo = await qb.clone().select('o."saleState"', 'estado').addSelect('COUNT(*)', 'n').groupBy('o."saleState"').getRawMany();
+        for (const c of conteo) porEstado[c.estado] = Number(c.n);
+
+        const estados = estadosPedidos(query.status);
+        if (estados.length) qb.andWhere('o."saleState" IN (:...estados)', { estados });
+
         const [filas, total] = await qb
             .orderBy('o.orderDate', 'DESC')
             .addOrderBy('o.id', 'ASC')
@@ -84,6 +101,7 @@ export class OrdersQueryService {
             total,
             limit,
             offset,
+            porEstado,
             items: filas.map(o => this.aVista(o, vista, role, false)),
         };
     }
@@ -173,6 +191,7 @@ export class OrdersQueryService {
                 : null,
             orderDate: o.orderDate,
             status: o.status,
+            saleState: o.saleState,
             customerName: o.customerName,
             shipByDate: o.shipByDate,
             totalAmount: Number(o.totalAmount),

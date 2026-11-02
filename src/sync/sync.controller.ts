@@ -627,6 +627,7 @@ export class SyncController {
     @ApiQuery({ name: 'marketplace', required: false })
     @ApiQuery({ name: 'connectionId', required: false })
     @ApiQuery({ name: 'search', required: false, description: 'Cliente, número de pedido, SKU o nombre.' })
+    @ApiQuery({ name: 'status', required: false, description: 'Estado de la venta: pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.' })
     @ApiQuery({ name: 'limit', required: false })
     @ApiQuery({ name: 'offset', required: false })
     listOrders(
@@ -636,11 +637,12 @@ export class SyncController {
         @Query('marketplace') marketplace?: string,
         @Query('connectionId') connectionId?: string,
         @Query('search') search?: string,
+        @Query('status') status?: string,
         @Query('limit') limit?: string,
         @Query('offset') offset?: string,
     ) {
         return this.ordersQuery.list(scopeOf(req).storeId, req.store.role, {
-            from, to, marketplace, connectionId, search,
+            from, to, marketplace, connectionId, search, status,
             limit: limit ? Number(limit) : undefined,
             offset: offset ? Number(offset) : undefined,
         });

@@ -2,12 +2,14 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, In
 import { User } from '../../users/entities/user.entity';
 import { Store } from '../../stores/entities/store.entity';
 import { MarketplaceConnection } from './marketplace-connection.entity';
+import type { EstadoDeVenta } from '../estado-de-venta';
 
 /**
  * A confirmed sale pulled from a marketplace (via webhook or backfill).
  * Feeds the client sales report and the future orders panel.
  */
 @Entity('marketplace_orders')
+@Index('IDX_marketplace_orders_store_state', ['store', 'saleState'])
 @Unique('UQ_order_marketplace_external', ['marketplace', 'externalId'])
 export class MarketplaceOrder {
     @PrimaryGeneratedColumn('uuid')
@@ -54,6 +56,10 @@ export class MarketplaceOrder {
 
     @Column({ type: 'varchar', length: 30, default: 'paid' })
     status: string;
+
+    /** Estado común a todos los canales: pendiente, enviado, entregado, cancelado o devuelto (ver estado-de-venta.ts). */
+    @Column({ type: 'varchar', length: 20, default: 'pendiente' })
+    saleState: EstadoDeVenta;
 
     /** Número de pedido tal como lo ve el cliente en el canal. */
     @Column({ type: 'varchar', nullable: true })
