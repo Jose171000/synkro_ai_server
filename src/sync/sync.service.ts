@@ -2982,7 +2982,7 @@ export class SyncService implements OnModuleInit {
      */
     async processFalabellaOrders(
         ref: { userId: string; storeId?: string; connectionId?: string },
-        options: { desdeHoras?: number } = {},
+        options: { desdeHoras?: number; soloActualizar?: boolean } = {},
     ) {
         // Un aviso sin cuenta (encolado antes de este cambio) usa la primera
         // cuenta de Falabella del usuario.
@@ -3003,7 +3003,7 @@ export class SyncService implements OnModuleInit {
             if (pagina.length < 100) break;
         }
 
-        const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false);
+        const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false, !!options.soloActualizar);
         if (r.nuevos || r.actualizados) {
             console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados (${r.actualizados} con estado nuevo).`);
         }
@@ -3020,6 +3020,7 @@ export class SyncService implements OnModuleInit {
         connection: MarketplaceConnection,
         pedidos: any[],
         soloRegistro: boolean,
+        soloExistentes = false,
     ): Promise<{ nuevos: number; repetidos: number; completados: number; actualizados: number }> {
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
         const monedaCuenta = connection.currency ?? undefined;
@@ -3056,6 +3057,8 @@ export class SyncService implements OnModuleInit {
                 }
                 continue;
             }
+            // Solo se corrigen estados: una venta que no teníamos no se crea (descontaría stock de algo ya ocurrido).
+            if (soloExistentes) continue;
 
             const items = await this.falabellaApi.getOrderItems(credentials, externalId);
             // Falabella no siempre manda la moneda; si no viene, se usa la
@@ -3567,6 +3570,28 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
+     * Una sola vez: pone al día el estado de las ventas de Falabella de los últimos 30 días, que se guardaron como «pendiente»
+     * cuando los estados no se actualizaban. Solo corrige ventas que ya existen; no crea ninguna ni toca el stock.
+     */
+    private async corregirEstadosDeFalabellaUnaVez(): Promise<void> {
+        try {
+            const primera = await this.redis.set('orders:falabella-states-fixed:v1', '1', 'EX', 60 * 60 * 24 * 365, 'NX');
+            if (!primera) return;
+            const cuentas = await this.connectionRepository.find({ where: { marketplace: 'falabella', status: 'active' }, relations: { owner: true, store: true } });
+            for (const c of cuentas) {
+                try {
+                    const r = await this.processFalabellaOrders({ userId: c.owner.id, connectionId: c.id }, { desdeHoras: 24 * 30, soloActualizar: true });
+                    console.log(`[Sync] Estados de Falabella (${c.externalUserId}): ${r.revisados} pedidos revisados, ${r.actualizados} corregidos.`);
+                } catch (error: any) {
+                    console.warn(`[Sync] Estados de Falabella (${c.externalUserId}): ${error?.message}`);
+                }
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudieron corregir los estados de Falabella: ${error?.message}`);
+        }
+    }
+
+    /**
      * Programa la consulta periódica de ventas. Los canales pueden avisar por
      * webhook, pero eso depende de que alguien lo haya configurado y de que el
      * aviso llegue; esta pasada garantiza que ninguna venta se quede sin entrar.
@@ -3574,6 +3599,7 @@ export class SyncService implements OnModuleInit {
      */
     async onModuleInit() {
         void this.asegurarAvisosDeFalabella();
+        void this.corregirEstadosDeFalabellaUnaVez();
         const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
         if (!(minutos > 0)) return;
         try {

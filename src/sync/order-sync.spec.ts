@@ -160,6 +160,24 @@ describe('estado de las ventas de Falabella', () => {
         expect(producto.stock).toBe(4);
     });
 
+    it('la pasada de corrección actualiza el estado de lo que ya existe y no crea ventas ni baja el stock', async () => {
+        const { service, ventas, producto, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        falabella.getOrders.mockResolvedValue([
+            { ...pedidoFalabella, Statuses: { Status: 'delivered' } },
+            { ...pedidoFalabella, OrderId: 555, Statuses: { Status: 'delivered' } },
+        ]);
+
+        const r = await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' }, { desdeHoras: 720, soloActualizar: true });
+
+        expect(r).toMatchObject({ nuevos: 0, actualizados: 1 });
+        expect(ventas).toHaveLength(1);
+        expect(ventas[0].saleState).toBe('entregado');
+        expect(producto.stock).toBe(4);
+    });
+
     it('pide los pedidos por fecha de actualización, para ver los que cambiaron aunque se crearon hace días', async () => {
         const { service, falabella } = await construir();
         await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
