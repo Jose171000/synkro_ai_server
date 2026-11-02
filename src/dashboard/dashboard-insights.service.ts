@@ -10,6 +10,7 @@ import { Payment } from '../admin/entities/payment.entity';
 import { Store } from '../stores/entities/store.entity';
 import { CreatePaymentDto } from '../admin/dto/create-payment.dto';
 import { DashboardService } from './dashboard.service';
+import { ESTADOS_QUE_NO_CUENTAN } from '../sync/estado-de-venta';
 import { UpdateStorePlanDto } from './dto/update-store-plan.dto';
 import {
     avanzarVencimiento,
@@ -173,6 +174,7 @@ export class DashboardInsightsService {
                     jsonb_array_elements(CASE WHEN jsonb_typeof(o.items) = 'array' THEN o.items ELSE '[]'::jsonb END) it
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '30 days'
+                AND o."saleState" NOT IN ('cancelado', 'devuelto')
                 AND COALESCE(it->>'sku', '') <> ''
               GROUP BY it->>'sku', o.marketplace`,
             [scope.storeId],
@@ -248,6 +250,7 @@ export class DashboardInsightsService {
                FROM marketplace_orders o
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '15 days'
+                AND o."saleState" NOT IN ('cancelado', 'devuelto')
               GROUP BY dia`,
             [storeId],
         );
@@ -269,7 +272,9 @@ export class DashboardInsightsService {
             .createQueryBuilder('o')
             .select('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
             .where('o."storeId" = :storeId', { storeId })
-            .andWhere('o."orderDate" >= :desde', { desde });
+            .andWhere('o."orderDate" >= :desde', { desde })
+            // Canceladas y devueltas no son venta: no suman a la comisión.
+            .andWhere('o."saleState" NOT IN (:...fuera)', { fuera: ESTADOS_QUE_NO_CUENTAN });
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
         const fila = await qb.getRawOne();
         return Number(fila?.importe ?? 0);
@@ -332,7 +337,7 @@ export class DashboardInsightsService {
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
-                  WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1
+                  WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1 AND o."saleState" NOT IN ('cancelado', 'devuelto')
                   GROUP BY o."storeId", dia`,
                 [limaMedianoche(desdeVentas)],
             ),
@@ -358,7 +363,7 @@ export class DashboardInsightsService {
             // El superadmin ve TODO lo que se vendió este mes, de cualquier tienda.
             this.orders.query(
                 `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
-                   FROM marketplace_orders o WHERE o."orderDate" >= $1`,
+                   FROM marketplace_orders o WHERE o."orderDate" >= $1 AND o."saleState" NOT IN ('cancelado', 'devuelto')`,
                 [inicioDeMesLima(hoy)],
             ),
         ]);

@@ -9,6 +9,7 @@ import { Notification } from '../notifications/entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { Store } from '../stores/entities/store.entity';
+import { ESTADOS_QUE_NO_CUENTAN } from '../sync/estado-de-venta';
 
 /** Por debajo de estas unidades, un producto publicado se considera en riesgo. */
 const LOW_STOCK_THRESHOLD = 5;
@@ -92,6 +93,7 @@ export class DashboardService {
                 .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
                 .where('o."storeId" = :storeId', { storeId })
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
+                .andWhere('o."saleState" NOT IN (:...fuera)', { fuera: ESTADOS_QUE_NO_CUENTAN })
                 .groupBy('o.marketplace')
                 .getRawMany(),
 
@@ -147,7 +149,8 @@ export class DashboardService {
             .select('COUNT(*)', 'pedidos')
             .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
             .where('o."storeId" = :storeId', { storeId })
-            .andWhere('o."orderDate" >= :desde', { desde });
+            .andWhere('o."orderDate" >= :desde', { desde })
+            .andWhere('o."saleState" NOT IN (:...fuera)', { fuera: ESTADOS_QUE_NO_CUENTAN });
 
         if (hasta) qb.andWhere('o."orderDate" < :hasta', { hasta });
 
@@ -192,6 +195,7 @@ export class DashboardService {
                 .addSelect('COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0)', 'importe')
                 .where('o."storeId" IS NOT NULL')
                 .andWhere('o."orderDate" >= :desde', { desde: desdeEsteMes })
+                .andWhere('o."saleState" NOT IN (:...fuera)', { fuera: ESTADOS_QUE_NO_CUENTAN })
                 .groupBy('o."storeId"')
                 .getRawMany(),
 

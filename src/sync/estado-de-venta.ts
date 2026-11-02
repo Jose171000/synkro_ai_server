@@ -7,6 +7,9 @@ export type EstadoDeVenta = 'pendiente' | 'enviado' | 'entregado' | 'cancelado' 
 
 export const ESTADOS_DE_VENTA: EstadoDeVenta[] = ['pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto'];
 
+/** Estados que NO cuentan como venta en los totales ni en el cobro a los clientes: la venta no se concretó o se devolvió. */
+export const ESTADOS_QUE_NO_CUENTAN: EstadoDeVenta[] = ['cancelado', 'devuelto'];
+
 /** Estados de los que una venta ya no suele salir: no vale la pena volver a consultarla al canal. */
 export const ESTADOS_FINALES: EstadoDeVenta[] = ['entregado', 'cancelado', 'devuelto'];
 

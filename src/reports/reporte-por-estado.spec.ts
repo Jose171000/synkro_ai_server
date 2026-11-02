@@ -18,10 +18,13 @@ function construir(conSheet = false) {
 }
 
 describe('reporte de ventas por estado', () => {
-    it('sin estado no filtra', async () => {
+    it('sin estado elegido cuentan las ventas concretadas: se dejan fuera las canceladas y las devueltas', async () => {
         const { service, condiciones } = construir();
         const r = await service.getSalesReport('t1', '2026-10-01', '2026-10-31');
-        expect(condiciones.some(c => c.sql.includes('saleState'))).toBe(false);
+        const filtros = condiciones.filter(c => c.sql.includes('saleState'));
+        expect(filtros.length).toBeGreaterThanOrEqual(2);
+        expect(filtros[0].sql).toContain('NOT IN');
+        expect(filtros[0].params.fuera).toEqual(['cancelado', 'devuelto']);
         expect(r.statusFilter).toEqual([]);
     });
 
@@ -30,7 +33,8 @@ describe('reporte de ventas por estado', () => {
         const r = await service.getSalesReport('t1', '2026-10-01', '2026-10-31', 'entregado,enviado,otro');
         const filtros = condiciones.filter(c => c.sql.includes('saleState'));
         expect(filtros.length).toBeGreaterThanOrEqual(2); // por día/canal y por cuenta
-        expect(filtros[0].params).toEqual({ estados: ['enviado', 'entregado'] });
+        expect(filtros[0].sql).toContain('"saleState" IN (:...estados)');
+        expect(filtros[0].params.estados).toEqual(['enviado', 'entregado']);
         expect(r.statusFilter).toEqual(['enviado', 'entregado']);
         expect(r.byStatus.find(e => e.status === 'enviado')).toEqual({ status: 'enviado', orders: 2, sales: 100.5 });
         expect(r.byStatus.map(e => e.status)).toEqual(['pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto']);

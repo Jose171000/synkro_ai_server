@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
-import { ESTADOS_DE_VENTA } from '../sync/estado-de-venta';
+import { ESTADOS_DE_VENTA, ESTADOS_QUE_NO_CUENTAN } from '../sync/estado-de-venta';
 import { estadosPedidos } from '../sync/orders-query.service';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { parseAmount } from '../common/parse-amount';
@@ -129,7 +129,8 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
-            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '1=1', { estados })
+            // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
+            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('date').addGroupBy('"o"."marketplace"')
             .orderBy('date', 'ASC')
             .getRawMany();
@@ -186,7 +187,8 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
-            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '1=1', { estados })
+            // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
+            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
             .orderBy('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'DESC')
             .getRawMany();
