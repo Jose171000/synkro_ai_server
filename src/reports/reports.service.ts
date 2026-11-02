@@ -129,6 +129,7 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '1=1', { estados })
             .groupBy('date').addGroupBy('"o"."marketplace"')
             .orderBy('date', 'ASC')
             .getRawMany();
@@ -152,7 +153,8 @@ export class ReportsService {
         let sheetError: string | null = null;
         const profile = await this.legacyProfile(storeId);
 
-        if (profile?.sheetCsvUrl) {
+        // El Google Sheet no tiene estado de venta: con un filtro de estado no se mezcla.
+        if (profile?.sheetCsvUrl && !estados.length) {
             try {
                 const sheetRows = await this.fetchSheetRows(profile.sheetCsvUrl);
                 for (const row of sheetRows) {
@@ -184,6 +186,7 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '1=1', { estados })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
             .orderBy('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'DESC')
             .getRawMany();
@@ -217,6 +220,11 @@ export class ReportsService {
             },
             byDay,
             byChannel,
+            byStatus: ESTADOS_DE_VENTA.map(e => {
+                const r = porEstado.find(x => x.estado === e);
+                return { status: e, orders: Number(r?.orders ?? 0), sales: Math.round(Number(r?.sales ?? 0) * 100) / 100 };
+            }),
+            statusFilter: estados,
             byAccount: porCuenta.map(r => ({
                 connectionId: r.connectionId,
                 channel: r.channel,
