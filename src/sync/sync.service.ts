@@ -39,6 +39,7 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
 import { importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { lineaDeDiagnostico, puedeDiagnosticar } from './diagnostico-envio';
 import { ESTADOS_FINALES, EstadoDeVenta, estadoDeVenta, estadoDeVentaMeli, estadosDePedidoFalabella } from './estado-de-venta';
 import { filasDeItemMeli, MeliListingRow, publicacionesSinSku, PublicacionSinSku } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
@@ -3003,6 +3004,7 @@ export class SyncService implements OnModuleInit {
             if (pagina.length < 100) break;
         }
 
+        void this.diagnosticarEnvioFalabella(credentials, pedidos);
         const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false, !!options.soloActualizar);
         if (r.nuevos || r.actualizados) {
             console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados (${r.actualizados} con estado nuevo).`);
@@ -3504,6 +3506,7 @@ export class SyncService implements OnModuleInit {
         const connection = await this.getValidConnectionById(connectionId);
         const desde = new Date(Date.now() - SyncService.ORDER_LOOKBACK_HOURS * 3600_000);
         const ordenes = await this.meliApi.searchOrders(connection.accessToken, connection.externalUserId, desde);
+        void this.diagnosticarEnvioMeli(connection, ordenes);
 
         let nuevos = 0;
         for (const orden of ordenes) {
@@ -3516,6 +3519,38 @@ export class SyncService implements OnModuleInit {
             console.log(`[Sync] Mercado Libre ${connection.externalNickname}: ${ordenes.length} ventas leídas (${estados}), ${nuevos} nuevas`);
         }
         return { nuevos, revisados: ordenes.length };
+    }
+
+    /** Unos pocos elementos repartidos por toda la lista (no solo los primeros), para ver casos distintos. */
+    private repartidos<T>(lista: T[], cuantos: number): T[] {
+        const paso = Math.max(1, Math.floor(lista.length / cuantos));
+        return lista.filter((_, i) => i % paso === 0).slice(0, cuantos);
+    }
+
+    /** DIAGNÓSTICO TEMPORAL (ver diagnostico-envio.ts): deja en el log los campos de costo de envío de unas pocas ventas de Mercado Libre. */
+    private async diagnosticarEnvioMeli(connection: MarketplaceConnection, ordenes: any[]): Promise<void> {
+        try {
+            for (const orden of this.repartidos(ordenes, 6)) {
+                if (!puedeDiagnosticar('mercadolibre', 6)) return;
+                console.log(lineaDeDiagnostico('ML', `orden ${orden?.id} (order)`, orden));
+                const envio = orden?.shipping?.id ? await this.fetchMeliShipment(connection, orden) : null;
+                if (envio) console.log(lineaDeDiagnostico('ML', `orden ${orden?.id} (shipment)`, envio));
+            }
+        } catch { /* es solo un diagnóstico: nunca debe afectar a las ventas */ }
+    }
+
+    /** DIAGNÓSTICO TEMPORAL: lo mismo para Falabella (el pedido y sus primeros artículos). */
+    private async diagnosticarEnvioFalabella(credentials: { userId: string; apiKey: string }, pedidos: any[]): Promise<void> {
+        try {
+            for (const pedido of this.repartidos(pedidos, 8)) {
+                if (!puedeDiagnosticar('falabella', 8)) return;
+                const id = String(pedido?.OrderId ?? '');
+                if (!id) continue;
+                console.log(lineaDeDiagnostico('FALA', `pedido ${id} (order)`, pedido));
+                const items = await this.falabellaApi.getOrderItems(credentials, id);
+                items.slice(0, 2).forEach((item: any, i: number) => console.log(lineaDeDiagnostico('FALA', `pedido ${id} (item ${i})`, item)));
+            }
+        } catch { /* es solo un diagnóstico: nunca debe afectar a las ventas */ }
     }
 
     /** Ventas recientes de una cuenta, sea del canal que sea. */
