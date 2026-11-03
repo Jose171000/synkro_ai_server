@@ -47,11 +47,23 @@ export function estadoDeVenta(...textos: (string | null | undefined)[]): EstadoD
 
 /**
  * Mercado Libre: la venta dice si se pagó o se canceló; si salió y llegó lo dice el envío.
- * Sin envío (retiro, acuerdo con el comprador) una venta pagada queda como pendiente hasta que el canal diga otra cosa.
+ * Sin envío (retiro, acuerdo con el comprador) no hay quien diga que llegó: Mercado Libre la da por entregada pasados unos días
+ * del pago, así que aquí también (antes quedaba «pendiente» para siempre). Si la venta trae la etiqueta `delivered`, también.
  */
-export function estadoDeVentaMeli(orderStatus: string | null | undefined, shipmentStatus?: string | null): EstadoDeVenta {
+export const DIAS_PARA_DAR_POR_ENTREGADA_SIN_ENVIO = 7;
+
+export function estadoDeVentaMeli(orderStatus: string | null | undefined, shipmentStatus?: string | null, order?: any, ahora: number = Date.now()): EstadoDeVenta {
     if (/cancel/i.test(String(orderStatus ?? ''))) return 'cancelado';
-    return shipmentStatus ? estadoDeVenta(shipmentStatus) : 'pendiente';
+    if (shipmentStatus) return estadoDeVenta(shipmentStatus);
+    if (Array.isArray(order?.tags) && order.tags.includes('delivered')) return 'entregado';
+    if (order && !order.shipping?.id) {
+        const aprobado = (Array.isArray(order.payments) ? order.payments : [])
+            .map((p: any) => new Date(p?.date_approved ?? '').getTime())
+            .filter((t: number) => !Number.isNaN(t));
+        const pago = aprobado.length ? Math.min(...aprobado) : new Date(order.date_closed ?? order.date_created ?? '').getTime();
+        if (!Number.isNaN(pago) && ahora - pago >= DIAS_PARA_DAR_POR_ENTREGADA_SIN_ENVIO * 86_400_000) return 'entregado';
+    }
+    return 'pendiente';
 }
 
 /** Lee la lista de estados de un pedido de Falabella (`Statuses.Status`: texto o lista). */

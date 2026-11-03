@@ -38,11 +38,18 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
     const limite = v.shipByDate ? diaEnLima(v.shipByDate) : '';
     const d = v.details;
     const lineas: any[] = v.lines?.length ? v.lines : [{ sku: null, title: 'Sin detalle de productos', quantity: 1, unitPrice: v.totalAmount }];
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const envioCobrado = Number(v.shippingPaid ?? d?.shippingAmount ?? 0);
+    // Lo que pagó el comprador, igual en todos los canales: los productos (ya con el cupón del canal) más el envío que pagó.
+    // El total que guarda cada canal no es comparable: el de Falabella incluía el envío y el de Mercado Libre no.
+    const totalPagado = r2(lineas.reduce((s, l) => s + Number(l.quantity ?? 1) * Number(l.unitPrice ?? 0), 0) + envioCobrado);
     return lineas.map((l, i) => ({
         fecha,
         canal: v.marketplace,
         cuenta: v.account?.label ?? '',
         numero_pedido: v.orderNumber ?? '',
+        // Mercado Libre numera con el paquete la venta que se compró junto con otros productos: sirve para cruzar con su reporte.
+        numero_de_paquete: d?.packId ?? '',
         estado: v.saleState ?? '',
         estado_en_el_canal: v.status ?? '',
         cliente: v.customerName ?? '',
@@ -55,11 +62,11 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
         cantidad: Number(l.quantity ?? 1),
         precio_unitario: Number(l.unitPrice ?? 0),
         importe_productos: Math.round(Number(l.quantity ?? 1) * Number(l.unitPrice ?? 0) * 100) / 100,
-        envio_cobrado: i === 0 ? Number(v.shippingPaid ?? d?.shippingAmount ?? 0) : 0,
+        envio_cobrado: i === 0 ? envioCobrado : 0,
         tipo_de_envio: i === 0 ? (v.shippingType ?? '') : '',
         costo_envio_para_el_vendedor: i === 0 && v.shippingSellerCost != null ? Number(v.shippingSellerCost) : '',
         cupon_o_descuento: i === 0 ? Number(v.discountAmount ?? 0) : 0,
-        total_del_pedido: i === 0 ? Number(v.totalAmount ?? 0) : 0,
+        total_del_pedido: i === 0 ? totalPagado : 0,
         moneda: v.currency ?? '',
         enviar_antes_de: limite,
         stock_tras_la_venta: l.stockAfter ?? '',

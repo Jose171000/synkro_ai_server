@@ -3248,6 +3248,7 @@ export class SyncService implements OnModuleInit {
         // Solo las ventas confirmadas mueven el stock; pero una que ya teníamos y se canceló debe quedar cancelada.
         if (order.status !== 'paid') {
             await this.refrescarEstadoMeli(connection, order);
+            await this.registrarCanceladaMeli(connection, order);
             return false;
         }
 
@@ -3286,7 +3287,7 @@ export class SyncService implements OnModuleInit {
                 details: norm.details as any,
                 status: order.status,
                 ...norm.costs,
-                saleState: estadoDeVentaMeli(order.status, shipment?.status),
+                saleState: estadoDeVentaMeli(order.status, shipment?.status, order),
                 orderDate: order.date_closed ? new Date(order.date_closed) : (order.date_created ? new Date(order.date_created) : new Date()),
             }));
         } catch (error: any) {
@@ -3397,6 +3398,46 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
+     * Una venta que se pagó y se canceló (el comprador se arrepintió, se reembolsó) antes de que la viéramos como pagada no quedaba
+     * registrada, y el reporte de ventas no coincidía con el de Mercado Libre. Se guarda como cancelada, sin tocar el stock ni avisar.
+     * Las que nunca se pagaron no se guardan: Mercado Libre tampoco las lista en su reporte.
+     */
+    private async registrarCanceladaMeli(connection: MarketplaceConnection, order: any): Promise<void> {
+        if (!/cancel/i.test(String(order?.status ?? ''))) return;
+        const seCobro = (Array.isArray(order.payments) ? order.payments : []).some((p: any) => ['approved', 'refunded', 'charged_back'].includes(String(p?.status ?? '')));
+        if (!seCobro) return;
+        const orderId = String(order.id);
+        const existente = await this.orderRepository.findOne({ where: { marketplace: 'mercadolibre', externalId: orderId } });
+        if (existente) return;
+        try {
+            const norm = normalizeMeliOrder(order, null);
+            await this.orderRepository.save(this.orderRepository.create({
+                marketplace: 'mercadolibre',
+                externalId: orderId,
+                owner: { id: connection.owner.id } as any,
+                store: connection.store ? ({ id: connection.store.id } as any) : null,
+                connection: { id: connection.id } as any,
+                totalAmount: Number(order.total_amount || 0),
+                productsAmount: importeDeProductos(norm.lines, Number(order.total_amount || 0)),
+                currency: resolverMoneda(order.currency_id, await this.monedaDeCuenta(connection.id)),
+                itemsCount: (order.order_items || []).reduce((s: number, i: any) => s + Number(i?.quantity || 0), 0) || 1,
+                items: norm.lines as any,
+                orderNumber: norm.orderNumber,
+                customerName: norm.customerName,
+                shipByDate: norm.shipByDate,
+                details: norm.details as any,
+                status: String(order.status).slice(0, 30),
+                ...norm.costs,
+                saleState: 'cancelado',
+                orderDate: order.date_closed ? new Date(order.date_closed) : (order.date_created ? new Date(order.date_created) : new Date()),
+            }));
+        } catch (error: any) {
+            // 23505 = ya registrada (carrera entre webhooks)
+            if (error?.code !== '23505') console.warn(`[Sync] Venta cancelada ${orderId} de Mercado Libre no registrada: ${error?.message}`);
+        }
+    }
+
+    /**
      * Los productos de un paquete de Mercado Libre viajan en un solo envío y cada venta trae el costo completo de ese envío.
      * Se reparte en partes iguales entre las ventas del mismo envío, para que el costo no se cuente una vez por producto.
      * Parte del costo completo de la venta que se acaba de guardar, así que repetirlo da el mismo resultado.
@@ -3472,7 +3513,7 @@ export class SyncService implements OnModuleInit {
         if (!cancelada && ESTADOS_FINALES.includes(existente.saleState)) return;
         const envio = cancelada ? null : await this.fetchMeliShipment(connection, order);
         if (!cancelada && order?.shipping?.id && !envio) return;
-        const estado = estadoDeVentaMeli(order.status, envio?.status);
+        const estado = estadoDeVentaMeli(order.status, envio?.status, order);
         // Con el envío ya leído, se aprovecha para completar el costo del envío si todavía no se sabía (sin otra consulta al canal).
         if (envio && existente.shippingType === 'sin_dato') {
             await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
@@ -3521,6 +3562,57 @@ export class SyncService implements OnModuleInit {
         if (order?.shipping?.id && !envio) return;
         await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
         await this.repartirEnvioDePaquete(existente.id);
+    }
+
+    /**
+     * Una sola vez: vuelve a leer las ventas de Mercado Libre de los últimos 90 días para guardar el número de paquete, registrar
+     * las canceladas que no se habían guardado y corregir las que quedaron «pendiente» sin tener envío. No toca el stock.
+     */
+    private async repasarVentasMeliUnaVez(): Promise<void> {
+        try {
+            const primera = await this.redis.set('orders:meli-repaso:v1', '1', 'EX', 60 * 60 * 24 * 365, 'NX');
+            if (!primera) return;
+            const cuentas = await this.connectionRepository.find({ where: { marketplace: 'mercadolibre', status: 'active' }, relations: { owner: true, store: true } });
+            for (const c of cuentas) {
+                try {
+                    const conexion = await this.getValidConnectionById(c.id);
+                    const desde = new Date(Date.now() - 90 * 24 * 3600_000);
+                    let revisadas = 0;
+                    for (let offset = 0; ; offset += 50) {
+                        const { results, total } = await this.meliApi.searchOrdersPage(conexion.accessToken, conexion.externalUserId, { from: desde, to: new Date(), offset });
+                        if (!results.length) break;
+                        for (const orden of results) {
+                            try {
+                                await this.repasarVentaMeli(conexion, orden);
+                                revisadas++;
+                            } catch (error: any) {
+                                console.warn(`[Sync] Repaso de la venta ${orden?.id} de Mercado Libre: ${error?.message}`);
+                            }
+                        }
+                        if (offset + results.length >= total) break;
+                    }
+                    console.log(`[Sync] Repaso de Mercado Libre (${c.externalNickname}): ${revisadas} ventas revisadas.`);
+                } catch (error: any) {
+                    console.warn(`[Sync] Repaso de Mercado Libre (${c.externalUserId}): ${error?.message}`);
+                }
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo repasar las ventas de Mercado Libre: ${error?.message}`);
+        }
+    }
+
+    private async repasarVentaMeli(connection: MarketplaceConnection, order: any): Promise<void> {
+        const existente = await this.orderRepository.findOne({ where: { marketplace: 'mercadolibre', externalId: String(order.id) } });
+        if (!existente) {
+            await this.registrarCanceladaMeli(connection, order);
+            return;
+        }
+        const paquete = order?.pack_id != null ? String(order.pack_id) : null;
+        const det = existente.details as any;
+        if (det && paquete && det.packId !== paquete) {
+            await this.orderRepository.update(existente.id, { details: { ...det, packId: paquete } as any });
+        }
+        if (existente.saleState === 'pendiente') await this.refrescarEstadoMeli(connection, order);
     }
 
     /**
@@ -3697,6 +3789,7 @@ export class SyncService implements OnModuleInit {
         void this.asegurarAvisosDeFalabella();
         void this.corregirEstadosDeFalabellaUnaVez();
         void this.completarCostosUnaVez();
+        void this.repasarVentasMeliUnaVez();
         const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
         if (!(minutos > 0)) return;
         try {

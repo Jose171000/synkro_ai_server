@@ -73,6 +73,8 @@ export interface OrderDetails {
         approvedAt: string | null;
     };
     notes: string | null;
+    /** Mercado Libre: número del paquete cuando varios productos se compraron juntos. */
+    packId?: string | null;
     channelStatus: string | null;
 }
 
@@ -341,6 +343,8 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
                 approvedAt: texto(pago?.date_approved),
             },
             notes: null,
+            // Cuando varios productos se compran juntos, el reporte de Mercado Libre numera la venta con el paquete.
+            packId: texto(order?.pack_id),
             channelStatus: texto(order?.status),
         },
     };

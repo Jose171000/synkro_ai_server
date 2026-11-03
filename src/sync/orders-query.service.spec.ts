@@ -61,7 +61,7 @@ describe('descarga de las ventas filtradas', () => {
         const r = await service.exportar('t1', 'owner', { status: 'enviado', marketplace: 'falabella', search: 'gafas' });
         expect(r).toMatchObject({ ventas: 1, incompleto: false });
         expect(r.filas).toHaveLength(2);
-        expect(r.filas[0]).toMatchObject({ canal: 'falabella', numero_pedido: '7001', estado: 'enviado', cliente: 'Lucía Paredes', telefono: '999', sku: 'GAF-01', producto: 'Gafas de sol', cantidad: 1, precio_unitario: 149.9, envio_cobrado: 12, total_del_pedido: 149.9, fecha: '2026-10-09', tipo_de_envio: 'comprador', costo_envio_para_el_vendedor: '', cupon_o_descuento: 5 });
+        expect(r.filas[0]).toMatchObject({ canal: 'falabella', numero_pedido: '7001', estado: 'enviado', cliente: 'Lucía Paredes', telefono: '999', sku: 'GAF-01', producto: 'Gafas de sol', cantidad: 1, precio_unitario: 149.9, envio_cobrado: 12, total_del_pedido: 171.9, numero_de_paquete: '', fecha: '2026-10-09', tipo_de_envio: 'comprador', costo_envio_para_el_vendedor: '', cupon_o_descuento: 5 });
         expect(r.filas[1]).toMatchObject({ sku: 'SIN-CATALOGO', envio_cobrado: 0, total_del_pedido: 0 });
         expect(llamadas.where.some(w => w.includes('saleState" IN'))).toBe(true);
         expect(llamadas.where.some(w => w.includes('o.marketplace'))).toBe(true);
