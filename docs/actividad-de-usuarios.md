@@ -76,5 +76,9 @@ pantalla: se agregan solas en cuanto hay actividad.
    ventana para quien ya tenía cuenta. Los clics se nombran por el texto fijo del control o por `data-track`; el contenido de
    filas, tarjetas y campos nunca se usa (`src/lib/activity-naming.ts`, probado con `npm run probar:etiquetas`). Para encender la
    casilla obligatoria en el servidor: `PRIVACY_CONSENT_REQUIRED=true` (solo después de publicar el frontend nuevo).
-3. Pantalla Superadmin › Actividad.
+3. **Pantalla Superadmin › Actividad (hecha):** pestaña «Actividad» dentro de Superadmin, visible solo con rol `admin`
+   (`src/components/admin/activity/` en el frontend). Filtros: persona o todas (promedio por persona o suma), roles de
+   plataforma y de tienda (varios), periodo. Muestra indicadores, secciones y funciones más usadas, cuadrícula día × hora,
+   mapa de clics por pantalla (con interruptor y lista), tabla de personas y línea de tiempo de una persona. Los controles de
+   ventanas emergentes no tienen posición: salen en la lista como «emergente» y no se dibujan en el mapa.
 4. Descargas Excel y PDF.
