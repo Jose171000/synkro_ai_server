@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 import { AuthModule } from './auth/auth.module';
+import { ActivityModule } from './activity/activity.module';
 import { UsersModule } from './users/user.module';
 import { ProductModule } from './products/products.module';
 import { AiModule } from './ai/ai.module';
@@ -112,6 +113,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
       }),
     }),
     AuthModule,
+    ActivityModule,
     UsersModule,
     ProductModule,
     AiModule,

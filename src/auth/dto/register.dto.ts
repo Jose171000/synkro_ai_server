@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, MaxLength, IsOptional, IsEnum, Matches, ValidateIf } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MinLength, MaxLength, IsOptional, IsEnum, Matches, ValidateIf, IsBoolean } from 'class-validator';
 
 export enum UserRole {
     USER = 'user',
@@ -51,6 +51,14 @@ export class RegisterDto{
     @IsNotEmpty({ message: 'Escribe la razón social de tu empresa.' })
     @MaxLength(200)
     businessName: string;
+
+    /**
+     * Acepta el aviso de privacidad (registro de la actividad en la plataforma). Es obligatorio cuando el servidor tiene
+     * PRIVACY_CONSENT_REQUIRED=true; hasta entonces es opcional para no romper formularios que aún no lo envían.
+     */
+    @IsBoolean()
+    @IsOptional()
+    acceptPrivacy?: boolean;
 
     @IsString()
     @IsOptional()

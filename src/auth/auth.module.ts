@@ -11,11 +11,13 @@ import { RefreshToken } from "./entities/refresh-token.entity";
 import { PasswordReset } from "./entities/password-reset.entity";
 import { UsersModule } from "../users/user.module";
 import { StoresModule } from "../stores/stores.module";
+import { ActivityModule } from "../activity/activity.module";
 
 @Module({
     imports: [
         UsersModule,
         StoresModule,
+        ActivityModule,
         PassportModule.register({ defaultStrategy: 'jwt' }),
         JwtModule.registerAsync({
             imports: [ConfigModule],

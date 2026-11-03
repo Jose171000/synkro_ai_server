@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
@@ -17,6 +17,8 @@ import { StoresService } from '../stores/stores.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
+import { PrivacyService } from '../activity/privacy.service';
+import { ActivityService } from '../activity/activity.service';
 
 @Injectable()
 export class AuthService {
@@ -32,12 +34,20 @@ export class AuthService {
     private passwordResetRepository: Repository<PasswordReset>,
     @InjectRepository(ClientProfile)
     private profileRepository: Repository<ClientProfile>,
+    // Registro de actividad y aviso de privacidad. Opcionales: sin ellos el inicio de sesión y el registro funcionan igual.
+    @Optional() private privacy?: PrivacyService,
+    @Optional() private activity?: ActivityService,
   ) { }
 
   async register(registerDto: RegisterDto): Promise<
     | { user: User; accessToken: string; refreshToken: string; pending?: undefined }
     | { user: User; pending: true; message: string }
   > {
+    // El aviso de privacidad es condición para crear la cuenta. Se exige cuando el servidor lo activa (después de que el
+    // formulario nuevo esté publicado), para no rechazar los registros hechos con el formulario anterior.
+    if (process.env.PRIVACY_CONSENT_REQUIRED === 'true' && registerDto.acceptPrivacy !== true) {
+      throw new BadRequestException('Debes aceptar el aviso de privacidad para crear tu cuenta.');
+    }
     const email = registerDto.email.trim().toLowerCase();
     const existingUser = await this.userService.findByEmail(email);
     if (existingUser) {
@@ -74,6 +84,13 @@ export class AuthService {
       url: registerDto.url,
       role,
     }, esAdmin || invitacion ? { approvalStatus: 'approved', approvedAt: new Date() } : { approvalStatus: 'pending' });
+
+    // Queda constancia de que aceptó el aviso (con la versión y la fecha) y de por qué vía se registró.
+    if (registerDto.acceptPrivacy === true) {
+      await this.privacy?.aceptar(user.id, invitacion ? 'invitacion' : 'registro').catch(err => {
+        console.error('[AuthService] No se pudo guardar la aceptación del aviso de privacidad:', err.message);
+      });
+    }
 
     // Datos de la empresa: quedan en su perfil comercial para revisarlos al aprobar. Una persona invitada es del equipo
     // de una tienda que ya existe: no es un cliente nuevo y no se le crea perfil de empresa.
@@ -182,6 +199,9 @@ export class AuthService {
     // Solo después de comprobar la contraseña: así no se revela a un extraño si una cuenta existe.
     this.asegurarAprobada(user);
     const tokens = await this.generateTokens(user);
+
+    // Ingreso para el registro de actividad (solo si ya aceptó el aviso). No espera ni puede romper el inicio de sesión.
+    void this.activity?.anotar({ userId: user.id, platformRole: user.role }, 'login', 'Inicio de sesión', 'cuenta');
 
     return {
       user: this.sanitizeUser(user),
