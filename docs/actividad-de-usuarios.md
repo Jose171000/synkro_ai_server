@@ -27,13 +27,18 @@ Las etiquetas de pantallas y elementos pasan por `limpiarEtiqueta` (`activity-va
 * Quien ya tenía cuenta acepta con `POST /activity/consent` (ventana al próximo ingreso). `GET /activity/consent` dice si falta.
 * Queda en `privacy_consents`: persona, versión, fecha y vía (`registro`, `invitacion`, `aviso`).
 
-Texto del aviso (v. 2026-11-03; revisarlo con un abogado y poner el correo de contacto):
+Texto del aviso (v. 2026-11-03; vive en el frontend, `src/lib/privacy-notice.ts`, y debe llevar la misma versión que el
+servidor; revisarlo con un abogado):
 
 > **Aviso de privacidad y uso de datos.** Para mejorar Synkro y darte mejor soporte, registramos cómo usas la plataforma: tus
 > ingresos, las secciones que abres, los botones que tocas y las acciones que realizas, con su fecha y hora. No guardamos lo
 > que escribes, tus contraseñas ni los datos personales de tus clientes. Esta información la ven solo los administradores de
-> Synkro, se conserva 90 días en detalle y se usa únicamente para analizar el uso del servicio. Puedes escribirnos a [correo]
+> Synkro y se usa únicamente para analizar el uso del servicio. Se conserva 90 días en detalle; después solo se guardan
+> resúmenes (por ejemplo, cuántas veces se usó cada sección), hasta por 2 años. Puedes escribirnos a synkroaiecom@gmail.com
 > para consultar, corregir o pedir la eliminación de tus datos.
+
+Dónde se muestra: casilla obligatoria en `Register` (tienda independiente) y `RegisterInvited` (invitado), y una ventana que
+bloquea el panel (`ActivityTracker`) a quien ya tenía cuenta hasta que acepte o cierre sesión.
 
 ## Datos y retención
 
@@ -67,6 +72,9 @@ pantalla: se agregan solas en cuanto hay actividad.
 ## Fases
 
 1. **Servidor (hecha):** tablas, consentimiento, registro, resúmenes, limpieza, consultas solo para admin, pruebas.
-2. Navegador y aviso: registro de clics en la app, casilla en `Register` y `RegisterInvited`, ventana para quien ya tenía cuenta.
+2. **Navegador y aviso (hecha):** rastreador propio (`src/lib/activity-tracker.ts`), casilla en `Register` y `RegisterInvited`,
+   ventana para quien ya tenía cuenta. Los clics se nombran por el texto fijo del control o por `data-track`; el contenido de
+   filas, tarjetas y campos nunca se usa (`src/lib/activity-naming.ts`, probado con `npm run probar:etiquetas`). Para encender la
+   casilla obligatoria en el servidor: `PRIVACY_CONSENT_REQUIRED=true` (solo después de publicar el frontend nuevo).
 3. Pantalla Superadmin › Actividad.
 4. Descargas Excel y PDF.
