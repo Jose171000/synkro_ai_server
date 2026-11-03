@@ -10,6 +10,7 @@ import { Store } from './entities/store.entity';
 import { StoreInvitation } from './entities/store-invitation.entity';
 import { STORE_ROLE_RANK, StoreMember, StoreRole } from './entities/store-member.entity';
 import { eliminarTienda, ResumenDeBorrado } from './store-removal';
+import { Permiso, permisosDeRol } from './permissions';
 
 /** Las invitaciones caducan: un enlace olvidado en un correo no debe valer para siempre. */
 const INVITATION_DAYS = 7;
@@ -22,7 +23,11 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest('hex
 export interface StoreAccess {
     storeId: string;
     role: StoreRole;
+    /** Lo que esta persona puede hacer en la tienda (hoy, los permisos de su rol de fábrica). */
+    permissions: Permiso[];
 }
+
+export const SIN_PERMISO = 'Tu rol en esta tienda no permite esta acción.';
 
 @Injectable()
 export class StoresService {
@@ -62,9 +67,16 @@ export class StoresService {
         // Misma respuesta si la tienda no existe o si no es suya: no se revela cuál.
         if (!role) throw new ForbiddenException(NO_STORE_ACCESS);
         if (STORE_ROLE_RANK[role] < STORE_ROLE_RANK[minimum]) {
-            throw new ForbiddenException('Tu rol en esta tienda no permite esta acción.');
+            throw new ForbiddenException(SIN_PERMISO);
         }
-        return { storeId, role };
+        return { storeId, role, permissions: permisosDeRol(role) };
+    }
+
+    /** Como `requireAccess`, pero exige además un permiso concreto. */
+    async requirePermission(userId: string, storeId: string, permiso: Permiso): Promise<StoreAccess> {
+        const acceso = await this.requireAccess(userId, storeId, 'viewer');
+        if (!acceso.permissions.includes(permiso)) throw new ForbiddenException(SIN_PERMISO);
+        return acceso;
     }
 
     // ── Tiendas ──────────────────────────────────────────────────
@@ -200,6 +212,8 @@ export class StoresService {
                 id: m.store.id,
                 name: m.store.name,
                 role: m.role,
+                /** Lo que puede hacer en esa tienda: la app muestra u oculta botones con esto. */
+                permissions: permisosDeRol(m.role),
                 publicEnabled: m.store.publicEnabled,
             })),
             canCreateStores: await this.canCreateStores(userId),

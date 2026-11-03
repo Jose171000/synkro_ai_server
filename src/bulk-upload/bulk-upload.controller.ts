@@ -19,7 +19,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { UploadService } from '../upload/upload.service';
-import { StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guard';
 import { SyncService } from '../sync/sync.service';
 import { ProductsService } from '../products/products.service';
 import { SkuGeneratorService } from '../products/sku-generator.service';
@@ -103,6 +103,7 @@ export class BulkUploadController {
     // GET /bulk-upload/products/template — plantilla de Excel
     // ─────────────────────────────────────────────────────────────
     @Get('products/template')
+    @RequirePermission('productos.editar')
     @UseGuards(StoreAccessGuard)
     @ApiOperation({ summary: 'Descarga la plantilla de Excel de la tienda activa: la lista de canales solo muestra los conectados' })
     async downloadTemplate(@Req() req, @Res() res: Response) {
@@ -124,6 +125,7 @@ export class BulkUploadController {
     // POST /bulk-upload/products — Bulk CREATE products via AI
     // ─────────────────────────────────────────────────────────────
     @Post('products')
+    @RequirePermission('productos.editar')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiOperation({
         summary: 'Carga un archivo Excel para crear productos en lote mediante IA',
@@ -174,10 +176,10 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const rechazos: string[] = [];
             const rechazar = (i: number, motivo: string) => { rechazos.push(`Fila ${i + 2}: ${motivo}`); };
 
-            // Canales de la tienda donde se puede publicar sola. Solo el dueño publica;
-            // el resto de los roles crea los productos y los deja listos.
+            // Canales de la tienda donde se puede publicar sola. Solo quien tiene el permiso de publicar (dueño y editor, de
+            // fábrica); los demás crean los productos y los dejan listos.
             const storeId: string | undefined = req.store?.storeId;
-            const conectados: string[] = storeId && req.store?.role === 'owner'
+            const conectados: string[] = storeId && req.store?.permissions?.includes('canales.publicar')
                 ? [...new Set((await this.syncService.getConnections(storeId))
                     .filter((c: any) => c.status === 'active' && CANALES_PUBLICABLES.includes(c.marketplace))
                     .map((c: any) => c.marketplace as string))]
@@ -307,6 +309,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     // POST /bulk-upload/products/edit — Bulk EDIT own products
     // ─────────────────────────────────────────────────────────────
     @Get('products/progress/:batchId')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
     @ApiOperation({ summary: 'Avance de una carga masiva de productos (cuántos van listos y cuántos fallaron)' })
     async progresoDeLaCarga(@Param('batchId') batchId: string, @Req() req) {
         // Redis lleva el avance en vivo; pasadas 24 h (o tras un reinicio) la respuesta sale del registro de la base.
@@ -324,6 +328,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     }
 
     @Post('products/retry/:batchId')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiOperation({ summary: 'Reintentar una carga masiva terminada: vuelve a mandar los productos fallidos (en un lote nuevo) y reenvía a Falabella los que quedaron sin enviar' })
     async reintentarCarga(@Param('batchId') batchId: string, @Req() req) {
@@ -358,6 +364,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     }
 
     @Post('products/edit')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiOperation({
         summary: 'Edicion masiva de tus productos via Excel',
@@ -421,6 +429,8 @@ Solo se actualizan los campos presentes en el Excel. Solo puedes editar tus prop
     // GET /bulk-upload/products/edit/status
     // ─────────────────────────────────────────────────────────────
     @Get('products/edit/status')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
     @ApiOperation({ summary: 'Estado de la cola de edicion masiva de productos' })
     async getProductEditStatus() {
         const [waiting, active, completed, failed, delayed] = await Promise.all([

@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiExcludeEndpoint, ApiHeader, ApiOperation, ApiQuery, A
 import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
-import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guard';
 import { SyncScope, SyncService } from './sync.service';
 import { PublishProductDto } from './dto/publish-product.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
@@ -71,7 +71,7 @@ export class SyncController {
     @Get('connections')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Cuentas de marketplaces conectadas a la tienda (sin credenciales)' })
     getConnections(@Req() req) {
         return this.syncService.getConnections(scopeOf(req).storeId);
@@ -80,7 +80,7 @@ export class SyncController {
     @Get('mercadolibre/auth-url')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Genera la URL de autorización OAuth de Mercado Libre para esta tienda',
         description: 'El frontend redirige al usuario a esta URL; al autorizar, Mercado Libre llama a /sync/mercadolibre/callback. Una tienda admite hasta 3 cuentas.',
@@ -115,7 +115,7 @@ export class SyncController {
     @Post('yavendio/connect')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Conecta una cuenta de Yavendió a la tienda con su API key',
         description: 'Valida la clave contra Yavendió antes de guardarla cifrada. La clave nunca se devuelve. Una tienda admite hasta 3 cuentas.',
@@ -127,7 +127,7 @@ export class SyncController {
     @Get('yavendio/import/products')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Lista lo que hay en Yavendió y con qué producto de Synkro parece corresponder cada variante',
         description: 'Solo lee. Yavendió no usa SKU: se propone por SKU si lo tiene y si no por nombre. Nada se vincula hasta confirmarlo.',
@@ -140,7 +140,7 @@ export class SyncController {
     @Post('yavendio/import/products/link')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Vincula variantes de Yavendió con productos de Synkro (los pares que la persona confirmó)',
         description: 'No escribe nada en Yavendió. El stock queda sin definir y el precio y la disponibilidad solo cambian en el siguiente envío normal.',
@@ -152,7 +152,7 @@ export class SyncController {
     @Post('yavendio/import/orders')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Trae los pedidos de Yavendió a las ventas de la tienda',
         description: 'Entran como ventas (sin descontar stock ni mandar correos) solo los pedidos confirmados; los cancelados o rechazados no cuentan. Repetirlo no duplica.',
@@ -164,7 +164,7 @@ export class SyncController {
     @Post('falabella/connect')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Conecta una cuenta de Falabella Seller Center a la tienda',
         description: 'Comprueba las credenciales con una consulta real antes de guardarlas. La API key se guarda cifrada y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
@@ -181,7 +181,7 @@ export class SyncController {
     @Post('woocommerce/connect')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Conecta una tienda WooCommerce a la tienda',
         description: 'Comprueba las claves con una consulta real antes de guardarlas. El Consumer Secret se guarda cifrado y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
@@ -198,7 +198,7 @@ export class SyncController {
     @Post('shopify/connect')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Conecta una tienda Shopify a la tienda',
         description: 'Comprueba el token y sus permisos con una consulta real antes de guardarlo. El token se guarda cifrado y nunca se devuelve. Una tienda admite hasta 3 cuentas.',
@@ -210,7 +210,7 @@ export class SyncController {
     @Post('channels/:marketplace/listings/import')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Trae los productos que ya existen en una tienda WooCommerce o Shopify',
         description: 'Los enlaza con el catálogo por SKU; los nuevos se crean como borrador. Con dryRun=true no escribe nada.',
@@ -232,7 +232,7 @@ export class SyncController {
     @Get('listings')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Publicaciones de la tienda en todas sus cuentas de marketplaces' })
     getListings(@Req() req) {
         return this.syncService.getAllListings(scopeOf(req).storeId);
@@ -241,7 +241,7 @@ export class SyncController {
     @Delete('connections/:connectionId')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({ summary: 'Desconecta una cuenta de marketplace (por su id)' })
     disconnect(@Param('connectionId') connectionId: string, @Req() req) {
         return this.syncService.disconnect(scopeOf(req).storeId, connectionId);
@@ -253,7 +253,7 @@ export class SyncController {
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Publica un producto en los marketplaces indicados (asíncrono)',
         description: 'Encola un job por marketplace. Si la tienda tiene varias cuentas del canal hay que indicar cuál en connectionIds.',
@@ -265,7 +265,7 @@ export class SyncController {
     @Get('falabella/categories')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Busca categorías de Falabella donde publicar',
         description: 'Solo devuelve categorías finales, con su ruta completa. El árbol se guarda en memoria porque pesa y tarda.',
@@ -277,7 +277,7 @@ export class SyncController {
     @Get('falabella/categories/:categoryId/fields')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Datos obligatorios que pide una categoría de Falabella',
         description: 'Devuelve solo lo que hay que pedirle a la persona: los campos que la plataforma ya envía por su cuenta quedan fuera.',
@@ -289,7 +289,7 @@ export class SyncController {
     @Get('falabella/categories/:categoryId/variants')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: '¿Esta categoría de Falabella admite variantes?',
         description: 'Sí si trae campos de variación («…Variant»: color, tamaño…). Si no, las variantes de un grupo se publican como productos sueltos. Solo consulta.',
@@ -301,7 +301,7 @@ export class SyncController {
     @Get('products/:id/sheet')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('productos.ver')
     @ApiOperation({
         summary: 'Ficha del producto: lo que se envía a cada canal donde está publicado',
         description: 'Nombre, descripción, marca, categoría, atributos y medidas tal como los recibe cada marketplace, con su estado.',
@@ -313,7 +313,7 @@ export class SyncController {
     @Patch('products/:id/sheet')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('productos.editar')
     @ApiOperation({
         summary: 'Guarda cambios en la ficha y los envía a los canales',
         description: 'Tras guardar, el cambio se envía solo a cada canal donde el producto está publicado (en menos de un minuto; varios guardados seguidos se juntan en un envío).',
@@ -326,7 +326,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({ summary: 'Envía ya el contenido actual del producto a cada canal donde está publicado' })
     syncSheetNow(@Param('id') id: string, @Req() req) {
         return this.sheets.syncNow(scopeOf(req), id);
@@ -335,7 +335,7 @@ export class SyncController {
     @Get('falabella/brands')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Busca marcas del catálogo de Falabella',
         description: 'Falabella solo acepta marcas de su catálogo (o GENERICO). Primero salen las que empiezan por el texto.',
@@ -347,7 +347,7 @@ export class SyncController {
     @Post('mercadolibre/products/:id/link')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Enlaza un producto con una publicación que ya existe en Mercado Libre',
         description: 'No crea nada: la publicación existente se enlaza y se actualiza con los datos del producto (descripción, atributos, stock y precio).',
@@ -359,7 +359,7 @@ export class SyncController {
     @Patch('falabella/products/:id/brand')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({ summary: 'Cambia la marca con la que se publica un producto en Falabella' })
     setFalabellaBrand(@Param('id') id: string, @Body() dto: SetBrandDto, @Req() req) {
         return this.syncService.setFalabellaBrand(scopeOf(req), id, dto.brand, dto.connectionId);
@@ -368,7 +368,7 @@ export class SyncController {
     @Patch('falabella/products/:id/preparation')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Guarda la categoría, medidas y atributos que Falabella exige',
         description: 'Al guardar comprueba con las reglas reales de publicación y responde si el producto ya puede salir o qué le falta.',
@@ -381,7 +381,7 @@ export class SyncController {
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Publica varios productos en Falabella en un solo envío',
         description:
@@ -396,7 +396,7 @@ export class SyncController {
     @Patch('products/:id/inventory')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('inventario.editar')
     @ApiOperation({
         summary: 'Actualiza stock/precio y lo sincroniza con los canales publicados',
         description: 'Con el modo revisión de la tienda encendido (por defecto) no toca los canales: crea solicitudes pendientes y responde 202.',
@@ -416,7 +416,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Agrupa a mano productos ya importados como variantes (nombre, ejes y valor de cada SKU)',
         description: 'Último recurso cuando ni la página pública de Falabella ni la IA pudieron determinar los ejes. No toca fotos, precio ni stock.',
@@ -429,7 +429,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Marca como importados de un canal los productos de la tienda que tienen publicación en él y aún no tienen origen',
         description: 'Para lo importado antes de que se guardara el origen. Sin confirm: true solo cuenta cuántos se marcarían. Solo cambia el aviso «importado desde…» de la ficha.',
@@ -442,7 +442,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Comprueba en Mercado Libre y Falabella cómo están de verdad estos SKU (solo lee)',
         description: 'Para confirmar que algo que se quitó ya no está a la venta, leyendo el estado real en cada canal. No cambia nada.',
@@ -455,7 +455,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Pausa o cierra publicaciones repetidas de Mercado Libre (mismo SKU en una cuenta)',
         description: 'action = pause | close. Solo actúa sobre publicaciones que el servidor detecta como repetidas y que no son la principal de un SKU. Cerrar es definitivo en Mercado Libre.',
@@ -469,7 +469,7 @@ export class SyncController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Pausa, reanuda o quita el producto de uno o de todos sus canales',
         description: 'action = pause | resume | remove. Sin linkIds actúa sobre todas las publicaciones del producto. Quitar exige confirm: true.',
@@ -487,7 +487,7 @@ export class SyncController {
     @Patch('products/:id/promo')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('inventario.editar')
     @ApiOperation({
         summary: 'Fija el precio con descuento y sus fechas, y los envía a Falabella',
         description: 'El descuento debe ser menor que el precio regular. Las fechas son opcionales (AAAA-MM-DD). No pasa por la cola de revisión.',
@@ -499,7 +499,7 @@ export class SyncController {
     @Patch('products/:id/web-price')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('editor')
+    @RequirePermission('inventario.editar')
     @ApiOperation({
         summary: 'Fija el precio con descuento de la tienda web',
         description: 'No se envía a ningún marketplace ni pasa por revisión; se usará cuando exista la conexión con WooCommerce.',
@@ -513,7 +513,7 @@ export class SyncController {
     @Get('change-requests')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Solicitudes de cambio de precio/stock de la tienda' })
     @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error'] })
     listChangeRequests(@Req() req, @Query('status') status?: string) {
@@ -524,7 +524,7 @@ export class SyncController {
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('cambios.aprobar')
     @ApiOperation({ summary: 'Aprueba un cambio: lo aplica al producto y lo envía al canal (asíncrono)' })
     approveChangeRequest(@Param('id') id: string, @Req() req) {
         return this.changeRequests.approve(id, scopeOf(req));
@@ -533,7 +533,7 @@ export class SyncController {
     @Post('change-requests/:id/reject')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('cambios.aprobar')
     @ApiOperation({ summary: 'Rechaza un cambio: no toca el producto ni el canal' })
     rejectChangeRequest(@Param('id') id: string, @Body() dto: RejectChangeDto, @Req() req) {
         return this.changeRequests.reject(id, scopeOf(req), dto.reason);
@@ -542,7 +542,7 @@ export class SyncController {
     @Get('settings')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Ajustes de sincronización de la tienda' })
     async getSyncSettings(@Req() req) {
         return { reviewMode: await this.changeRequests.isReviewMode(scopeOf(req).storeId) };
@@ -551,7 +551,7 @@ export class SyncController {
     @Patch('settings/review-mode')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('cambios.aprobar')
     @ApiOperation({ summary: 'Enciende o apaga el modo revisión de la tienda' })
     setReviewMode(@Body() dto: ReviewModeDto, @Req() req) {
         return this.changeRequests.setReviewMode(scopeOf(req).storeId, dto.enabled);
@@ -560,7 +560,7 @@ export class SyncController {
     @Get('products/:id/status')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Estado de sincronización del producto en cada cuenta de marketplace' })
     getStatus(@Param('id') id: string, @Req() req) {
         return this.syncService.getProductSyncStatus(scopeOf(req), id);
@@ -569,7 +569,7 @@ export class SyncController {
     @Post('falabella/webhook/register')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Pide a Falabella que avise de cada venta',
         description:
@@ -583,7 +583,7 @@ export class SyncController {
     @Post('falabella/listings/import')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Trae de un clic las publicaciones que ya existen en una cuenta de Falabella',
         description:
@@ -607,7 +607,7 @@ export class SyncController {
     @Post('falabella/orders/sync')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({
         summary: 'Trae los pedidos recientes de Falabella',
         description: 'Sirve para ponerse al día si algún aviso se perdió. No duplica los ya registrados.',
@@ -620,7 +620,7 @@ export class SyncController {
     @Get('orders')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('ventas.ver')
     @ApiOperation({
         summary: 'Ventas de la tienda, con cliente, envío, precio pagado y stock',
         description:
@@ -648,7 +648,7 @@ export class SyncController {
         @Query('limit') limit?: string,
         @Query('offset') offset?: string,
     ) {
-        return this.ordersQuery.list(scopeOf(req).storeId, req.store.role, {
+        return this.ordersQuery.list(scopeOf(req).storeId, req.store, {
             from, to, marketplace, connectionId, search, status, shipping,
             limit: limit ? Number(limit) : undefined,
             offset: offset ? Number(offset) : undefined,
@@ -658,7 +658,7 @@ export class SyncController {
     @Get('orders/export')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('ventas.descargar')
     @ApiOperation({
         summary: 'Descarga en Excel las ventas que coinciden con los filtros',
         description: 'Los mismos filtros que GET /sync/orders (fechas, canal, cuenta, búsqueda y estado). Una fila por producto vendido, hasta 5000 ventas. Quien solo tiene lectura no recibe los datos de contacto del comprador.',
@@ -681,7 +681,7 @@ export class SyncController {
         @Query('status') status?: string,
         @Query('shipping') shipping?: string,
     ) {
-        const r = await this.ordersQuery.exportar(scopeOf(req).storeId, req.store.role, { from, to, marketplace, connectionId, search, status, shipping });
+        const r = await this.ordersQuery.exportar(scopeOf(req).storeId, req.store, { from, to, marketplace, connectionId, search, status, shipping });
         const buffer = await escribirHoja(r.filas, 'Ventas');
         // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
         res.set({
@@ -697,7 +697,7 @@ export class SyncController {
     @Get('orders/manual/products')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({ summary: 'Busca productos del catálogo por SKU o nombre para elegir el de una venta manual' })
     @ApiQuery({ name: 'search', required: true })
     searchManualSaleProducts(@Req() req, @Query('search') search?: string) {
@@ -707,7 +707,7 @@ export class SyncController {
     @Put('orders/manual/:id')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({
         summary: 'Edita una venta registrada a mano o desde Excel',
         description: 'Body: { filas: [...] } con las columnas de la plantilla; todas las filas son productos de esta venta. Devuelve el stock anterior y descuenta el nuevo. Las ventas que traen los canales no se pueden editar.',
@@ -719,7 +719,7 @@ export class SyncController {
     @Delete('orders/manual/:id')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({ summary: 'Elimina una venta registrada a mano o desde Excel y devuelve al stock lo que descontó' })
     deleteManualSale(@Req() req, @Param('id') id: string) {
         return this.manualSales.eliminar(scopeOf(req), id);
@@ -728,7 +728,7 @@ export class SyncController {
     @Get('orders/manual/template')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({ summary: 'Plantilla de Excel para registrar ventas de canales no conectados' })
     async manualSalesTemplate(@Req() req, @Res() res: Response) {
         const buffer = await plantillaDeVentas(req.store?.name ?? '');
@@ -743,7 +743,7 @@ export class SyncController {
     @Post('orders/manual')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({
         summary: 'Registra a mano una venta de un canal no conectado',
         description:
@@ -761,7 +761,7 @@ export class SyncController {
     @Post('orders/manual/import')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @UseInterceptors(FileInterceptor('excel'))
     @ApiOperation({ summary: 'Registra ventas de canales no conectados desde un Excel (plantilla de ventas)' })
     importManualSales(@Req() req, @UploadedFile() excel: Express.Multer.File) {
@@ -772,16 +772,16 @@ export class SyncController {
     @Get('orders/:id')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('ventas.ver')
     @ApiOperation({ summary: 'Detalle de una venta: cliente, envío, pago y líneas' })
     getOrder(@Param('id') id: string, @Req() req) {
-        return this.ordersQuery.detail(scopeOf(req).storeId, req.store.role, id);
+        return this.ordersQuery.detail(scopeOf(req).storeId, req.store, id);
     }
 
     @Post('mercadolibre/listings/import')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Trae las publicaciones que ya existen en una cuenta de Mercado Libre',
         description:
@@ -798,7 +798,7 @@ export class SyncController {
     @Post('listings/refresh')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Actualiza ahora el estado de las publicaciones de la tienda',
         description:
@@ -812,7 +812,7 @@ export class SyncController {
     @Post('orders/import-history')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Importa el historial de ventas de las cuentas de la tienda',
         description:
@@ -828,7 +828,7 @@ export class SyncController {
     @Post('orders/sync')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('ventas.registrar')
     @ApiOperation({
         summary: 'Actualiza las ventas de todas las cuentas de la tienda ahora',
         description:

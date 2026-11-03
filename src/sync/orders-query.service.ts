@@ -5,6 +5,11 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { Product } from '../products/entities/product.entity';
 import { StoreRole } from '../stores/entities/store-member.entity';
+import { Permiso, permisosDeRol } from '../stores/permissions';
+
+/** Quién pide las ventas: el acceso comprobado a la tienda, o (en pruebas y llamadas internas) solo el nombre de su rol de fábrica. */
+export type AccesoAVentas = StoreRole | { role: StoreRole; permissions: Permiso[] };
+const permisosDe = (a: AccesoAVentas): Permiso[] => (typeof a === 'string' ? permisosDeRol(a) : a.permissions);
 import { OrderDetails, OrderLine, ocultarContacto, textoDeValores, textoDeVariante } from './order-details';
 import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
 import { TIPOS_DE_ENVIO, TipoDeEnvio } from './costos-de-venta';
@@ -169,7 +174,7 @@ export class OrdersQueryService {
         return { qb, desde, hasta };
     }
 
-    async list(storeId: string, role: StoreRole, query: OrdersQuery) {
+    async list(storeId: string, acceso: AccesoAVentas, query: OrdersQuery) {
         const limit = Math.min(Math.max(Number(query.limit) || 50, 1), MAX_LIMITE);
         const offset = Math.max(Number(query.offset) || 0, 0);
         const { qb } = this.filtrar(storeId, query);
@@ -195,7 +200,7 @@ export class OrdersQueryService {
             limit,
             offset,
             porEstado,
-            items: filas.map(o => this.aVista(o, vista, role, false)),
+            items: filas.map(o => this.aVista(o, vista, permisosDe(acceso), false)),
         };
     }
 
@@ -203,7 +208,7 @@ export class OrdersQueryService {
      * Las ventas que coinciden con los filtros, listas para descargar: una fila por producto vendido. Quien solo tiene
      * lectura no recibe los datos de contacto de quien compró. Con un tope, para no armar un archivo gigante.
      */
-    async exportar(storeId: string, role: StoreRole, query: OrdersQuery): Promise<{ filas: Record<string, string | number>[]; ventas: number; incompleto: boolean }> {
+    async exportar(storeId: string, acceso: AccesoAVentas, query: OrdersQuery): Promise<{ filas: Record<string, string | number>[]; ventas: number; incompleto: boolean }> {
         const { qb } = this.filtrar(storeId, query);
         const estados = estadosPedidos(query.status);
         if (estados.length) qb.andWhere('o."saleState" IN (:...estados)', { estados });
@@ -211,11 +216,11 @@ export class OrdersQueryService {
         const incompleto = todas.length > MAX_EXPORTADAS;
         const filasDb = todas.slice(0, MAX_EXPORTADAS);
         const vista = await this.enriquecer(storeId, filasDb);
-        const filas = filasDb.flatMap(o => filasDeExportacion(this.aVista(o, vista, role, true)));
+        const filas = filasDb.flatMap(o => filasDeExportacion(this.aVista(o, vista, permisosDe(acceso), true)));
         return { filas, ventas: filasDb.length, incompleto };
     }
 
-    async detail(storeId: string, role: StoreRole, id: string) {
+    async detail(storeId: string, acceso: AccesoAVentas, id: string) {
         if (!/^[0-9a-f-]{36}$/i.test(id)) throw new NotFoundException('Venta no encontrada');
         const orden = await this.orders.createQueryBuilder('o')
             .leftJoinAndSelect('o.connection', 'c')
@@ -225,7 +230,7 @@ export class OrdersQueryService {
             .getOne();
         if (!orden) throw new NotFoundException('Venta no encontrada');
         const vista = await this.enriquecer(storeId, [orden]);
-        return this.aVista(orden, vista, role, true);
+        return this.aVista(orden, vista, permisosDe(acceso), true);
     }
 
     /** Productos de la tienda por SKU: su stock de ahora y su foto. */
@@ -270,7 +275,7 @@ export class OrdersQueryService {
     private aVista(
         o: MarketplaceOrder,
         productos: Map<string, { productId: string; name: string; stock: number; imageUrl: string | null; variant: string | null }>,
-        role: StoreRole,
+        permisos: Permiso[],
         conDetalle: boolean,
     ) {
         const lines: OrderLineView[] = (Array.isArray(o.items) ? o.items : []).map((l: OrderLine) => {
@@ -292,7 +297,7 @@ export class OrdersQueryService {
         });
 
         const detalles: OrderDetails | null = o.details ?? null;
-        const visibles = role === 'viewer' ? ocultarContacto(detalles) : detalles;
+        const visibles = permisos.includes('ventas.contacto') ? detalles : ocultarContacto(detalles);
 
         return {
             id: o.id,
@@ -321,7 +326,7 @@ export class OrdersQueryService {
             lines,
             ...(conDetalle ? { details: visibles } : {}),
             // Solo quien puede editarla recibe los datos para precargar el formulario.
-            ...(conDetalle && role === 'owner' && (o.details as any)?.manual ? { manualEdit: datosParaEditar(o, lines) } : {}),
+            ...(conDetalle && permisos.includes('ventas.registrar') && (o.details as any)?.manual ? { manualEdit: datosParaEditar(o, lines) } : {}),
         };
     }
 }

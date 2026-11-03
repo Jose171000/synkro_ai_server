@@ -12,7 +12,7 @@ import { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ExportService, ExportFormat } from './export.service';
-import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ExportQueryDto } from './dto/export-query.dto';
 
 const VALID_FORMATS: ExportFormat[] = ['json', 'csv', 'xlsx'];
@@ -26,6 +26,7 @@ export class ExportController {
     constructor(private readonly exportService: ExportService) {}
 
     @Get('products/:format')
+    @RequirePermission('productos.descargar')
     @ApiOperation({
         summary: 'Exportar todos los productos del usuario',
         description:
@@ -52,6 +53,7 @@ export class ExportController {
     }
 
     @Get('ai-content/:format')
+    @RequirePermission('productos.descargar')
     @ApiOperation({
         summary: 'Exportar contenido generado por IA',
         description:

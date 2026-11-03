@@ -6,9 +6,8 @@ import { ProductsService } from './products.service';
  */
 function construir(producto: any, contenido: any) {
     const ai: any = { generateProductContent: jest.fn(async () => contenido) };
-    const repo: any = { save: jest.fn(async (p: any) => p) };
+    const repo: any = { save: jest.fn(async (p: any) => p), findOne: jest.fn(async (..._args: any[]) => producto) };
     const service = new ProductsService(repo, ai, {} as any);
-    jest.spyOn(service, 'findOne').mockResolvedValue(producto);
     return { service, ai, repo };
 }
 
@@ -35,6 +34,14 @@ describe('regenerar con IA un producto que ya existe', () => {
             imageUrls: ['https://i/1.jpg', 'https://i/2.jpg'],
             userId: 'u1',
         }));
+    });
+
+    it('la IA consulta los canales de quien subió el producto, no los de quien pulsa el botón (un editor no tiene cuentas propias)', async () => {
+        const { service, ai, repo } = construir({ ...producto(), owner: { id: 'dueno-1' } }, contenido());
+        await service.generateAIContent('p1', 'editor-9', { marketplaces: ['falabella'] }, 'tienda-1');
+        expect(ai.generateProductContent).toHaveBeenCalledWith(expect.objectContaining({ userId: 'dueno-1' }));
+        // y el producto se busca en la tienda, no por quien lo creó
+        expect(repo.findOne.mock.calls[0][0].where).toEqual([{ id: 'p1', store: { id: 'tienda-1' } }, expect.objectContaining({ id: 'p1', owner: { id: 'editor-9' } })]);
     });
 
     it('no borra lo que el producto ya tenía: la marca y la categoría verificada se quedan y la IA rellena lo vacío', async () => {

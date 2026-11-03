@@ -8,7 +8,7 @@ import { DashboardService } from './dashboard.service';
 import { DashboardInsightsService } from './dashboard-insights.service';
 import { UpdateStorePlanDto } from './dto/update-store-plan.dto';
 import { CreatePaymentDto } from '../admin/dto/create-payment.dto';
-import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guard';
 
 @ApiTags('dashboard')
 @ApiBearerAuth()
@@ -22,7 +22,7 @@ export class DashboardController {
 
     @Get('summary')
     @UseGuards(StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('analiticas.ver')
     @ApiOperation({
         summary: 'Resumen del negocio de la tienda activa',
         description: 'Canales conectados, catálogo, ventas del mes contra el anterior y stock en riesgo de la tienda indicada en X-Store-Id; y los avisos pendientes de la persona.',
@@ -33,7 +33,7 @@ export class DashboardController {
 
     @Get('insights')
     @UseGuards(StoreAccessGuard)
-    @RequireStoreRole('viewer')
+    @RequirePermission('analiticas.ver')
     @ApiOperation({
         summary: 'Lo que ayuda en el día a día a quien tiene una tienda',
         description: 'Productos ganadores con sus días de stock, ventas por despachar, ventas de los últimos 14 días, cambios pendientes de revisión y, si la agencia le definió un plan, su próximo pago y lo que lleva de comisión este mes.',

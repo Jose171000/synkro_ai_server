@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { permisosDeRol } from './permissions';
 import { createHash } from 'crypto';
 import { StoresService } from './stores.service';
 
@@ -87,7 +88,7 @@ describe('acceso a una tienda', () => {
 
     it('un miembro entra con su rol', async () => {
         const { service } = construir(base);
-        await expect(service.requireAccess('beto', STORE_A)).resolves.toEqual({ storeId: STORE_A, role: 'viewer' });
+        await expect(service.requireAccess('beto', STORE_A)).resolves.toEqual({ storeId: STORE_A, role: 'viewer', permissions: permisosDeRol('viewer') });
     });
 
     it('quien no es miembro recibe «No tienes acceso a esta tienda»', async () => {
@@ -116,7 +117,7 @@ describe('acceso a una tienda', () => {
 
     it('el administrador de la agencia entra a cualquier tienda existente como dueño', async () => {
         const { service } = construir(base);
-        await expect(service.requireAccess('root', STORE_B, 'owner')).resolves.toEqual({ storeId: STORE_B, role: 'owner' });
+        await expect(service.requireAccess('root', STORE_B, 'owner')).resolves.toEqual({ storeId: STORE_B, role: 'owner', permissions: permisosDeRol('owner') });
     });
 });
 

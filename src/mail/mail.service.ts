@@ -68,7 +68,7 @@ export class MailService {
             context: {
                 storeName: data.storeName,
                 inviterName: data.inviterName || 'Un miembro del equipo',
-                roleLabel: data.role === 'editor' ? 'editor (puede proponer cambios)' : 'lector (solo ver)',
+                roleLabel: data.role === 'editor' ? 'editor (crea y edita productos, publica y propone cambios de precio y stock)' : 'lector (solo ver)',
                 acceptUrl: `${this.frontendUrl}/invitacion?token=${data.token}`,
                 days: data.days,
             },

@@ -1,11 +1,22 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, SetMetadata } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { StoreRole } from './entities/store-member.entity';
-import { NO_STORE_ACCESS, StoresService } from './stores.service';
+import { NO_STORE_ACCESS, SIN_PERMISO, StoresService } from './stores.service';
+import { Permiso } from './permissions';
 
 export const STORE_ROLE_KEY = 'store_role';
+export const STORE_PERMISSION_KEY = 'store_permission';
 
-/** Exige estar en la tienda activa con al menos este rol (por defecto, lector). */
+/**
+ * Exige que la persona tenga este permiso en la tienda activa. Es lo que se usa en todo lo que no sea gestionar el equipo.
+ * Ver docs/roles-de-tienda.md.
+ */
+export const RequirePermission = (permiso: Permiso) => SetMetadata(STORE_PERMISSION_KEY, permiso);
+
+/**
+ * Exige estar en la tienda activa con al menos este rol (por defecto, lector). Solo para la gestión del equipo, que es
+ * siempre del dueño; el resto de las rutas usan `RequirePermission`.
+ */
 export const RequireStoreRole = (role: StoreRole = 'viewer') => SetMetadata(STORE_ROLE_KEY, role);
 
 /**
@@ -25,10 +36,9 @@ export class StoreAccessGuard implements CanActivate {
     ) { }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
-        const minimum = this.reflector.getAllAndOverride<StoreRole>(STORE_ROLE_KEY, [
-            context.getHandler(),
-            context.getClass(),
-        ]) ?? 'viewer';
+        const objetivos = [context.getHandler(), context.getClass()];
+        const permiso = this.reflector.getAllAndOverride<Permiso | undefined>(STORE_PERMISSION_KEY, objetivos);
+        const minimum = this.reflector.getAllAndOverride<StoreRole>(STORE_ROLE_KEY, objetivos) ?? 'viewer';
 
         const request = context.switchToHttp().getRequest();
         const userId = request.user?.id;
@@ -43,7 +53,9 @@ export class StoreAccessGuard implements CanActivate {
         }
         if (!storeId) throw new ForbiddenException(NO_STORE_ACCESS);
 
-        request.store = await this.stores.requireAccess(userId, String(storeId), minimum);
+        const acceso = await this.stores.requireAccess(userId, String(storeId), minimum);
+        if (permiso && !acceso.permissions.includes(permiso)) throw new ForbiddenException(SIN_PERMISO);
+        request.store = acceso;
         return true;
     }
 }

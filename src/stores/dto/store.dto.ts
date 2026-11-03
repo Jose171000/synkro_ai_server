@@ -20,7 +20,7 @@ export class InviteDto {
     @IsEmail()
     email: string;
 
-    @ApiProperty({ enum: ['editor', 'viewer'], description: 'editor propone cambios; viewer solo mira' })
+    @ApiProperty({ enum: ['editor', 'viewer'], description: 'editor trabaja el catálogo y publica; viewer solo mira (ver docs/roles-de-tienda.md)' })
     @IsIn(['editor', 'viewer'])
     role: 'editor' | 'viewer';
 }

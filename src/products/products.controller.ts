@@ -8,7 +8,7 @@ import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
 import { GenerateAIContentDto } from './dto/generate-ai-content.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RequireSection, SectionAccessGuard } from '../common/guards/section-access.guard';
-import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guard';
 import { ProductGroupsService } from './product-groups.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
@@ -58,7 +58,7 @@ export class ProductsController {
 
   @Post()
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @ApiOperation({ summary: 'Crear un producto (sin IA) — imágenes como URLs' })
   async create(@Body() createProductDto: CreateProductDto, @Req() req) {
     await this.validateImages(createProductDto.images, true);
@@ -67,7 +67,7 @@ export class ProductsController {
 
   @Post('with-files')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @ApiOperation({
     summary: 'Crear un producto (sin IA) — imágenes como archivos físicos',
     description: 'Envía los datos del producto como JSON en el campo `data` y las imágenes como archivos en el campo `images`. Las imágenes se suben automáticamente a Cloudinary (JPG, máx. 10 MB, máx. 2000x2000px).',
@@ -104,6 +104,7 @@ export class ProductsController {
   }
 
   @Get('sku/next')
+  @RequirePermission('productos.editar')
   @UseGuards(StoreAccessGuard)
   @ApiOperation({ summary: 'Los próximos SKU que se asignarían en la tienda activa', description: 'Sigue el formato del último bloque de productos publicados de la tienda; sin publicados, usa INICIALES-0001. Solo informa: no reserva el SKU.' })
   async nextSku(@Req() req, @Query('count') count?: string) {
@@ -113,7 +114,7 @@ export class ProductsController {
 
   @Post('groups')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @ApiOperation({
     summary: 'Crear un producto con variantes',
     description: 'Crea el grupo y todas sus variantes en un solo paso (cada variante es un producto con su SKU único en la tienda). Los SKU que no se escriban se generan a partir del código del grupo y los valores.',
@@ -123,6 +124,8 @@ export class ProductsController {
   }
 
   @Post('variants/detect')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
   @ApiOperation({
     summary: 'Filtro previo: ¿el producto parece tener variantes?',
     description: 'Recibe las fotos como archivos (campo images, hasta 8) y el texto del cliente (campo text). Mira las fotos, incluido el texto que aparezca en ellas. Solo recomienda variantes con evidencia concreta; sin ella devuelve recomendar = false. No guarda las fotos.',
@@ -136,6 +139,7 @@ export class ProductsController {
   }
 
   @Get('groups/:id')
+  @RequirePermission('productos.ver')
   @UseGuards(StoreAccessGuard)
   @ApiOperation({ summary: 'Un producto con variantes y todas sus variantes' })
   getGroup(@Param('id') id: string, @Req() req) {
@@ -144,7 +148,7 @@ export class ProductsController {
 
   @Post(':id/variants')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @ApiOperation({
     summary: 'Agregar variantes a un producto ya creado',
     description: 'Si el producto es simple se convierte en grupo (conserva su SKU, stock, fotos y enlaces; pasa a ser la primera variante). Hay que indicar los ejes completos y qué variante es el producto actual (thisVariant). Si ya es un grupo, las variantes se suman a él.',
@@ -155,7 +159,7 @@ export class ProductsController {
 
   @Post('with-ai')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @ApiOperation({ summary: 'Crear un producto con IA — imágenes como URLs' })
   async createWithAI(@Body() dto: CreateProductWithAiDto, @Req() req) {
     await this.validateImages(dto.images, true);
@@ -179,7 +183,7 @@ export class ProductsController {
     },
   })
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.editar')
   @UseInterceptors(AnyFilesInterceptor())
   async createWithAIAndFiles(@UploadedFiles() files: Express.Multer.File[], @Req() req) {
     const imageFiles = files?.filter(f => f.fieldname === 'images') ?? [];
@@ -202,7 +206,7 @@ export class ProductsController {
 
   @Get('overview')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('viewer')
+  @RequirePermission('productos.ver')
   @ApiOperation({
     summary: 'Categoría real, estado real en cada canal y qué falta para publicar, de los productos indicados',
     description: 'ids = identificadores separados por coma (máximo 100). Usa las mismas reglas que se aplican al publicar.',
@@ -215,7 +219,7 @@ export class ProductsController {
 
   @Get('summary')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('viewer')
+  @RequirePermission('productos.ver')
   @ApiOperation({ summary: 'Cuántos productos de la tienda no tienen categoría, no están publicados, tienen error o están incompletos' })
   summary(@Req() req) {
     return this.productsService.resumen({ userId: req.user.id, storeId: req.store.storeId });
@@ -223,7 +227,7 @@ export class ProductsController {
 
   @Get()
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('viewer')
+  @RequirePermission('productos.ver')
   @ApiOperation({
     summary: 'Listar los productos de la tienda activa con filtros, búsqueda y paginación',
     description: 'Admite: `page`, `limit`, `search` (nombre/SKU/descripción), `marketplace`, `category`, `subCategory`, `minPrice`, `maxPrice`, `inStock`, `sortBy`, `order`.',
@@ -233,12 +237,16 @@ export class ProductsController {
   }
 
   @Get(':id')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.ver')
   @ApiOperation({ summary: 'Obtener un producto por ID' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
-    return this.productsService.findOne(id, req.user.id);
+    return this.productsService.findOne(id, req.user.id, req.store.storeId);
   }
 
   @Post(':id/generate-ai')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
   @ApiOperation({ summary: 'Generar contenido IA para un producto ya existente' })
   generateAI(
     @Param('id') id: string,
@@ -248,10 +256,12 @@ export class ProductsController {
     return this.productsService.generateAIContent(id, req.user.id, {
       tone: dto.tone,
       marketplaces: dto.targetMarketplaces,
-    });
+    }, req.store.storeId);
   }
 
   @Patch(':id')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
   @ApiOperation({ summary: 'Actualizar campos de un producto' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -260,7 +270,7 @@ export class ProductsController {
   ) {
     // Validate images only if they are being updated — if not sent, existing images remain
     await this.validateImages(updateProductDto.images, false);
-    const actualizado = await this.productsService.update(id, updateProductDto, req.user.id);
+    const actualizado = await this.productsService.update(id, updateProductDto, req.user.id, req.store.storeId);
     // Si cambió lo que ven los compradores, se manda solo a cada canal donde el producto está publicado.
     if (updateProductDto.name !== undefined || updateProductDto.description !== undefined || updateProductDto.images !== undefined) {
       void this.syncService.scheduleContentSync(id).catch(() => undefined);
@@ -270,7 +280,7 @@ export class ProductsController {
 
   @Delete(':id')
   @UseGuards(StoreAccessGuard)
-  @RequireStoreRole('editor')
+  @RequirePermission('productos.eliminar')
   @ApiOperation({ summary: 'Eliminar un producto de la tienda activa' })
   remove(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
     return this.productsService.remove(id, req.user.id, req.store.storeId);

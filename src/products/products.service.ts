@@ -261,18 +261,29 @@ export class ProductsService {
         });
     }
 
-    async findOne(id: string, userId: string) {
-        const product = await this.productRepository.findOne({
-            where: { id, owner: { id: userId } },
-        });
-        if (!product) {
-            throw new NotFoundException('Producto no encontrado');
-        }
+    /**
+     * Un producto de la tienda activa, lo haya creado quien lo haya creado: el acceso es de la tienda, no de quien lo subió
+     * (el permiso ya se comprobó en la ruta). Los productos anteriores a las tiendas, sin tienda, solo los ve su dueño.
+     * Sin tienda en la petición (llamadas internas) se mantiene la regla de antes: solo el dueño.
+     */
+    private async buscarProducto(id: string, userId: string, storeId?: string | null, relations?: { owner?: boolean; store?: boolean }) {
+        const donde = storeId
+            ? [{ id, store: { id: storeId } }, { id, store: IsNull(), owner: { id: userId } }]
+            : { id, owner: { id: userId } };
+        const product = await this.productRepository.findOne({ where: donde as any, ...(relations ? { relations } : {}) });
+        if (!product) throw new NotFoundException('Producto no encontrado');
         return product;
     }
 
-    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }) {
-        const product = await this.findOne(productId, userId);
+    async findOne(id: string, userId: string, storeId?: string | null) {
+        return this.buscarProducto(id, userId, storeId);
+    }
+
+    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }, storeId?: string | null) {
+        const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
+        // Los canales con los que la IA verifica categorías y atributos son los de quien subió el producto (como siempre), no los de
+        // quien pulsa el botón: un editor no tiene cuentas propias.
+        const cuentaDeCanales = product.owner?.id ?? userId;
         const previos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
 
@@ -285,7 +296,7 @@ export class ProductsService {
             targetMarketplaces: options?.marketplaces || product.targetMarketplaces || ['amazon', 'mercadolibre'],
             tone: options?.tone || 'professional',
             imageUrls: fotos,
-            userId,
+            userId: cuentaDeCanales,
         });
 
         this.applyAiContent(product, aiContent);
@@ -408,9 +419,8 @@ export class ProductsService {
         return qb.getMany();
     }
 
-    async update(id: string, updateDto: Partial<CreateProductDto>, userId: string) {
-        const product = await this.productRepository.findOne({ where: { id, owner: { id: userId } }, relations: { store: true } });
-        if (!product) throw new NotFoundException('Producto no encontrado');
+    async update(id: string, updateDto: Partial<CreateProductDto>, userId: string, storeId?: string | null) {
+        const product = await this.buscarProducto(id, userId, storeId, { store: true });
 
         const { images, ...productDetails } = updateDto;
         // El SKU se puede corregir mientras el producto no se haya publicado en ningún canal; después identifica la ficha

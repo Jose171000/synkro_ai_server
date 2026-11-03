@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger
 import { ArrayNotEmpty, IsArray, IsBoolean, IsObject, IsOptional, IsString, Matches } from 'class-validator';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
+import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guard';
 import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
 import { ProductLaunchService } from './product-launch.service';
 
@@ -67,7 +67,7 @@ export class FalabellaPrepController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Deja un producto listo para Falabella en un solo paso',
         description:
@@ -82,7 +82,7 @@ export class FalabellaPrepController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Valores sugeridos para todos los atributos de una categoría de Falabella',
         description: 'No guarda nada: sirve para que, al elegir la categoría, los campos aparezcan llenos con lo que se pudo sacar del producto.',
@@ -95,7 +95,7 @@ export class FalabellaPrepController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Lanza el producto: deja listos los canales y lo publica',
         description:
@@ -111,7 +111,7 @@ export class FalabellaPrepController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, StoreAccessGuard)
-    @RequireStoreRole('owner')
+    @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Prepara o envía la actualización de una ficha ya publicada en Falabella',
         description:
