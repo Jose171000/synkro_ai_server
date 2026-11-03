@@ -282,10 +282,13 @@ export class OrdersQueryService {
         permisos: Permiso[],
         conDetalle: boolean,
     ) {
+        // Sin «costos.ver» no se ve lo que costó el envío ni los cupones: solo lo vendido (tampoco el envío de cada línea).
+        const verCostos = permisos.includes('costos.ver');
         const lines: OrderLineView[] = (Array.isArray(o.items) ? o.items : []).map((l: OrderLine) => {
             const p = l?.sku ? productos.get(l.sku) : undefined;
             return {
                 ...l,
+                ...(verCostos ? {} : { shippingAmount: null, shippingType: null }),
                 quantity: Number(l?.quantity ?? 1),
                 unitPrice: Number(l?.unitPrice ?? 0),
                 productId: l?.productId ?? p?.productId ?? null,
@@ -302,8 +305,6 @@ export class OrdersQueryService {
 
         const detalles: OrderDetails | null = o.details ?? null;
         const visibles = permisos.includes('ventas.contacto') ? detalles : ocultarContacto(detalles);
-        // Sin «costos.ver» no se ve lo que costó el envío ni los cupones: solo lo vendido.
-        const verCostos = permisos.includes('costos.ver');
 
         return {
             id: o.id,

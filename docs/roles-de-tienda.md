@@ -14,7 +14,7 @@ o agregar una ruta de tienda sin permiso, hace fallar las pruebas a propósito.
 |---|---|---|
 | 1 | Motor de permisos en el servidor; los tres roles de fábrica según esta tabla; huecos cerrados | **Hecha** |
 | 2 | Roles personalizados de cada tienda: crear, editar, borrar y asignar (servidor); `costos.ver` se aplica | **Hecha** (sin pantalla todavía) |
-| 3 | Pestaña «Roles» en la app, miembros e invitaciones con el nombre del rol, y ocultar lo que `costsHidden` indica | Pendiente (la app ya oculta botones con `can()`) |
+| 3 | Pestaña «Roles» en la app, miembros e invitaciones con el nombre del rol, menú y pestañas según «ver», y ocultar lo que `costsHidden` indica | **Hecha** |
 
 ## Permisos y roles de fábrica
 
@@ -73,7 +73,16 @@ Sin este permiso:
 * el Excel de ventas no trae las columnas de envío ni cupones y el total es solo lo vendido;
 * el reporte de ventas (`/reports/sales`) trae `costsHidden: true`, `shipping` y `discounts` vacíos, y las ventas **nunca** suman el envío.
 
-La app todavía no oculta las secciones de envío y cupones con `costsHidden` (fase 3).
+La app oculta con `costsHidden` el interruptor «Incluir envío» y la sección «Envíos y cupones» de Analíticas, y sin `costos.ver` también el filtro de envío de Ventas. El envío de cada línea de producto también viene vacío.
+
+## La app (fase 3)
+
+Código en el frontend: `src/components/stores/` (`RolesTab`, `RoleEditor`, `RolePicker`, `ManageStoreDialog`), `src/lib/store-permissions.ts` (lógica de marcar y quitar con dependientes; `npm run probar:permisos`) y `can()` en `StoreContext`.
+
+* **Pestaña «Roles»** (solo el dueño, en «Equipo y enlace» de la tienda): roles de fábrica (fijos, con su lista de permisos) y roles personalizados con cuántas personas tiene cada uno; crear, editar y borrar.
+* **Editor de roles:** «Empezar desde» En blanco, Lector o Editor marca sus permisos. Quitar o agregar uno lo vuelve «Personalizado» y pide nombre; si vuelve a coincidir con uno de fábrica, vuelve a ser ese rol y no se puede guardar. Marcar un permiso marca lo que necesita; quitar uno quita lo que no puede vivir sin él (con aviso). Los permisos delicados llevan etiqueta y una advertencia con lo que podrá hacer el rol.
+* **Invitar y cambiar rol:** el selector ofrece los roles de fábrica y los de la tienda; la lista de miembros, las invitaciones, el selector de tiendas y las páginas de invitación muestran el nombre real del rol.
+* **«Ver» como permiso:** el menú oculta Productos sin `productos.ver`, IA Productos sin `productos.editar`, Analíticas sin `analiticas.ver` y Marketplaces sin `canales.ver` ni `ventas.ver`; las pestañas de Marketplaces (Canales, Tablero, Revisión con `canales.ver`; Ventas con `ventas.ver`) igual. El dashboard avisa si falta `analiticas.ver`.
 
 ## Dependencias
 

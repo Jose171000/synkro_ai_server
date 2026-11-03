@@ -267,6 +267,14 @@ describe('«costos.ver»: quien no lo tiene no ve envío ni cupones', () => {
         expect(JSON.stringify(v)).not.toContain('12.5');
     });
 
+    it('tampoco se ve el envío de cada línea de producto', async () => {
+        const conEnvioPorLinea = { ...CON_COSTOS, items: [{ sku: 'GAF-01', title: 'Gafas', quantity: 1, unitPrice: 149.9, shippingAmount: 9.5, shippingType: 'gratis' }] };
+        const oculto = (await construir([conEnvioPorLinea]).service.list('t1', sinCostos, {})).items[0].lines[0];
+        expect(oculto).toMatchObject({ shippingAmount: null, shippingType: null });
+        const visible = (await construir([conEnvioPorLinea]).service.list('t1', conCostos, {})).items[0].lines[0];
+        expect(visible).toMatchObject({ shippingAmount: 9.5, shippingType: 'gratis' });
+    });
+
     it('el detalle de una venta también los oculta', async () => {
         const { service } = construir([CON_COSTOS]);
         const d: any = await service.detail('t1', sinCostos, ORDEN.id);
