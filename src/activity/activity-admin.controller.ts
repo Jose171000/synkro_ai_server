@@ -94,6 +94,16 @@ export class ActivityAdminController {
         return this.consultas.clics(await this.filtro(q), pantalla);
     }
 
+    @Get('layout')
+    @ApiOperation({ summary: 'Plano de una pantalla (forma de sus bloques, sin texto) sobre el que se dibuja su mapa de clics' })
+    @ApiQuery({ name: 'screen', required: true })
+    async plano(@Query() q: Record<string, any>) {
+        const pantalla = limpiarEtiqueta(q.screen, 60);
+        if (!pantalla) throw new BadRequestException('Indica la pantalla (screen).');
+        // Siempre un objeto: un cuerpo vacío (pantalla sin plano todavía) haría fallar al navegador al leer la respuesta.
+        return { plano: await this.consultas.plano(pantalla) };
+    }
+
     private async descargar(q: Record<string, any>, req: any, res: Response, formato: 'xlsx' | 'pdf') {
         const f = await this.filtro(q);
         const opciones = leerOpcionesDeInforme(q);

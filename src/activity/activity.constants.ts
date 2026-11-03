@@ -26,3 +26,13 @@ export const DISPOSITIVOS = ['escritorio', 'tablet', 'movil'] as const;
 /** Cómo aceptó el aviso la persona. */
 export const VIAS_DE_ACEPTACION = ['registro', 'invitacion', 'aviso'] as const;
 export type ViaDeAceptacion = (typeof VIAS_DE_ACEPTACION)[number];
+
+/**
+ * Plano de cada pantalla: la forma de sus bloques (sin ningún texto), para dibujar los mapas de clics sobre la estructura
+ * real. Solo estos tipos; lo demás se descarta.
+ */
+export const TIPOS_DE_BLOQUE = ['titulo', 'tabla', 'pestanas', 'grafico', 'imagen', 'campo', 'boton', 'tarjeta'] as const;
+export type TipoDeBloque = (typeof TIPOS_DE_BLOQUE)[number];
+export const MAX_BLOQUES_POR_PLANO = 150;
+/** Un plano solo se renueva si el guardado tiene más de estas horas: evita que dos roles se lo pisen a cada rato. */
+export const HORAS_ENTRE_PLANOS = 24;

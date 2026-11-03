@@ -40,8 +40,15 @@ function informe(sobre: Partial<Informe> = {}): Informe {
                     elemento('tarjeta', 12, 0.3, { x: 100, y: 300, w: 800, h: 90 }),
                     elemento('calendario', 30, 0.8, null),
                 ],
+                plano: {
+                    ancho: 1400, alto: 1800, tomadoEl: new Date('2026-11-03T18:00:00Z'),
+                    bloques: [
+                        { k: 'titulo', x: 20, y: 10, w: 200, h: 20 }, { k: 'pestanas', x: 20, y: 40, w: 300, h: 30 },
+                        { k: 'campo', x: 20, y: 90, w: 300, h: 30 }, { k: 'tabla', x: 20, y: 150, w: 960, h: 600 }, { k: 'tarjeta', x: 20, y: 780, w: 460, h: 180 },
+                    ],
+                },
             },
-            { pantalla: 'analytics', clics: 10, usuarios: 1, vistas: 5, elementos: [elemento('aplicar', 10, 1, null)] },
+            { pantalla: 'analytics', clics: 10, usuarios: 1, vistas: 5, elementos: [elemento('aplicar', 10, 1, null)], plano: null },
         ],
         pantallasOmitidas: 0,
         linea: null,

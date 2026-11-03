@@ -46,4 +46,16 @@ export class ActivityController {
     eventos(@Req() req, @Body() body: any) {
         return this.activity.registrarLote({ id: req.user.id, role: req.user.role }, body);
     }
+
+    // Una pantalla se manda una vez por visita; de sobra, pero sin chorros.
+    @Throttle({ short: { limit: 3, ttl: 1000 }, medium: { limit: 30, ttl: 60_000 } })
+    @Post('layout')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({
+        summary: 'Recibe el plano de una pantalla (forma de sus bloques, sin ningún texto) para dibujar los mapas de clics',
+        description: 'Body: { screen, width, height, blocks: [{ k: titulo|tabla|pestanas|grafico|imagen|campo|boton|tarjeta, x, y, w, h }] } en milésimas. Sin aceptar el aviso de privacidad no se guarda nada.',
+    })
+    plano(@Req() req, @Body() body: any) {
+        return this.activity.guardarPlano({ id: req.user.id }, body);
+    }
 }

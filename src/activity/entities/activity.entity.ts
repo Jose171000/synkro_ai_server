@@ -184,3 +184,24 @@ export class PrivacyConsent {
     @CreateDateColumn({ type: 'timestamptz' })
     acceptedAt: Date;
 }
+
+/** Plano de una pantalla: la forma de sus bloques (sin texto), aprendida de los navegadores. Una fila por pantalla. */
+@Entity('activity_layouts')
+export class ActivityLayout {
+    @PrimaryColumn({ type: 'varchar', length: 60 })
+    screen: string;
+
+    /** [{ k: tipo, x, y, w, h }] en milésimas del ancho y alto de la zona de contenido. */
+    @Column({ type: 'jsonb' })
+    blocks: { k: string; x: number; y: number; w: number; h: number }[];
+
+    /** Tamaño en píxeles de la zona de contenido cuando se tomó (para dibujarla con su proporción). */
+    @Column({ type: 'int' })
+    width: number;
+
+    @Column({ type: 'int' })
+    height: number;
+
+    @Column({ type: 'timestamptz', default: () => 'now()' })
+    capturedAt: Date;
+}

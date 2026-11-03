@@ -37,6 +37,7 @@ type Horas = Awaited<ReturnType<ActivityQueriesService['horas']>>;
 type Personas = Awaited<ReturnType<ActivityQueriesService['personas']>>;
 type Clics = Awaited<ReturnType<ActivityQueriesService['clics']>>;
 type Linea = Awaited<ReturnType<ActivityQueriesService['linea']>>;
+type Plano = Awaited<ReturnType<ActivityQueriesService['plano']>>;
 
 export interface Informe {
     generadoEn: Date;
@@ -51,7 +52,7 @@ export interface Informe {
     funciones: Ranking | null;
     horas: Horas | null;
     personas: Personas | null;
-    pantallas: { pantalla: string; clics: number; usuarios: number; vistas: number; elementos: Clics }[] | null;
+    pantallas: { pantalla: string; clics: number; usuarios: number; vistas: number; elementos: Clics; plano: Plano }[] | null;
     /** Cuántas pantallas con clics quedaron fuera por el tope de cada formato. */
     pantallasOmitidas: number;
     linea: Linea | null;
@@ -95,7 +96,7 @@ export class ActivityReportService {
                 : todasLasPantallas;
             const incluidas = elegidas.slice(0, Math.min(maxPantallas, MAX_PANTALLAS));
             omitidas = elegidas.length - incluidas.length;
-            pantallas = await Promise.all(incluidas.map(async (p) => ({ ...p, elementos: await this.consultas.clics(f, p.pantalla) })));
+            pantallas = await Promise.all(incluidas.map(async (p) => ({ ...p, elementos: await this.consultas.clics(f, p.pantalla), plano: await this.consultas.plano(p.pantalla) })));
         }
 
         return {

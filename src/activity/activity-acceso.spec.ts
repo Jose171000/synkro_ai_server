@@ -30,7 +30,7 @@ describe('solo el superadmin ve y descarga la actividad', () => {
     it('lo que usa cualquier usuario (enviar eventos, aceptar el aviso) no devuelve la actividad de nadie y no pide rol', () => {
         expect(Reflect.getMetadata(ROLES_KEY, ActivityController)).toBeUndefined();
         const metodos = Object.getOwnPropertyNames(ActivityController.prototype).filter((m) => m !== 'constructor');
-        expect(metodos.sort()).toEqual(['aceptar', 'consentimiento', 'eventos']);
+        expect(metodos.sort()).toEqual(['aceptar', 'consentimiento', 'eventos', 'plano']);
     });
 });
 

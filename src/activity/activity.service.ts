@@ -6,8 +6,8 @@ import { REDIS_CLIENT } from '../redis/redis.constants';
 import { StoreMember } from '../stores/entities/store-member.entity';
 import { ActivityEvent } from './entities/activity.entity';
 import { PrivacyService } from './privacy.service';
-import { validarLote, LoteValido } from './activity-validation';
-import { DIAS_DE_DETALLE, DIAS_DE_RESUMEN, ZONA_HORARIA } from './activity.constants';
+import { validarLote, validarPlano, LoteValido } from './activity-validation';
+import { DIAS_DE_DETALLE, DIAS_DE_RESUMEN, HORAS_ENTRE_PLANOS, ZONA_HORARIA } from './activity.constants';
 
 export interface ContextoDeActividad {
     userId: string;
@@ -83,6 +83,24 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
         })));
         await this.anotarSesion(user, lote, storeId, rolDeTienda);
         return { registrados: lote.eventos.length, descartados: lote.descartados, requiereAviso: false };
+    }
+
+    /**
+     * Guarda el plano (la forma de los bloques, sin texto) de una pantalla. Solo de quien aceptó el aviso y desde pantallas
+     * anchas, para que todos los planos tengan la misma proporción. Se renueva como mucho una vez al día por pantalla.
+     */
+    async guardarPlano(user: { id: string }, body: any): Promise<{ guardado: boolean; requiereAviso: boolean }> {
+        if (!(await this.privacy.tieneConsentimiento(user.id))) return { guardado: false, requiereAviso: true };
+        const plano = validarPlano(body);
+        if (!plano) throw new BadRequestException('El plano de la pantalla no es válido.');
+        const filas = await this.ds.query(
+            `INSERT INTO activity_layouts (screen, blocks, width, height, "capturedAt") VALUES ($1, $2::jsonb, $3, $4, now())
+             ON CONFLICT (screen) DO UPDATE SET blocks = EXCLUDED.blocks, width = EXCLUDED.width, height = EXCLUDED.height, "capturedAt" = now()
+             WHERE activity_layouts."capturedAt" < now() - ($5 || ' hours')::interval
+             RETURNING screen`,
+            [plano.screen, JSON.stringify(plano.bloques), plano.ancho, plano.alto, String(HORAS_ENTRE_PLANOS)],
+        );
+        return { guardado: filas.length > 0, requiereAviso: false };
     }
 
     private async anotarSesion(user: { id: string; role: string }, lote: LoteValido, storeId: string | null, storeRole: string) {

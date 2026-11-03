@@ -137,17 +137,32 @@ export function informeAPdf(i: Informe): Promise<Buffer> {
                 const conPos = p.elementos.flatMap((e) => (e.rect && e.rect.x !== null && e.rect.y !== null && e.rect.w !== null && e.rect.h !== null
                     ? [{ e, x: e.rect.x, y: e.rect.y, w: e.rect.w, h: e.rect.h }] : []));
                 const lista = p.elementos.slice(0, 6);
-                asegurar(22 + 170 + 12 + lista.length * 12 + 18);
+                asegurar(22 + 260 + 12 + lista.length * 12 + 18);
                 texto(nombreDePantalla(p.pantalla), M, y, { size: 10.5, bold: true, w: 360 });
                 texto(`${num(p.clics)} clics · ${p.usuarios} ${p.usuarios === 1 ? 'persona' : 'personas'}`, M + 360, y, { size: 8.5, color: GRIS, w: UTIL - 360, align: 'right' });
                 y += 17;
-                const alto = 170;
+                // Con el plano de la pantalla, el mapa se dibuja sobre su estructura real y con su proporción.
+                const plano = p.plano;
+                const alto = plano ? Math.round(Math.min(260, Math.max(120, UTIL * plano.alto / plano.ancho))) : 170;
+                asegurar(alto - 170);
                 doc.roundedRect(M, y, UTIL, alto, 6).fill(SUAVE);
+                if (plano) {
+                    for (const b of plano.bloques as { k: string; x: number; y: number; w: number; h: number }[]) {
+                        const bx = M + b.x / 1000 * UTIL, by = y + b.y / 1000 * alto, bw = Math.max(1.5, b.w / 1000 * UTIL), bh = Math.max(1.5, b.h / 1000 * alto);
+                        doc.save();
+                        if (b.k === 'tarjeta' || b.k === 'tabla' || b.k === 'grafico') doc.roundedRect(bx, by, bw, bh, 2).lineWidth(0.6).fillAndStroke('#E9E9E9', '#CFCFCF');
+                        else if (b.k === 'campo') doc.roundedRect(bx, by, bw, bh, 1.5).lineWidth(0.5).fillAndStroke('#FFFFFF', '#CFCFCF');
+                        else doc.roundedRect(bx, by, bw, bh, 1.5).fill(b.k === 'titulo' ? '#BDBDBD' : '#D5D5D5');
+                        doc.restore();
+                        if (b.k === 'tabla' || b.k === 'grafico') texto(b.k === 'tabla' ? 'Tabla' : 'Gráfico', bx + 4, by + 3, { size: 6.5, color: '#9A9A9A', w: Math.max(10, bw - 8) });
+                    }
+                }
                 if (!conPos.length) {
                     texto('Los clics de esta pantalla fueron en ventanas emergentes o menús: no tienen posición.', M + 10, y + alto / 2 - 4, { size: 8.5, color: GRIS, w: UTIL - 20, align: 'center' });
                 } else {
+                    // Sin plano, se estira hacia abajo hasta la zona con clics; con plano, las posiciones son las reales.
                     const alcance = Math.max(0, ...conPos.map((c) => c.y + c.h));
-                    const escala = alcance > 0 ? Math.min(8, Math.max(1, 1000 / (alcance * 1.15))) : 1;
+                    const escala = plano ? 1 : alcance > 0 ? Math.min(8, Math.max(1, 1000 / (alcance * 1.15))) : 1;
                     const grandes = [...conPos].sort((a, b) => b.w * b.h - a.w * a.h);
                     for (const { e, x, y: yy, w, h } of grandes) {
                         const rw = Math.max(w, 18), rh = Math.max(h * escala, 26);

@@ -147,6 +147,12 @@ export class ActivityQueriesService {
         }));
     }
 
+    /** Plano de una pantalla (forma de sus bloques) o null si todavía nadie lo mandó. No depende de los filtros: no es de nadie. */
+    async plano(pantalla: string) {
+        const [f] = await this.q(`SELECT blocks, width, height, "capturedAt" FROM activity_layouts WHERE screen = $1`, [pantalla]);
+        return f ? { bloques: f.blocks, ancho: num(f.width), alto: num(f.height), tomadoEl: f.capturedAt } : null;
+    }
+
     /** Resumen por persona con los filtros puestos, de la más activa a la menos activa. */
     async personas(f: FiltroDeActividad) {
         const pd: unknown[] = [];

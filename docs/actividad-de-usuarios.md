@@ -49,6 +49,7 @@ bloquea el panel (`ActivityTracker`) a quien ya tenía cuenta hasta que acepte o
 | `activity_hourly` | por día y hora (Lima): eventos y segundos activos | 2 años |
 | `activity_sessions` | cada visita: inicio, último movimiento y segundos activos | 2 años |
 | `privacy_consents` | aceptaciones del aviso | mientras exista la cuenta |
+| `activity_layouts` | plano de cada pantalla (forma de sus bloques, sin texto); una fila por pantalla | se renueva cada 24 h como mucho |
 
 Cada fila copia el **rol de plataforma** y el **rol en la tienda** que la persona tenía en ese momento, para poder filtrar por
 ambos. Mantenimiento (`ActivityService.mantenimiento`, cada 6 h con candado en Redis, una vez al día): recalcula los resúmenes de
@@ -69,6 +70,21 @@ Cada pantalla con clics registrados tiene mapa (`GET /admin/activity/screens` la
 aprende de los propios clics (posición media del elemento en la pantalla), así que no hace falta dibujar una maqueta por
 pantalla: se agregan solas en cuanto hay actividad.
 
+## Plano de las pantallas
+
+Para dibujar los mapas de clics sobre la estructura real de cada pantalla, el navegador manda **su plano**: una lista de
+bloques `{ k, x, y, w, h }` donde `k` es uno de `titulo, tabla, pestanas, grafico, imagen, campo, boton, tarjeta` y la posición
+y el tamaño van en milésimas de la zona de contenido. **Nunca texto**: del DOM solo se leen etiqueta, rol y tamaño
+(`src/lib/activity-layout.ts`, probado con `npm run probar:plano`); el servidor repite la validación (`validarPlano`) y
+descarta cualquier otro campo.
+
+* `POST /activity/layout` (cualquier usuario autenticado, solo si aceptó el aviso): una vez por pantalla y día, desde pantallas
+  anchas (≥ 1024 px), 2,5 s después de abrirla. Se guarda un plano por pantalla y no se renueva antes de 24 h
+  (`HORAS_ENTRE_PLANOS`); no queda anotado quién lo mandó.
+* `GET /admin/activity/layout?screen=` (solo `admin`): `{ plano: { bloques, ancho, alto, tomadoEl } | null }`.
+* El mapa de Superadmin y el PDF dibujan el plano en gris con los clics encima; sin plano (nadie abrió aún la pantalla desde un
+  computador) se dibuja solo la posición de lo tocado.
+
 ## Fases
 
 1. **Servidor (hecha):** tablas, consentimiento, registro, resúmenes, limpieza, consultas solo para admin, pruebas.
@@ -80,5 +96,6 @@ pantalla: se agregan solas en cuanto hay actividad.
    (`src/components/admin/activity/` en el frontend). Filtros: persona o todas (promedio por persona o suma), roles de
    plataforma y de tienda (varios), periodo. Muestra indicadores, secciones y funciones más usadas, cuadrícula día × hora,
    mapa de clics por pantalla (con interruptor y lista), tabla de personas y línea de tiempo de una persona. Los controles de
-   ventanas emergentes no tienen posición: salen en la lista como «emergente» y no se dibujan en el mapa.
+   ventanas emergentes no tienen posición: salen en la lista como «emergente» y no se dibujan en el mapa. Los mapas se dibujan
+   sobre el plano de la pantalla (ver arriba).
 4. Descargas Excel y PDF.

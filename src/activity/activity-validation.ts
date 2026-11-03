@@ -1,4 +1,4 @@
-import { DISPOSITIVOS, MAX_EVENTOS_POR_LOTE, TipoDelNavegador, TIPOS_DEL_NAVEGADOR } from './activity.constants';
+import { DISPOSITIVOS, MAX_EVENTOS_POR_LOTE, TipoDelNavegador, TIPOS_DEL_NAVEGADOR, TIPOS_DE_BLOQUE, MAX_BLOQUES_POR_PLANO, TipoDeBloque } from './activity.constants';
 
 /**
  * Lo que el navegador manda se trata como no confiable: se limpia y se descarta lo que no cumple. Aquí está la regla que
@@ -101,4 +101,26 @@ export function validarLote(body: any, ahora: Date = new Date()): LoteValido | n
         eventos,
         descartados,
     };
+}
+
+export interface BloqueDePlano { k: TipoDeBloque; x: number; y: number; w: number; h: number }
+export interface PlanoValido { screen: string; ancho: number; alto: number; bloques: BloqueDePlano[] }
+
+/**
+ * Valida el plano de una pantalla que manda el navegador: solo tipos de bloque conocidos con su posición y tamaño en
+ * milésimas. Nunca texto. Devuelve null si no hay un plano utilizable.
+ */
+export function validarPlano(body: any): PlanoValido | null {
+    if (!body || typeof body !== 'object') return null;
+    const screen = limpiarEtiqueta(body.screen, 60);
+    const ancho = Math.round(Number(body.width)), alto = Math.round(Number(body.height));
+    if (!screen || !(ancho >= 700 && ancho <= 4000) || !(alto >= 200 && alto <= 30_000)) return null;
+    const crudos: any[] = Array.isArray(body.blocks) ? body.blocks.slice(0, MAX_BLOQUES_POR_PLANO) : [];
+    const bloques: BloqueDePlano[] = [];
+    for (const b of crudos) {
+        const x = milesimas(b?.x), y = milesimas(b?.y), w = milesimas(b?.w), h = milesimas(b?.h);
+        if (!TIPOS_DE_BLOQUE.includes(b?.k) || x === null || y === null || w === null || h === null || w < 3 || h < 2) continue;
+        bloques.push({ k: b.k, x, y, w: Math.min(w, 1000 - x), h: Math.min(h, 1000 - y) });
+    }
+    return bloques.length >= 3 ? { screen, ancho, alto, bloques } : null;
 }
