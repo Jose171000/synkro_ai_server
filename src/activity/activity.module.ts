@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StoreMember } from '../stores/entities/store-member.entity';
-import { ActivityDaily, ActivityEvent, ActivityHourly, ActivitySession, PrivacyConsent } from './entities/activity.entities';
+import { ActivityDaily, ActivityEvent, ActivityHourly, ActivitySession, PrivacyConsent } from './entities/activity.entity';
 import { ActivityService } from './activity.service';
 import { ActivityQueriesService } from './activity-queries.service';
 import { PrivacyService } from './privacy.service';

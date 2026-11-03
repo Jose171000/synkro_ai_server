@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { PrivacyConsent } from './entities/activity.entities';
+import { PrivacyConsent } from './entities/activity.entity';
 import { PRIVACY_VERSION, ViaDeAceptacion } from './activity.constants';
 
 const CACHE_MS = 10 * 60_000;

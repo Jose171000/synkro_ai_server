@@ -4,7 +4,7 @@ import { DataSource, Repository } from 'typeorm';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { StoreMember } from '../stores/entities/store-member.entity';
-import { ActivityEvent } from './entities/activity.entities';
+import { ActivityEvent } from './entities/activity.entity';
 import { PrivacyService } from './privacy.service';
 import { validarLote, LoteValido } from './activity-validation';
 import { DIAS_DE_DETALLE, DIAS_DE_RESUMEN, ZONA_HORARIA } from './activity.constants';
