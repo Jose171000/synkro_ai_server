@@ -54,6 +54,8 @@ export class UserService {
   }
 
   async findById(id: string): Promise<User | null> {
+    // Con un id vacío TypeORM ignora la condición y devolvería el PRIMER usuario de la tabla: nunca se busca así.
+    if (!id) return null;
     return this.userRepository.findOne({ where: { id } });
   }
 

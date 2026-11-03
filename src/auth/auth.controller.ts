@@ -55,7 +55,7 @@ export class AuthController {
     @ApiOperation({ summary: 'Logout a user' })
     @ApiStandardResponse(MessageResponseDto)
     logout(@Req() req) {
-        return this.authService.logout(req.user.sub);
+        return this.authService.logout(req.user.id);
     }
 
     // Endpoint sensible: 5 intentos por minuto y 20 por hora desde una IP
@@ -92,7 +92,7 @@ export class AuthController {
     @ApiOperation({ summary: 'Update name and last name' })
     @ApiStandardResponse(UserResponseDto)
     updateProfile(@Req() req, @Body() updateProfileDto: UpdateProfileDto) {
-        return this.authService.updateProfile(req.user.sub, updateProfileDto);
+        return this.authService.updateProfile(req.user.id, updateProfileDto);
     }
 
     @Patch('change-password')
@@ -100,7 +100,7 @@ export class AuthController {
     @ApiOperation({ summary: 'Change current user password' })
     @ApiStandardResponse(MessageResponseDto)
     changePassword(@Req() req, @Body() changePasswordDto: ChangePasswordDto) {
-        return this.authService.changePassword(req.user.sub, changePasswordDto);
+        return this.authService.changePassword(req.user.id, changePasswordDto);
     }
 
     // ⚠️ Solo para desarrollo — eliminar antes de producción
