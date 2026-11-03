@@ -3439,19 +3439,20 @@ export class SyncService implements OnModuleInit {
 
     /**
      * Los productos de un paquete de Mercado Libre viajan en un solo envío y cada venta trae el costo completo de ese envío.
-     * Se reparte en partes iguales entre las ventas del mismo envío, para que el costo no se cuente una vez por producto.
+     * Se reparte en partes iguales entre las ventas del mismo paquete (o, sin paquete, del mismo seguimiento), para que el costo no se cuente una vez por producto.
      * Parte del costo completo de la venta que se acaba de guardar, así que repetirlo da el mismo resultado.
      */
     private async repartirEnvioDePaquete(ventaId: string): Promise<void> {
         try {
             const venta = await this.orderRepository.findOne({ where: { id: ventaId }, relations: ['connection'] });
+            const paquete = venta?.details?.packId;
             const seguimiento = venta?.details?.shipping?.trackingCode;
-            if (!venta || venta.marketplace !== 'mercadolibre' || !venta.connection || !seguimiento || venta.shippingSellerCost == null) return;
+            if (!venta || venta.marketplace !== 'mercadolibre' || !venta.connection || !(paquete || seguimiento) || venta.shippingSellerCost == null) return;
             const completo = Number(venta.shippingSellerCost);
             const hermanas = await this.orderRepository.createQueryBuilder('o')
                 .where('o.marketplace = :m', { m: 'mercadolibre' })
                 .andWhere('o."connectionId" = :c', { c: venta.connection.id })
-                .andWhere(`o.details->'shipping'->>'trackingCode' = :t`, { t: seguimiento })
+                .andWhere(paquete ? `o.details->>'packId' = :t` : `o.details->'shipping'->>'trackingCode' = :t`, { t: paquete || seguimiento })
                 .andWhere('o."shippingSellerCost" IS NOT NULL')
                 .orderBy('o."orderDate"', 'ASC').addOrderBy('o.id', 'ASC')
                 .getMany();
@@ -3570,7 +3571,7 @@ export class SyncService implements OnModuleInit {
      */
     private async repasarVentasMeliUnaVez(): Promise<void> {
         try {
-            const primera = await this.redis.set('orders:meli-repaso:v1', '1', 'EX', 60 * 60 * 24 * 365, 'NX');
+            const primera = await this.redis.set('orders:meli-repaso:v2', '1', 'EX', 60 * 60 * 24 * 365, 'NX');
             if (!primera) return;
             const cuentas = await this.connectionRepository.find({ where: { marketplace: 'mercadolibre', status: 'active' }, relations: { owner: true, store: true } });
             for (const c of cuentas) {
@@ -3612,6 +3613,8 @@ export class SyncService implements OnModuleInit {
         if (det && paquete && det.packId !== paquete) {
             await this.orderRepository.update(existente.id, { details: { ...det, packId: paquete } as any });
         }
+        // Vuelve a calcular el envío y el cupón con lo que dice el canal (y reparte el envío del paquete): corrige los que se guardaron mal.
+        if (!/cancel/i.test(String(order.status ?? ''))) await this.completarCostosMeli(connection, order);
         if (existente.saleState === 'pendiente') await this.refrescarEstadoMeli(connection, order);
     }
 

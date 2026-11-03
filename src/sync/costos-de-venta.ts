@@ -76,7 +76,10 @@ export function costosFalabella(pedido: any, items: any[] | null | undefined): C
  */
 export function costosMeli(order: any, shipment?: any | null): CostosDeVenta {
     const pagos: any[] = Array.isArray(order?.payments) ? order.payments : [];
-    let pagado = pagos.reduce((s, p) => s + num(p?.shipping_cost), 0);
+    let pagado = pagos.filter((p) => !/rejected|cancel/i.test(String(p?.status ?? ''))).reduce((s, p) => s + num(p?.shipping_cost), 0);
+    // Con más de un pago (un reintento, dos tarjetas) el envío puede venir repetido: no puede pasar de lo pagado por encima de los productos.
+    const sobrante = num(order?.paid_amount) - num(order?.total_amount);
+    if (pagado > 0 && sobrante > 0 && pagado > sobrante) pagado = sobrante;
     if (!(pagado > 0) && num(order?.paid_amount) > num(order?.total_amount)) pagado = num(order.paid_amount) - num(order.total_amount);
 
     const plazo = shipment?.lead_time ?? shipment?.shipping_option ?? {};

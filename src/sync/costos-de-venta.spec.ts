@@ -49,6 +49,11 @@ describe('costos de envío y cupones de Mercado Libre', () => {
         expect(costosMeli({ total_amount: 35, paid_amount: 45.9, payments: [{}] }, null)).toMatchObject({ shippingPaid: 10.9, shippingType: 'comprador' });
     });
 
+    it('con dos pagos que repiten el envío, no se cuenta dos veces (caso real: S/ 10.90 salía 21.80)', () => {
+        expect(costosMeli({ total_amount: 35, paid_amount: 45.9, payments: [{ shipping_cost: 10.9, status: 'approved' }, { shipping_cost: 10.9, status: 'approved' }] }, null).shippingPaid).toBe(10.9);
+        expect(costosMeli({ total_amount: 35, paid_amount: 45.9, payments: [{ shipping_cost: 10.9, status: 'rejected' }, { shipping_cost: 10.9, status: 'approved' }] }, null).shippingPaid).toBe(10.9);
+    });
+
     it('una venta sin envío o sin datos del envío queda sin dato; una cancelada (pagado 0) no inventa envío', () => {
         expect(costosMeli({ total_amount: 79.9, paid_amount: 79.9 }, null)).toMatchObject({ shippingPaid: 0, shippingType: 'sin_dato', discountAmount: 0 });
         expect(costosMeli({ total_amount: 79.9, paid_amount: 0, payments: [{ shipping_cost: 0 }] }, null).shippingPaid).toBe(0);
