@@ -35,6 +35,8 @@ export interface VentaManual {
     estado: EstadoDeVenta;
     /** Costo de envío cobrado: forma parte de lo pagado pero NO de la base de la comisión. */
     envio: number;
+    /** Envío que cubriste tú (envío gratis para el comprador): no se suma a lo que pagó el cliente. */
+    envioCubierto: number;
     cliente: string | null;
     telefono: string | null;
     documento: string | null;
@@ -156,6 +158,8 @@ export function ventasDeFilas(filas: Record<string, any>[]): LecturaDeFilas {
         if (estado === 'invalido') return falla(`el estado debe ser uno de: ${ESTADOS_DE_VENTA.join(', ')}.`);
         const envio = numero(f.envio) ?? 0;
         if (envio < 0) return falla('el envío no puede ser negativo.');
+        const envioCubierto = numero(f.envio_cubierto) ?? 0;
+        if (envioCubierto < 0) return falla('el envío cubierto no puede ser negativo.');
 
         const venta: VentaManual = {
             numeroPedido,
@@ -163,6 +167,7 @@ export function ventasDeFilas(filas: Record<string, any>[]): LecturaDeFilas {
             canal,
             estado: estado ?? 'entregado',
             envio,
+            envioCubierto,
             cliente: texto(f.cliente),
             telefono: texto(f.telefono),
             documento: texto(f.documento),
@@ -190,6 +195,7 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
         { header: 'cantidad', key: 'cantidad', width: 10 },
         { header: 'precio_unitario', key: 'precio_unitario', width: 16 },
         { header: 'envio', key: 'envio', width: 10 },
+        { header: 'envio_cubierto', key: 'envio_cubierto', width: 16 },
         { header: 'estado', key: 'estado', width: 12 },
         { header: 'cliente', key: 'cliente', width: 24 },
         { header: 'telefono', key: 'telefono', width: 14 },
@@ -204,17 +210,19 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
     hoja.views = [{ state: 'frozen', ySplit: 1 }];
     hoja.addRow({ numero_pedido: 'R-1001', fecha: '2026-10-25', canal: 'Ripley', sku: 'EJEMPLO-1', cantidad: 2, precio_unitario: 89.9, envio: 10, estado: 'entregado', cliente: 'Ana Pérez', telefono: '999888777', documento: '12345678', direccion: 'Av. Primavera 123, Surco', notas: '', descontar_stock: 'SI', moneda: 'PEN' });
     hoja.addRow({ numero_pedido: 'R-1001', sku: 'EJEMPLO-2', cantidad: 1, precio_unitario: 45 });
-    hoja.addRow({ numero_pedido: '', fecha: '2026-10-26', canal: 'WhatsApp', sku: 'EJEMPLO-3', cantidad: 1, estado: 'enviado', cliente: 'Luis Soto', descontar_stock: 'NO' });
+    hoja.addRow({ numero_pedido: '', fecha: '2026-10-26', canal: 'WhatsApp', sku: 'EJEMPLO-3', cantidad: 1, envio_cubierto: 8, estado: 'enviado', cliente: 'Luis Soto', descontar_stock: 'NO' });
 
+    // La letra de cada columna sale de su nombre: si se agrega o quita una columna, las listas siguen donde deben.
+    const letra = (clave: string) => hoja.getColumn(clave).letter;
     // Listas desplegables (primeras 1000 filas): canal (se puede escribir otro) y estado.
     const listas = libro.addWorksheet('Listas', { state: 'veryHidden' });
     CANALES_SUGERIDOS.forEach((c, i) => { listas.getCell(`A${i + 1}`).value = c.nombre; });
     ESTADOS_DE_VENTA.forEach((e, i) => { listas.getCell(`B${i + 1}`).value = e; });
     ['SI', 'NO'].forEach((v, i) => { listas.getCell(`C${i + 1}`).value = v; });
     for (let fila = 2; fila <= 1001; fila++) {
-        hoja.getCell(`C${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$A$1:$A$${CANALES_SUGERIDOS.length}`], showErrorMessage: false };
-        hoja.getCell(`I${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$B$1:$B$${ESTADOS_DE_VENTA.length}`], showErrorMessage: true, errorTitle: 'Estado', error: `Usa: ${ESTADOS_DE_VENTA.join(', ')}.` };
-        hoja.getCell(`O${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: ['Listas!$C$1:$C$2'], showErrorMessage: true, errorTitle: 'Descontar stock', error: 'Usa SI o NO.' };
+        hoja.getCell(`${letra('canal')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$A$1:$A$${CANALES_SUGERIDOS.length}`], showErrorMessage: false };
+        hoja.getCell(`${letra('estado')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$B$1:$B$${ESTADOS_DE_VENTA.length}`], showErrorMessage: true, errorTitle: 'Estado', error: `Usa: ${ESTADOS_DE_VENTA.join(', ')}.` };
+        hoja.getCell(`${letra('descontar_stock')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: ['Listas!$C$1:$C$2'], showErrorMessage: true, errorTitle: 'Descontar stock', error: 'Usa SI o NO.' };
     }
 
     const guia = libro.addWorksheet('Instrucciones');
@@ -233,7 +241,8 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
         'sku: obligatorio. El producto se identifica solo por su SKU del catálogo de la tienda (da igual mayúsculas o minúsculas). Un SKU que no esté en el catálogo se rechaza.',
         'cantidad: entero, 1 si la dejas vacía.',
         'precio_unitario: lo que pagó el cliente por UNA unidad, sin el envío. Si lo dejas vacío se usa el precio actual del producto en el catálogo.',
-        'envio: lo cobrado por envío. Se suma a lo pagado, pero NO cuenta para la comisión de la agencia.',
+        'envio: lo que el cliente pagó por el envío. Se suma a lo que pagó el cliente en Analíticas, pero NO cuenta para la comisión de la agencia.',
+        'envio_cubierto: lo que cubriste tú cuando el envío fue gratis para el cliente (es un costo tuyo; no se suma a lo que pagó el cliente).',
         `estado: ${ESTADOS_DE_VENTA.join(', ')}. Vacío = entregado. Cancelado y devuelto no cuentan como venta ni descuentan stock.`,
         'descontar_stock: SI (por defecto) baja el stock del producto y lo actualiza en los canales conectados. NO deja el stock como está',
         '     (úsalo para ventas antiguas que ya están reflejadas en tu stock actual).',

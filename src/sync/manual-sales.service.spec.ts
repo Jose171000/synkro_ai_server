@@ -210,3 +210,15 @@ describe('editar y eliminar ventas manuales', () => {
         expect(producto.stock).toBe(5);
     });
 });
+
+describe('envío de las ventas manuales', () => {
+    it('guarda lo que pagó el cliente por el envío y, aparte, lo que cubriste tú', async () => {
+        const { servicio, ordenes } = construir();
+        await servicio.registrar(scope, venta([{ numero_pedido: 'A', canal: 'Ripley', sku: 'SKU-1', precio_unitario: 50, envio: 12 }]));
+        await servicio.registrar(scope, venta([{ numero_pedido: 'B', canal: 'Ripley', sku: 'SKU-1', precio_unitario: 50, envio_cubierto: 8 }]));
+        await servicio.registrar(scope, venta([{ numero_pedido: 'C', canal: 'Ripley', sku: 'SKU-1', precio_unitario: 50 }]));
+        expect(ordenes[0]).toMatchObject({ shippingPaid: 12, shippingType: 'comprador', shippingSellerCost: null, totalAmount: 62, productsAmount: 50 });
+        expect(ordenes[1]).toMatchObject({ shippingPaid: 0, shippingType: 'gratis', shippingSellerCost: 8, totalAmount: 50 });
+        expect(ordenes[2]).toMatchObject({ shippingPaid: 0, shippingType: 'sin_dato', shippingSellerCost: null });
+    });
+});

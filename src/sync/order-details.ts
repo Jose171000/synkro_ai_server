@@ -1,4 +1,5 @@
 import { limpiarSkuMeli } from './meli/meli-listings';
+import { CostosDeVenta, costosFalabella, costosMeli } from './costos-de-venta';
 
 /**
  * Convierte lo que entrega cada canal sobre una venta en un formato común,
@@ -76,6 +77,8 @@ export interface OrderDetails {
 }
 
 export interface NormalizedOrder {
+    /** Envío y cupones de la venta (ver costos-de-venta.ts). */
+    costs?: CostosDeVenta;
     orderNumber: string | null;
     customerName: string | null;
     shipByDate: Date | null;
@@ -222,6 +225,7 @@ export function normalizeFalabellaOrder(pedido: any, items: any[], currency?: st
     const estado = Array.isArray(estados) ? estados.join(', ') : texto(estados);
 
     return {
+        costs: costosFalabella(pedido, items),
         orderNumber: texto(pedido?.OrderNumber) ?? texto(pedido?.OrderId),
         customerName: nombreCliente,
         shipByDate: shipBy,
@@ -299,6 +303,7 @@ export function normalizeMeliOrder(order: any, shipment?: any | null): Normalize
     const entrega = texto(opcion?.estimated_delivery_final?.date) ?? texto(opcion?.estimated_delivery_time?.date);
 
     return {
+        costs: costosMeli(order, shipment),
         orderNumber: texto(order?.id),
         customerName: nombreCliente,
         shipByDate: shipBy,

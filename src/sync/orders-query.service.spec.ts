@@ -57,11 +57,11 @@ describe('variante guardada como JSON de Falabella', () => {
 
 describe('descarga de las ventas filtradas', () => {
     it('da una fila por producto vendido, con el envío solo en la primera, y aplica los mismos filtros', async () => {
-        const { service, llamadas } = construir([{ ...ORDEN, saleState: 'enviado', details: { ...ORDEN.details, shippingAmount: 12 } }]);
+        const { service, llamadas } = construir([{ ...ORDEN, saleState: 'enviado', shippingPaid: 12, shippingType: 'comprador', shippingSellerCost: null, discountAmount: 5, details: { ...ORDEN.details, shippingAmount: 12 } }]);
         const r = await service.exportar('t1', 'owner', { status: 'enviado', marketplace: 'falabella', search: 'gafas' });
         expect(r).toMatchObject({ ventas: 1, incompleto: false });
         expect(r.filas).toHaveLength(2);
-        expect(r.filas[0]).toMatchObject({ canal: 'falabella', numero_pedido: '7001', estado: 'enviado', cliente: 'Lucía Paredes', telefono: '999', sku: 'GAF-01', producto: 'Gafas de sol', cantidad: 1, precio_unitario: 149.9, envio_cobrado: 12, total_del_pedido: 149.9, fecha: '2026-10-09' });
+        expect(r.filas[0]).toMatchObject({ canal: 'falabella', numero_pedido: '7001', estado: 'enviado', cliente: 'Lucía Paredes', telefono: '999', sku: 'GAF-01', producto: 'Gafas de sol', cantidad: 1, precio_unitario: 149.9, envio_cobrado: 12, total_del_pedido: 149.9, fecha: '2026-10-09', tipo_de_envio: 'comprador', costo_envio_para_el_vendedor: '', cupon_o_descuento: 5 });
         expect(r.filas[1]).toMatchObject({ sku: 'SIN-CATALOGO', envio_cobrado: 0, total_del_pedido: 0 });
         expect(llamadas.where.some(w => w.includes('saleState" IN'))).toBe(true);
         expect(llamadas.where.some(w => w.includes('o.marketplace'))).toBe(true);

@@ -3,6 +3,7 @@ import { User } from '../../users/entities/user.entity';
 import { Store } from '../../stores/entities/store.entity';
 import { MarketplaceConnection } from './marketplace-connection.entity';
 import type { EstadoDeVenta } from '../estado-de-venta';
+import type { TipoDeEnvio } from '../costos-de-venta';
 
 /**
  * A confirmed sale pulled from a marketplace (via webhook or backfill).
@@ -60,6 +61,26 @@ export class MarketplaceOrder {
     /** Estado común a todos los canales: pendiente, enviado, entregado, cancelado o devuelto (ver estado-de-venta.ts). */
     @Column({ type: 'varchar', length: 20, default: 'pendiente' })
     saleState: EstadoDeVenta;
+
+    /** Lo que pagó el comprador por el envío (no es base de comisión). */
+    @Column('decimal', { precision: 12, scale: 2, default: 0 })
+    shippingPaid: number;
+
+    /** Lo que te costó el envío a ti, si el canal lo informa (Mercado Libre con envío gratis). Nulo = no se sabe. */
+    @Column('decimal', { precision: 12, scale: 2, nullable: true })
+    shippingSellerCost: number | null;
+
+    /** Quién pagó el envío: comprador, gratis (el comprador no pagó), retiro (sin envío) o sin_dato. */
+    @Column({ type: 'varchar', length: 20, default: 'sin_dato' })
+    shippingType: TipoDeEnvio;
+
+    /** Cupones y descuentos del canal que aplicó al comprador. */
+    @Column('decimal', { precision: 12, scale: 2, default: 0 })
+    discountAmount: number;
+
+    /** La parte de ese descuento que cubre el vendedor, si el canal lo dice. */
+    @Column('decimal', { precision: 12, scale: 2, nullable: true })
+    discountSellerFunded: number | null;
 
     /** Número de pedido tal como lo ve el cliente en el canal. */
     @Column({ type: 'varchar', nullable: true })

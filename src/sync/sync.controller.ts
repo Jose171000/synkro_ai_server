@@ -633,6 +633,7 @@ export class SyncController {
     @ApiQuery({ name: 'connectionId', required: false })
     @ApiQuery({ name: 'search', required: false, description: 'Cliente, número de pedido, SKU o nombre.' })
     @ApiQuery({ name: 'status', required: false, description: 'Estado de la venta: pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.' })
+    @ApiQuery({ name: 'shipping', required: false, description: 'Cómo se pagó el envío: comprador, gratis, retiro o sin_dato (varios, separados por coma). Sin valor, todas.' })
     @ApiQuery({ name: 'limit', required: false })
     @ApiQuery({ name: 'offset', required: false })
     listOrders(
@@ -643,11 +644,12 @@ export class SyncController {
         @Query('connectionId') connectionId?: string,
         @Query('search') search?: string,
         @Query('status') status?: string,
+        @Query('shipping') shipping?: string,
         @Query('limit') limit?: string,
         @Query('offset') offset?: string,
     ) {
         return this.ordersQuery.list(scopeOf(req).storeId, req.store.role, {
-            from, to, marketplace, connectionId, search, status,
+            from, to, marketplace, connectionId, search, status, shipping,
             limit: limit ? Number(limit) : undefined,
             offset: offset ? Number(offset) : undefined,
         });
@@ -667,6 +669,7 @@ export class SyncController {
     @ApiQuery({ name: 'connectionId', required: false })
     @ApiQuery({ name: 'search', required: false })
     @ApiQuery({ name: 'status', required: false })
+    @ApiQuery({ name: 'shipping', required: false })
     async exportOrders(
         @Req() req,
         @Res() res: Response,
@@ -676,8 +679,9 @@ export class SyncController {
         @Query('connectionId') connectionId?: string,
         @Query('search') search?: string,
         @Query('status') status?: string,
+        @Query('shipping') shipping?: string,
     ) {
-        const r = await this.ordersQuery.exportar(scopeOf(req).storeId, req.store.role, { from, to, marketplace, connectionId, search, status });
+        const r = await this.ordersQuery.exportar(scopeOf(req).storeId, req.store.role, { from, to, marketplace, connectionId, search, status, shipping });
         const buffer = await escribirHoja(r.filas, 'Ventas');
         // Se responde directo: el interceptor global envolvería el archivo en JSON y Excel no podría abrirlo.
         res.set({

@@ -9,7 +9,7 @@ import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcio
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
 import { claveDeFilaMeli, detectarDuplicados, DuplicadoMeli } from './meli/duplicados-meli';
-import { Between, In, IsNull, Not, Repository } from 'typeorm';
+import { Between, In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { GrupoSinResolver, nombreDelGrupo, PlanDeGrupo, planearGruposDeFalabella } from './falabella/variantes-falabella';
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
 import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
@@ -38,8 +38,8 @@ import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
-import { importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
-import { lineaDeDiagnostico, puedeDiagnosticar } from './diagnostico-envio';
+import { desfasePorMoneda, fechaFalabella, importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { costosFalabella, costosMeli } from './costos-de-venta';
 import { ESTADOS_FINALES, EstadoDeVenta, estadoDeVenta, estadoDeVentaMeli, estadosDePedidoFalabella } from './estado-de-venta';
 import { filasDeItemMeli, MeliListingRow, publicacionesSinSku, PublicacionSinSku } from './meli/meli-listings';
 import { monedaDePais, monedaPorDefecto, resolverMoneda } from '../common/currency';
@@ -2983,7 +2983,7 @@ export class SyncService implements OnModuleInit {
      */
     async processFalabellaOrders(
         ref: { userId: string; storeId?: string; connectionId?: string },
-        options: { desdeHoras?: number; soloActualizar?: boolean } = {},
+        options: { desdeHoras?: number; soloActualizar?: boolean; completarEnvios?: number } = {},
     ) {
         // Un aviso sin cuenta (encolado antes de este cambio) usa la primera
         // cuenta de Falabella del usuario.
@@ -3004,8 +3004,7 @@ export class SyncService implements OnModuleInit {
             if (pagina.length < 100) break;
         }
 
-        void this.diagnosticarEnvioFalabella(credentials, pedidos);
-        const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false, !!options.soloActualizar);
+        const r = await this.registrarPedidosFalabella(ref.userId, connection, pedidos, false, !!options.soloActualizar, options.completarEnvios ?? 25);
         if (r.nuevos || r.actualizados) {
             console.log(`[Sync] Falabella: ${r.nuevos} pedidos nuevos, ${r.repetidos} ya registrados (${r.actualizados} con estado nuevo).`);
         }
@@ -3023,6 +3022,7 @@ export class SyncService implements OnModuleInit {
         pedidos: any[],
         soloRegistro: boolean,
         soloExistentes = false,
+        presupuestoDeEnvios = 25,
     ): Promise<{ nuevos: number; repetidos: number; completados: number; actualizados: number }> {
         const credentials = { userId: connection.externalUserId, apiKey: connection.accessToken };
         const monedaCuenta = connection.currency ?? undefined;
@@ -3054,8 +3054,14 @@ export class SyncService implements OnModuleInit {
                         details: norm.details as any,
                         items: norm.lines as any,
                         productsAmount: importeDeProductos(norm.lines, Number(yaRegistrado.totalAmount)),
+                        ...norm.costs,
                     });
                     completados++;
+                } else if (yaRegistrado.shippingType === 'sin_dato' && presupuestoDeEnvios > 0) {
+                    // Ventas anteriores al registro del envío: se leen sus artículos para saber si fue retiro, envío gratis o pagado.
+                    presupuestoDeEnvios--;
+                    const lineas = await this.falabellaApi.getOrderItems(credentials, externalId);
+                    await this.orderRepository.update(yaRegistrado.id, { ...costosFalabella(pedido, lineas) });
                 }
                 continue;
             }
@@ -3087,9 +3093,11 @@ export class SyncService implements OnModuleInit {
                 customerName: norm.customerName,
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
+                ...norm.costs,
                 status: (estadosDePedidoFalabella(pedido) || 'pending').slice(0, 30),
                 saleState: estadoDeVenta(estadosDePedidoFalabella(pedido)),
-                orderDate: (pedido as any).CreatedAt ? new Date((pedido as any).CreatedAt) : new Date(),
+                // Falabella manda la fecha sin zona horaria (hora de Perú): leerla como hora universal la dejaba 5 horas antes.
+                orderDate: fechaFalabella((pedido as any).CreatedAt, desfasePorMoneda(moneda)) ?? new Date(),
             }));
             nuevos++;
             if (soloRegistro) continue;
@@ -3277,6 +3285,7 @@ export class SyncService implements OnModuleInit {
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
                 status: order.status,
+                ...norm.costs,
                 saleState: estadoDeVentaMeli(order.status, shipment?.status),
                 orderDate: order.date_closed ? new Date(order.date_closed) : (order.date_created ? new Date(order.date_created) : new Date()),
             }));
@@ -3434,6 +3443,8 @@ export class SyncService implements OnModuleInit {
         const envio = cancelada ? null : await this.fetchMeliShipment(connection, order);
         if (!cancelada && order?.shipping?.id && !envio) return;
         const estado = estadoDeVentaMeli(order.status, envio?.status);
+        // Con el envío ya leído, se aprovecha para completar el costo del envío si todavía no se sabía (sin otra consulta al canal).
+        if (envio && existente.shippingType === 'sin_dato') await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
         const textoEnvio = envio ? [envio.status, envio.substatus ? `(${envio.substatus})` : null].filter(Boolean).join(' ') : (existente.details as any)?.shipping?.status ?? null;
         await this.actualizarEstadoDePedido(existente, String(order.status ?? existente.status), { estado, envio: textoEnvio });
     }
@@ -3466,6 +3477,55 @@ export class SyncService implements OnModuleInit {
             }
         }
         return cambiadas;
+    }
+
+    /** Guarda el envío y el cupón de una venta de Mercado Libre ya registrada (para volver a leer las ventas antiguas). */
+    private async completarCostosMeli(connection: MarketplaceConnection, order: any): Promise<void> {
+        const existente = await this.orderRepository.findOne({ where: { marketplace: 'mercadolibre', externalId: String(order.id) } });
+        if (!existente) return;
+        const envio = await this.fetchMeliShipment(connection, order);
+        // Si el envío no se pudo leer, no se pisa lo que ya había.
+        if (order?.shipping?.id && !envio) return;
+        await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
+    }
+
+    /**
+     * Una sola vez: completa el envío y los cupones de las ventas de los últimos meses, que se guardaron antes de registrarlos.
+     * Falabella: vuelve a leer sus pedidos; Mercado Libre: sus ventas y envíos. Solo actualiza datos de costos: no crea ventas
+     * ni toca el stock.
+     */
+    private async completarCostosUnaVez(): Promise<void> {
+        try {
+            const primera = await this.redis.set('orders:shipping-costs-backfilled:v1', '1', 'EX', 60 * 60 * 24 * 365, 'NX');
+            if (!primera) return;
+            const cuentas = await this.connectionRepository.find({ where: [{ marketplace: 'falabella', status: 'active' }, { marketplace: 'mercadolibre', status: 'active' }], relations: { owner: true, store: true } });
+            for (const c of cuentas) {
+                try {
+                    if (c.marketplace === 'falabella') {
+                        const r = await this.processFalabellaOrders({ userId: c.owner.id, connectionId: c.id }, { desdeHoras: 24 * 45, soloActualizar: true, completarEnvios: 600 });
+                        console.log(`[Sync] Envío de Falabella (${c.externalUserId}): ${r.revisados} pedidos revisados.`);
+                    } else {
+                        const conexion = await this.getValidConnectionById(c.id);
+                        const ventas = await this.orderRepository.find({ where: { marketplace: 'mercadolibre', connection: { id: c.id }, orderDate: MoreThan(new Date(Date.now() - 120 * 24 * 3600_000)) }, take: 400, order: { orderDate: 'DESC' } });
+                        let hechas = 0;
+                        for (const v of ventas) {
+                            try {
+                                const orden = await this.meliApi.getOrder(conexion.accessToken, v.externalId);
+                                await this.completarCostosMeli(conexion, orden);
+                                hechas++;
+                            } catch (error: any) {
+                                console.warn(`[Sync] Envío de la venta ${v.externalId} de Mercado Libre: ${error?.message}`);
+                            }
+                        }
+                        console.log(`[Sync] Envío de Mercado Libre (${c.externalNickname}): ${hechas} de ${ventas.length} ventas completadas.`);
+                    }
+                } catch (error: any) {
+                    console.warn(`[Sync] Envío de ${c.marketplace} (${c.externalUserId}): ${error?.message}`);
+                }
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo completar el envío de las ventas: ${error?.message}`);
+        }
     }
 
     /** Completa los detalles de una venta de Mercado Libre guardada antes de que existieran. */
@@ -3506,7 +3566,6 @@ export class SyncService implements OnModuleInit {
         const connection = await this.getValidConnectionById(connectionId);
         const desde = new Date(Date.now() - SyncService.ORDER_LOOKBACK_HOURS * 3600_000);
         const ordenes = await this.meliApi.searchOrders(connection.accessToken, connection.externalUserId, desde);
-        void this.diagnosticarEnvioMeli(connection, ordenes);
 
         let nuevos = 0;
         for (const orden of ordenes) {
@@ -3519,38 +3578,6 @@ export class SyncService implements OnModuleInit {
             console.log(`[Sync] Mercado Libre ${connection.externalNickname}: ${ordenes.length} ventas leídas (${estados}), ${nuevos} nuevas`);
         }
         return { nuevos, revisados: ordenes.length };
-    }
-
-    /** Unos pocos elementos repartidos por toda la lista (no solo los primeros), para ver casos distintos. */
-    private repartidos<T>(lista: T[], cuantos: number): T[] {
-        const paso = Math.max(1, Math.floor(lista.length / cuantos));
-        return lista.filter((_, i) => i % paso === 0).slice(0, cuantos);
-    }
-
-    /** DIAGNÓSTICO TEMPORAL (ver diagnostico-envio.ts): deja en el log los campos de costo de envío de unas pocas ventas de Mercado Libre. */
-    private async diagnosticarEnvioMeli(connection: MarketplaceConnection, ordenes: any[]): Promise<void> {
-        try {
-            for (const orden of this.repartidos(ordenes, 6)) {
-                if (!puedeDiagnosticar('mercadolibre', 6)) return;
-                console.log(lineaDeDiagnostico('ML', `orden ${orden?.id} (order)`, orden));
-                const envio = orden?.shipping?.id ? await this.fetchMeliShipment(connection, orden) : null;
-                if (envio) console.log(lineaDeDiagnostico('ML', `orden ${orden?.id} (shipment)`, envio));
-            }
-        } catch { /* es solo un diagnóstico: nunca debe afectar a las ventas */ }
-    }
-
-    /** DIAGNÓSTICO TEMPORAL: lo mismo para Falabella (el pedido y sus primeros artículos). */
-    private async diagnosticarEnvioFalabella(credentials: { userId: string; apiKey: string }, pedidos: any[]): Promise<void> {
-        try {
-            for (const pedido of this.repartidos(pedidos, 8)) {
-                if (!puedeDiagnosticar('falabella', 8)) return;
-                const id = String(pedido?.OrderId ?? '');
-                if (!id) continue;
-                console.log(lineaDeDiagnostico('FALA', `pedido ${id} (order)`, pedido));
-                const items = await this.falabellaApi.getOrderItems(credentials, id);
-                items.slice(0, 2).forEach((item: any, i: number) => console.log(lineaDeDiagnostico('FALA', `pedido ${id} (item ${i})`, item)));
-            }
-        } catch { /* es solo un diagnóstico: nunca debe afectar a las ventas */ }
     }
 
     /** Ventas recientes de una cuenta, sea del canal que sea. */
@@ -3635,6 +3662,7 @@ export class SyncService implements OnModuleInit {
     async onModuleInit() {
         void this.asegurarAvisosDeFalabella();
         void this.corregirEstadosDeFalabellaUnaVez();
+        void this.completarCostosUnaVez();
         const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
         if (!(minutos > 0)) return;
         try {

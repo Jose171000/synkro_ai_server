@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ESTADOS_DE_VENTA, ESTADOS_QUE_NO_CUENTAN } from '../sync/estado-de-venta';
+import { TIPOS_DE_ENVIO } from '../sync/costos-de-venta';
+import { hoyEnLima } from '../admin/plan-comercial';
 import { estadosPedidos } from '../sync/orders-query.service';
 import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { parseAmount } from '../common/parse-amount';
@@ -116,19 +118,29 @@ export class ReportsService {
      *  - marketplace_orders (real orders synced from marketplaces)
      *  - the client's Google Sheet published as CSV (legacy AppScript data)
      */
-    async getSalesReport(storeId: string, from?: string, to?: string, status?: string) {
+    async getSalesReport(storeId: string, from?: string, to?: string, status?: string, incluirEnvio = true) {
         const estados = estadosPedidos(status);
-        const end = to || new Date().toISOString().slice(0, 10);
-        const start = from || new Date(Date.now() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const hoy = hoyEnLima();
+        const end = to || hoy;
+        const start = from || new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+        // El día de una venta es el de Lima (no el de la base de datos, que va en hora universal).
+        const FECHA = `("o"."orderDate" AT TIME ZONE 'America/Lima')::date`;
+        // Lo que pagó el cliente: los productos y, con el interruptor, también el envío. Una venta sin desglose usa su total.
+        const VENTA = incluirEnvio
+            ? 'CASE WHEN "o"."productsAmount" IS NULL THEN "o"."totalAmount" ELSE "o"."productsAmount" + "o"."shippingPaid" END'
+            : 'COALESCE("o"."productsAmount", "o"."totalAmount")';
+        const n = (v: unknown) => Number(v ?? 0) || 0;
+        const r2 = (v: unknown) => Math.round(n(v) * 100) / 100;
 
         // ── Fuente 1: órdenes de marketplaces ──
         const rows = await this.orderRepository.createQueryBuilder('o')
-            .select(`TO_CHAR("o"."orderDate"::date, 'YYYY-MM-DD')`, 'date')
+            .select(`TO_CHAR(${FECHA}, 'YYYY-MM-DD')`, 'date')
             .addSelect('"o"."marketplace"', 'channel')
-            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
+            .addSelect(`SUM(${VENTA})`, 'sales')
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
-            .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
             // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
             .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('date').addGroupBy('"o"."marketplace"')
@@ -183,24 +195,59 @@ export class ReportsService {
             .select('"o"."connectionId"', 'connectionId')
             .addSelect('"o"."marketplace"', 'channel')
             .addSelect('MAX(COALESCE("c"."label", "c"."externalNickname", "c"."externalUserId"))', 'label')
-            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
+            .addSelect(`SUM(${VENTA})`, 'sales')
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
-            .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
             // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
             .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
-            .orderBy('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'DESC')
+            .orderBy(`SUM(${VENTA})`, 'DESC')
             .getRawMany();
 
         // Cuántas ventas y cuánto hay en cada estado en el rango (para mostrar el número en cada opción del filtro).
         const porEstado = await this.orderRepository.createQueryBuilder('o')
             .select('"o"."saleState"', 'estado')
-            .addSelect('SUM(COALESCE("o"."productsAmount", "o"."totalAmount"))', 'sales')
+            .addSelect(`SUM(${VENTA})`, 'sales')
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
-            .andWhere('"o"."orderDate"::date BETWEEN :start AND :end', { start, end })
+            .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
             .groupBy('"o"."saleState"')
+            .getRawMany();
+
+        // Las mismas ventas que el resto del reporte (rango, estado elegido o concretadas), para envío, cupones y mapa de calor.
+        const mismasVentas = () => this.orderRepository.createQueryBuilder('o')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN });
+
+        const envios = await mismasVentas()
+            .select('"o"."shippingType"', 'tipo')
+            .addSelect('"o"."marketplace"', 'channel')
+            .addSelect('COUNT(*)', 'orders')
+            .addSelect('COALESCE(SUM("o"."shippingPaid"), 0)', 'paid')
+            .addSelect('COALESCE(SUM("o"."shippingSellerCost"), 0)', 'sellerCost')
+            .addSelect('COUNT("o"."shippingSellerCost")', 'withCost')
+            .groupBy('"o"."shippingType"').addGroupBy('"o"."marketplace"')
+            .getRawMany();
+
+        const cupones = await mismasVentas()
+            .select('"o"."marketplace"', 'channel')
+            .addSelect('COUNT(*) FILTER (WHERE "o"."discountAmount" > 0)', 'orders')
+            .addSelect('COALESCE(SUM("o"."discountAmount"), 0)', 'amount')
+            .addSelect('COALESCE(SUM("o"."discountSellerFunded"), 0)', 'sellerFunded')
+            .addSelect('COUNT(*) FILTER (WHERE "o"."discountAmount" > 0 AND "o"."discountSellerFunded" IS NOT NULL)', 'knownOrders')
+            .groupBy('"o"."marketplace"')
+            .getRawMany();
+
+        // Mapa de calor: día de la semana y hora (Lima). Las ventas registradas a mano no tienen hora real, así que no entran.
+        const calor = await mismasVentas()
+            .andWhere(`COALESCE("o"."details"->>'manual', '') <> 'true'`)
+            .select(`EXTRACT(DOW FROM ("o"."orderDate" AT TIME ZONE 'America/Lima'))::int`, 'dow')
+            .addSelect(`EXTRACT(HOUR FROM ("o"."orderDate" AT TIME ZONE 'America/Lima'))::int`, 'hour')
+            .addSelect('COUNT(*)', 'orders')
+            .addSelect(`SUM(${VENTA})`, 'sales')
+            .groupBy('dow').addGroupBy('hour')
             .getRawMany();
 
         const ultima = await this.orderRepository.createQueryBuilder('o')
@@ -222,6 +269,33 @@ export class ReportsService {
             },
             byDay,
             byChannel,
+            /** Si las ventas incluyen lo que el cliente pagó por el envío (por defecto sí). */
+            includeShipping: incluirEnvio,
+            /** Cómo se pagó el envío: el comprador, gratis (lo cubres tú o el canal) o retiro en tienda; con el costo cuando el canal lo informa. */
+            shipping: {
+                paidTotal: r2(envios.reduce((t, r) => t + n(r.paid), 0)),
+                byType: TIPOS_DE_ENVIO.map(tipo => {
+                    const filas = envios.filter(r => r.tipo === tipo);
+                    return {
+                        type: tipo,
+                        orders: filas.reduce((t, r) => t + n(r.orders), 0),
+                        paid: r2(filas.reduce((t, r) => t + n(r.paid), 0)),
+                        sellerCost: r2(filas.reduce((t, r) => t + n(r.sellerCost), 0)),
+                        ordersWithCost: filas.reduce((t, r) => t + n(r.withCost), 0),
+                    };
+                }),
+                byChannel: envios.map(r => ({ channel: r.channel, type: r.tipo, orders: n(r.orders), paid: r2(r.paid), sellerCost: r2(r.sellerCost), ordersWithCost: n(r.withCost) })),
+            },
+            /** Cupones y descuentos del canal al comprador, y la parte que cubre el vendedor cuando el canal lo dice. */
+            discounts: {
+                orders: cupones.reduce((t, r) => t + n(r.orders), 0),
+                amount: r2(cupones.reduce((t, r) => t + n(r.amount), 0)),
+                sellerFunded: r2(cupones.reduce((t, r) => t + n(r.sellerFunded), 0)),
+                ordersWithKnownFunding: cupones.reduce((t, r) => t + n(r.knownOrders), 0),
+                byChannel: cupones.map(r => ({ channel: r.channel, orders: n(r.orders), amount: r2(r.amount), sellerFunded: r2(r.sellerFunded), ordersWithKnownFunding: n(r.knownOrders) })).filter(c => c.orders > 0),
+            },
+            /** Ventas por día de la semana (0 = domingo) y hora (0-23), en hora de Lima. */
+            heatmap: calor.map(r => ({ dow: n(r.dow), hour: n(r.hour), orders: n(r.orders), sales: r2(r.sales) })),
             byStatus: ESTADOS_DE_VENTA.map(e => {
                 const r = porEstado.find(x => x.estado === e);
                 return { status: e, orders: Number(r?.orders ?? 0), sales: Math.round(Number(r?.sales ?? 0) * 100) / 100 };

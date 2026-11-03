@@ -92,3 +92,29 @@ describe('plantilla de ventas', () => {
         expect(ventas[0].lineas).toHaveLength(2);
     });
 });
+
+describe('listas desplegables de la plantilla', () => {
+    it('estado, descontar stock y canal tienen su lista en SU columna (aunque se agreguen columnas)', async () => {
+        const libro = new ExcelJS.Workbook();
+        await libro.xlsx.load((await plantillaDeVentas('Mi Tienda')) as any);
+        const hoja = libro.getWorksheet('Ventas')!;
+        // Al leer el archivo las columnas no traen su nombre: la letra se busca por el encabezado.
+        const letraDe = (encabezado: string) => {
+            let letra = '';
+            hoja.getRow(1).eachCell((celda, col) => { if (celda.value === encabezado) letra = hoja.getColumn(col).letter; });
+            return letra;
+        };
+        for (const clave of ['canal', 'estado', 'descontar_stock']) {
+            expect((hoja.getCell(`${letraDe(clave)}2`).dataValidation as any)?.type).toBe('list');
+        }
+        // Y las demás columnas no tienen lista.
+        expect(hoja.getCell(`${letraDe('cliente')}2`).dataValidation).toBeFalsy();
+        expect(letraDe('envio_cubierto')).not.toBe('');
+    });
+
+    it('lee el envío cubierto por el vendedor', () => {
+        const { ventas, errores } = ventasDeFilas([{ canal: 'Ripley', sku: 'A', envio: 5, envio_cubierto: 8 }, { canal: 'Ripley', sku: 'B', envio_cubierto: -1 }]);
+        expect(ventas[0]).toMatchObject({ envio: 5, envioCubierto: 8 });
+        expect(errores[0]).toContain('envío cubierto');
+    });
+});

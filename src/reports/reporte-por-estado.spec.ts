@@ -3,8 +3,9 @@ import { ReportsService } from './reports.service';
 /** Un constructor de consultas falso que recuerda las condiciones que se le ponen. */
 function construir(conSheet = false) {
     const condiciones: { sql: string; params: any }[] = [];
+    const selects: string[] = [];
     const qb: any = {
-        select: jest.fn(() => qb), addSelect: jest.fn(() => qb), leftJoin: jest.fn(() => qb),
+        select: jest.fn((e: string) => { selects.push(e); return qb; }), addSelect: jest.fn((e: string) => { selects.push(e); return qb; }), leftJoin: jest.fn(() => qb),
         where: jest.fn(() => qb), groupBy: jest.fn(() => qb), addGroupBy: jest.fn(() => qb), orderBy: jest.fn(() => qb),
         andWhere: jest.fn((sql: string, params: any) => { condiciones.push({ sql, params }); return qb; }),
         getRawMany: jest.fn(async () => [{ estado: 'enviado', orders: '2', sales: '100.5' }]),
@@ -14,7 +15,7 @@ function construir(conSheet = false) {
     const service = new ReportsService(repoOrdenes as any, {} as any, {} as any, {} as any);
     (service as any).legacyProfile = jest.fn(async () => (conSheet ? { sheetCsvUrl: 'http://sheet' } : null));
     (service as any).fetchSheetRows = jest.fn(async () => [{ date: '2026-10-05', channel: null, sales: 10, orders: 1 }]);
-    return { service, condiciones, hoja: (service as any).fetchSheetRows };
+    return { service, condiciones, selects, hoja: (service as any).fetchSheetRows };
 }
 
 describe('reporte de ventas por estado', () => {
@@ -47,5 +48,34 @@ describe('reporte de ventas por estado', () => {
         const filtrado = construir(true);
         await filtrado.service.getSalesReport('t1', '2026-10-01', '2026-10-31', 'entregado');
         expect(filtrado.hoja).not.toHaveBeenCalled();
+    });
+});
+
+describe('envío, cupones y mapa de calor en el reporte', () => {
+    it('por defecto las ventas son todo lo que pagó el cliente: productos más envío; sin el interruptor, solo productos', async () => {
+        const conEnvio = construir();
+        await conEnvio.service.getSalesReport('t1', '2026-10-01', '2026-10-31');
+        expect(conEnvio.selects.some(s => s.includes('shippingPaid') && s.startsWith('SUM('))).toBe(true);
+
+        const sinEnvio = construir();
+        const r = await sinEnvio.service.getSalesReport('t1', '2026-10-01', '2026-10-31', undefined, false);
+        expect(sinEnvio.selects.some(s => s.startsWith('SUM(') && s.includes('shippingPaid'))).toBe(false);
+        expect(r.includeShipping).toBe(false);
+    });
+
+    it('el día de cada venta es el de Lima, no el de la base de datos', async () => {
+        const { service, condiciones, selects } = construir();
+        await service.getSalesReport('t1', '2026-10-01', '2026-10-31');
+        expect(condiciones.some(c => c.sql.includes("AT TIME ZONE 'America/Lima'"))).toBe(true);
+        expect(selects.some(s => s.includes("AT TIME ZONE 'America/Lima'"))).toBe(true);
+    });
+
+    it('devuelve los cuatro tipos de envío, los cupones y el mapa de calor, aunque no haya datos', async () => {
+        const { service } = construir();
+        const r = await service.getSalesReport('t1', '2026-10-01', '2026-10-31');
+        expect(r.shipping.byType.map(t => t.type)).toEqual(['comprador', 'gratis', 'retiro', 'sin_dato']);
+        expect(r.discounts).toMatchObject({ orders: expect.any(Number), amount: expect.any(Number) });
+        expect(Array.isArray(r.heatmap)).toBe(true);
+        expect(Number.isFinite(r.shipping.paidTotal)).toBe(true);
     });
 });

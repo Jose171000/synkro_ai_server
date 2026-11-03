@@ -7,6 +7,7 @@ import { Product } from '../products/entities/product.entity';
 import { StoreRole } from '../stores/entities/store-member.entity';
 import { OrderDetails, OrderLine, ocultarContacto, textoDeValores, textoDeVariante } from './order-details';
 import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
+import { TIPOS_DE_ENVIO, TipoDeEnvio } from './costos-de-venta';
 
 export interface OrdersQuery {
     from?: string;
@@ -16,6 +17,8 @@ export interface OrdersQuery {
     search?: string;
     /** Estados a mostrar, separados por coma: pendiente, enviado, entregado, cancelado, devuelto. Vacío = todos. */
     status?: string;
+    /** Cómo se pagó el envío, separados por coma: comprador, gratis, retiro, sin_dato. Vacío = todos. */
+    shipping?: string;
     limit?: number;
     offset?: number;
 }
@@ -50,7 +53,10 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
         cantidad: Number(l.quantity ?? 1),
         precio_unitario: Number(l.unitPrice ?? 0),
         importe_productos: Math.round(Number(l.quantity ?? 1) * Number(l.unitPrice ?? 0) * 100) / 100,
-        envio_cobrado: i === 0 ? Number(d?.shippingAmount ?? 0) : 0,
+        envio_cobrado: i === 0 ? Number(v.shippingPaid ?? d?.shippingAmount ?? 0) : 0,
+        tipo_de_envio: i === 0 ? (v.shippingType ?? '') : '',
+        costo_envio_para_el_vendedor: i === 0 && v.shippingSellerCost != null ? Number(v.shippingSellerCost) : '',
+        cupon_o_descuento: i === 0 ? Number(v.discountAmount ?? 0) : 0,
         total_del_pedido: i === 0 ? Number(v.totalAmount ?? 0) : 0,
         moneda: v.currency ?? '',
         enviar_antes_de: limite,
@@ -69,6 +75,7 @@ export function datosParaEditar(o: any, lines: any[]) {
         numeroPedido: o.orderNumber ?? '',
         estado: o.saleState,
         envio: Number(d.shippingAmount ?? 0),
+        envioCubierto: Number(d.shippingSellerCost ?? 0),
         cliente: o.customerName ?? '',
         telefono: d.customer?.phone ?? '',
         documento: d.customer?.document ?? '',
@@ -84,6 +91,12 @@ export function datosParaEditar(o: any, lines: any[]) {
             producto: { sku: l.sku ?? '', name: l.productName || l.title, variant: l.variant ?? null, price: Number(l.unitPrice ?? 0), stock: l.currentStock ?? 0, imageUrl: l.imageUrl ?? null },
         })),
     };
+}
+
+/** Tipos de envío pedidos en la consulta, sin repetidos y solo los que existen. */
+export function tiposDeEnvioPedidos(texto?: string): TipoDeEnvio[] {
+    const pedidos = String(texto ?? '').toLowerCase().split(',').map(e => e.trim());
+    return TIPOS_DE_ENVIO.filter(e => pedidos.includes(e));
 }
 
 /** Estados pedidos en la consulta, sin repetidos y solo los que existen. */
@@ -127,10 +140,14 @@ export class OrdersQueryService {
             .leftJoin('o.owner', 'ow')
             .addSelect('ow.id')
             .where('o."storeId" = :storeId', { storeId })
-            .andWhere('o."orderDate"::date BETWEEN :desde AND :hasta', { desde, hasta });
+            // El día de una venta es el de Lima (la base de datos va en hora universal).
+            .andWhere('(o."orderDate" AT TIME ZONE \'America/Lima\')::date BETWEEN :desde AND :hasta', { desde, hasta });
 
         if (query.marketplace) qb.andWhere('o.marketplace = :marketplace', { marketplace: query.marketplace });
         if (query.connectionId) qb.andWhere('o."connectionId" = :connectionId', { connectionId: query.connectionId });
+
+        const tiposDeEnvio = tiposDeEnvioPedidos(query.shipping);
+        if (tiposDeEnvio.length) qb.andWhere('o."shippingType" IN (:...tiposDeEnvio)', { tiposDeEnvio });
 
         const texto = (query.search ?? '').trim();
         if (texto) {
@@ -281,6 +298,11 @@ export class OrdersQueryService {
             /** Registrada a mano o desde Excel: es la única que se puede editar o eliminar. */
             manual: !!(o.details as any)?.manual,
             saleState: o.saleState,
+            shippingPaid: Number(o.shippingPaid ?? 0),
+            shippingSellerCost: o.shippingSellerCost != null ? Number(o.shippingSellerCost) : null,
+            shippingType: o.shippingType ?? 'sin_dato',
+            discountAmount: Number(o.discountAmount ?? 0),
+            discountSellerFunded: o.discountSellerFunded != null ? Number(o.discountSellerFunded) : null,
             customerName: o.customerName,
             shipByDate: o.shipByDate,
             totalAmount: Number(o.totalAmount),

@@ -477,3 +477,60 @@ describe('programación de la consulta periódica', () => {
         await expect(service.onModuleInit()).resolves.toBeUndefined();
     });
 });
+
+describe('envío, cupón y hora de las ventas', () => {
+    it('Falabella: la hora del pedido se lee en hora de Perú y se guarda el envío que pagó el cliente y el cupón', async () => {
+        const { service, ventas, falabella } = await construir();
+        falabella.getOrders.mockResolvedValue([{ ...pedidoFalabella, CreatedAt: '2026-11-02 11:00:00' }]);
+        falabella.getOrderItems.mockResolvedValue([{ ...lineaFalabella, ItemPrice: '60.00', PaidPrice: '50.00', ShippingAmount: '9.90', DeliveryMethod: 'Home_delivery' }]);
+
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        // 11:00 en Lima son las 16:00 en hora universal (sin la zona, quedaba 5 horas antes).
+        expect(ventas[0].orderDate.toISOString()).toBe('2026-11-02T16:00:00.000Z');
+        expect(ventas[0]).toMatchObject({ shippingPaid: 9.9, shippingType: 'comprador', discountAmount: 10 });
+    });
+
+    it('Falabella: una venta ya guardada sin dato de envío se completa al volver a verla, sin tocar el stock', async () => {
+        const { service, ventas, producto, falabella } = await construir();
+        ventas.push({ id: 'v1', marketplace: 'falabella', externalId: '100', status: 'pending', saleState: 'pendiente', currency: 'PEN', totalAmount: 50, details: { shipping: {} }, shippingType: 'sin_dato', shippingPaid: 0 });
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([{ ...lineaFalabella, ShippingAmount: '9.90', DeliveryMethod: 'Home_delivery' }]);
+
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(ventas[0]).toMatchObject({ shippingPaid: 9.9, shippingType: 'comprador' });
+        expect(producto.stock).toBe(5);
+    });
+
+    it('Mercado Libre: con envío gratis para el comprador guarda lo que cubre el vendedor y el cupón, y la hora correcta', async () => {
+        const cuentaMl = cuenta({ id: 'ml1', marketplace: 'mercadolibre', externalUserId: '555' });
+        const { service, ventas, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([{
+            id: 888, status: 'paid', total_amount: 179, paid_amount: 179, currency_id: 'PEN', date_closed: '2026-10-31T17:12:00.000-04:00',
+            coupon: { amount: 35 }, payments: [{ shipping_cost: 0 }], shipping: { id: 4455 },
+            order_items: [{ item: { id: 'MPE1', seller_sku: 'SKU-1', title: 'Almohada' }, quantity: 1, unit_price: 179 }],
+        }]);
+        meli.getShipment.mockResolvedValue({ status: 'shipped', lead_time: { cost: 0, cost_type: 'free', list_cost: 33.6 } });
+
+        await service.pollMeliOrders('ml1');
+
+        expect(ventas[0]).toMatchObject({ shippingPaid: 0, shippingType: 'gratis', shippingSellerCost: 33.6, discountAmount: 35, productsAmount: 179 });
+        expect(ventas[0].orderDate.toISOString()).toBe('2026-10-31T21:12:00.000Z');
+    });
+
+    it('Mercado Libre: con envío pagado por el comprador lo guarda aparte de los productos', async () => {
+        const cuentaMl = cuenta({ id: 'ml1', marketplace: 'mercadolibre', externalUserId: '555' });
+        const { service, ventas, meli } = await construir({ conexiones: [cuentaMl] });
+        meli.searchOrders.mockResolvedValue([{
+            id: 889, status: 'paid', total_amount: 35, paid_amount: 45.9, currency_id: 'PEN', date_closed: '2026-10-20T10:00:00.000-04:00',
+            payments: [{ shipping_cost: 10.9 }], shipping: { id: 4456 },
+            order_items: [{ item: { id: 'MPE1', seller_sku: 'SKU-1', title: 'Polo' }, quantity: 1, unit_price: 35 }],
+        }]);
+        meli.getShipment.mockResolvedValue({ status: 'shipped', lead_time: { cost: 10.9, cost_type: 'charged', list_cost: 10.9 } });
+
+        await service.pollMeliOrders('ml1');
+
+        expect(ventas[0]).toMatchObject({ shippingPaid: 10.9, shippingType: 'comprador', productsAmount: 35 });
+    });
+});

@@ -8,6 +8,7 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { ListingLink } from './entities/listing-link.entity';
 import { Product } from '../products/entities/product.entity';
 import { LineaManual, VentaManual, nombreDeCanalManual, ventasDeFilas } from './ventas-manuales';
+import { costosManual } from './costos-de-venta';
 import { textoDeValores } from './order-details';
 import { OrderLine } from './order-details';
 import { leerPrimeraHoja } from '../common/excel/excel';
@@ -150,6 +151,7 @@ export class ManualSalesService {
             items: lineas as any,
             status: v.estado,
             saleState: v.estado,
+            ...costosManual(v.envio, v.envioCubierto),
             orderNumber: v.numeroPedido,
             customerName: v.cliente,
             shipByDate: null,
@@ -164,6 +166,7 @@ export class ManualSalesService {
                 channelStatus: v.estado,
                 manual: true,
                 shippingAmount: v.envio,
+                shippingSellerCost: v.envioCubierto,
             } as any,
             // Mediodía de Lima: el día no cambia con el huso horario al mostrarlo ni al agrupar por día.
             orderDate: new Date(`${iso}T12:00:00-05:00`),
