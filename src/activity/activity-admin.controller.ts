@@ -1,4 +1,5 @@
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Logger, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -9,6 +10,13 @@ import { ActivityQueriesService } from './activity-queries.service';
 import { leerFiltro } from './activity-filter';
 import { limpiarEtiqueta } from './activity-validation';
 import { ZONA_HORARIA } from './activity.constants';
+import { ActivityReportService, leerOpcionesDeInforme } from './activity-report.service';
+import { informeAExcel } from './activity-excel';
+import { informeAPdf } from './activity-pdf';
+
+/** Pantallas con mapa de clics que caben en cada formato (el PDF dibuja cada una; el Excel solo las lista). */
+const PANTALLAS_EN_PDF = 12;
+const PANTALLAS_EN_EXCEL = 40;
 
 const hoyEnLima = () => new Date().toLocaleDateString('en-CA', { timeZone: ZONA_HORARIA });
 
@@ -23,9 +31,12 @@ const hoyEnLima = () => new Date().toLocaleDateString('en-CA', { timeZone: ZONA_
 @Roles(UserRole.ADMIN)
 @Controller('admin/activity')
 export class ActivityAdminController {
+    private readonly logger = new Logger(ActivityAdminController.name);
+
     constructor(
         private readonly activity: ActivityService,
         private readonly consultas: ActivityQueriesService,
+        private readonly informes: ActivityReportService,
     ) { }
 
     private async filtro(q: Record<string, any>) {
@@ -81,5 +92,38 @@ export class ActivityAdminController {
         const pantalla = limpiarEtiqueta(q.screen, 60);
         if (!pantalla) throw new BadRequestException('Indica la pantalla (screen).');
         return this.consultas.clics(await this.filtro(q), pantalla);
+    }
+
+    private async descargar(q: Record<string, any>, req: any, res: Response, formato: 'xlsx' | 'pdf') {
+        const f = await this.filtro(q);
+        const opciones = leerOpcionesDeInforme(q);
+        const informe = await this.informes.armar(f, opciones, formato === 'pdf' ? PANTALLAS_EN_PDF : PANTALLAS_EN_EXCEL);
+        const archivo = formato === 'pdf' ? await informeAPdf(informe) : await informeAExcel(informe);
+        // Quién descargó y con qué alcance (sin datos de las personas).
+        this.logger.log(`Descarga ${formato} de actividad por ${req.user?.id}: ${f.desde}..${f.hasta}, ${opciones.completo ? 'completa' : 'personalizada'}`);
+        res.set({
+            'Content-Type': formato === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="actividad-synkro_${f.desde}_${f.hasta}.${formato}"`,
+            'Cache-Control': 'no-store',
+        });
+        res.end(archivo);
+    }
+
+    @Get('export/xlsx')
+    @ApiOperation({
+        summary: 'Descarga la actividad en Excel (una hoja por bloque)',
+        description: 'Mismos filtros que el resto. include = resumen,secciones,funciones,horarios,personas,clics,linea (por defecto todos); screens = pantallas para los clics (por defecto todas).',
+    })
+    async excel(@Query() q: Record<string, any>, @Req() req, @Res() res: Response) {
+        await this.descargar(q, req, res, 'xlsx');
+    }
+
+    @Get('export/pdf')
+    @ApiOperation({
+        summary: 'Descarga la actividad en PDF visual',
+        description: 'Mismos parámetros que el Excel. Por defecto lleva todos los datos y avisa que se puede personalizar.',
+    })
+    async pdf(@Query() q: Record<string, any>, @Req() req, @Res() res: Response) {
+        await this.descargar(q, req, res, 'pdf');
     }
 }
