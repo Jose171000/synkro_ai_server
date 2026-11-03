@@ -68,6 +68,13 @@ describe('descarga de las ventas filtradas', () => {
         expect(llamadas.where.some(w => w.includes('ILIKE'))).toBe(true);
     });
 
+    it('el día de la venta y el de enviar antes de son los de Lima, no los de hora universal', async () => {
+        // 22:26 en Lima del 30 de octubre = 03:26 del 31 en hora universal.
+        const { service } = construir([{ ...ORDEN, orderDate: new Date('2026-10-31T03:26:00Z'), shipByDate: new Date('2026-11-01T02:00:00Z') }]);
+        const r = await service.exportar('t1', 'owner', {});
+        expect(r.filas[0]).toMatchObject({ fecha: '2026-10-30', enviar_antes_de: '2026-10-31' });
+    });
+
     it('quien solo tiene lectura no recibe teléfono, documento ni dirección', async () => {
         const { service } = construir();
         const r = await service.exportar('t1', 'viewer', {});

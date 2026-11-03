@@ -3299,6 +3299,7 @@ export class SyncService implements OnModuleInit {
             }
         }
         // Historial: queda la constancia de la venta, sin tocar el stock ni avisar.
+        if (guardada) await this.repartirEnvioDePaquete(guardada.id);
         if (options.soloRegistro) return true;
         if (guardada) void this.saleAlerts.notificar(guardada, 'Mercado Libre');
 
@@ -3395,6 +3396,35 @@ export class SyncService implements OnModuleInit {
         return true;
     }
 
+    /**
+     * Los productos de un paquete de Mercado Libre viajan en un solo envío y cada venta trae el costo completo de ese envío.
+     * Se reparte en partes iguales entre las ventas del mismo envío, para que el costo no se cuente una vez por producto.
+     * Parte del costo completo de la venta que se acaba de guardar, así que repetirlo da el mismo resultado.
+     */
+    private async repartirEnvioDePaquete(ventaId: string): Promise<void> {
+        try {
+            const venta = await this.orderRepository.findOne({ where: { id: ventaId }, relations: ['connection'] });
+            const seguimiento = venta?.details?.shipping?.trackingCode;
+            if (!venta || venta.marketplace !== 'mercadolibre' || !venta.connection || !seguimiento || venta.shippingSellerCost == null) return;
+            const completo = Number(venta.shippingSellerCost);
+            const hermanas = await this.orderRepository.createQueryBuilder('o')
+                .where('o.marketplace = :m', { m: 'mercadolibre' })
+                .andWhere('o."connectionId" = :c', { c: venta.connection.id })
+                .andWhere(`o.details->'shipping'->>'trackingCode' = :t`, { t: seguimiento })
+                .andWhere('o."shippingSellerCost" IS NOT NULL')
+                .orderBy('o."orderDate"', 'ASC').addOrderBy('o.id', 'ASC')
+                .getMany();
+            if (hermanas.length < 2) return;
+            const parte = Math.floor((completo / hermanas.length) * 100) / 100;
+            const primera = Math.round((completo - parte * (hermanas.length - 1)) * 100) / 100;
+            for (const [i, h] of hermanas.entries()) {
+                await this.orderRepository.update(h.id, { shippingSellerCost: i === 0 ? primera : parte });
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] Reparto del envío del paquete de la venta ${ventaId}: ${error?.message}`);
+        }
+    }
+
     /** Datos de envío de una venta de Mercado Libre. Si fallan, la venta se registra igual. */
     private async fetchMeliShipment(connection: MarketplaceConnection, order: any): Promise<any | null> {
         const id = order?.shipping?.id;
@@ -3444,7 +3474,10 @@ export class SyncService implements OnModuleInit {
         if (!cancelada && order?.shipping?.id && !envio) return;
         const estado = estadoDeVentaMeli(order.status, envio?.status);
         // Con el envío ya leído, se aprovecha para completar el costo del envío si todavía no se sabía (sin otra consulta al canal).
-        if (envio && existente.shippingType === 'sin_dato') await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
+        if (envio && existente.shippingType === 'sin_dato') {
+            await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
+            await this.repartirEnvioDePaquete(existente.id);
+        }
         const textoEnvio = envio ? [envio.status, envio.substatus ? `(${envio.substatus})` : null].filter(Boolean).join(' ') : (existente.details as any)?.shipping?.status ?? null;
         await this.actualizarEstadoDePedido(existente, String(order.status ?? existente.status), { estado, envio: textoEnvio });
     }
@@ -3487,6 +3520,7 @@ export class SyncService implements OnModuleInit {
         // Si el envío no se pudo leer, no se pisa lo que ya había.
         if (order?.shipping?.id && !envio) return;
         await this.orderRepository.update(existente.id, { ...costosMeli(order, envio) });
+        await this.repartirEnvioDePaquete(existente.id);
     }
 
     /**

@@ -32,8 +32,10 @@ export interface OrderLineView extends OrderLine {
 
 /** Una fila por producto vendido de una venta: lo que se descarga en Excel. El envío cobrado va en la primera fila de cada venta. */
 export function filasDeExportacion(v: any): Record<string, string | number>[] {
-    const fecha = v.orderDate ? new Date(v.orderDate).toISOString().slice(0, 10) : '';
-    const limite = v.shipByDate ? new Date(v.shipByDate).toISOString().slice(0, 10) : '';
+    // El día es el de Lima (Perú no tiene horario de verano): en hora universal, lo vendido después de las 7 p.m. caía al día siguiente.
+    const diaEnLima = (f: Date | string) => new Date(new Date(f).getTime() - 5 * 3600_000).toISOString().slice(0, 10);
+    const fecha = v.orderDate ? diaEnLima(v.orderDate) : '';
+    const limite = v.shipByDate ? diaEnLima(v.shipByDate) : '';
     const d = v.details;
     const lineas: any[] = v.lines?.length ? v.lines : [{ sku: null, title: 'Sin detalle de productos', quantity: 1, unitPrice: v.totalAmount }];
     return lineas.map((l, i) => ({
