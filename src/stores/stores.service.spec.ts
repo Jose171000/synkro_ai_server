@@ -19,6 +19,7 @@ function construir(estado: {
     tiendas?: any[];
     invitaciones?: any[];
     enlaces?: any[];
+    roles?: any[];
 } = {}) {
     const usuarios = estado.usuarios ?? {};
     const miembros = estado.miembros ?? [];
@@ -68,10 +69,11 @@ function construir(estado: {
     };
     const repoEnlaces = { find: jest.fn(async () => estado.enlaces ?? []) };
     const correo = { sendStoreInvitation: jest.fn().mockResolvedValue(undefined) };
+    const repoRoles = { findOne: jest.fn(async ({ where }: any) => (estado.roles ?? []).find((r: any) => r.id === where.id && r.storeId === where.store?.id) ?? null) };
 
     const service = new StoresService(
         repoTiendas as any, repoMiembros as any, repoInvit as any,
-        repoUsuarios as any, repoEnlaces as any, correo as any,
+        repoUsuarios as any, repoEnlaces as any, correo as any, repoRoles as any,
     );
     return { service, repoMiembros, repoInvit, repoTiendas, repoUsuarios, correo };
 }
@@ -88,7 +90,7 @@ describe('acceso a una tienda', () => {
 
     it('un miembro entra con su rol', async () => {
         const { service } = construir(base);
-        await expect(service.requireAccess('beto', STORE_A)).resolves.toEqual({ storeId: STORE_A, role: 'viewer', permissions: permisosDeRol('viewer') });
+        await expect(service.requireAccess('beto', STORE_A)).resolves.toEqual({ storeId: STORE_A, role: 'viewer', permissions: permisosDeRol('viewer'), roleName: 'Lector', customRoleId: null });
     });
 
     it('quien no es miembro recibe «No tienes acceso a esta tienda»', async () => {
@@ -117,7 +119,7 @@ describe('acceso a una tienda', () => {
 
     it('el administrador de la agencia entra a cualquier tienda existente como dueño', async () => {
         const { service } = construir(base);
-        await expect(service.requireAccess('root', STORE_B, 'owner')).resolves.toEqual({ storeId: STORE_B, role: 'owner', permissions: permisosDeRol('owner') });
+        await expect(service.requireAccess('root', STORE_B, 'owner')).resolves.toEqual({ storeId: STORE_B, role: 'owner', permissions: permisosDeRol('owner'), roleName: 'Dueño', customRoleId: null });
     });
 });
 

@@ -59,7 +59,7 @@ export class MailService {
      */
     async sendStoreInvitation(
         to: string,
-        data: { storeName: string; inviterName: string; role: string; token: string; days: number },
+        data: { storeName: string; inviterName: string; role: string; /** Nombre del rol personalizado, si se invitó con uno */ roleName?: string; token: string; days: number },
     ): Promise<void> {
         await this.deliver({
             to,
@@ -68,7 +68,8 @@ export class MailService {
             context: {
                 storeName: data.storeName,
                 inviterName: data.inviterName || 'Un miembro del equipo',
-                roleLabel: data.role === 'editor' ? 'editor (crea y edita productos, publica y propone cambios de precio y stock)' : 'lector (solo ver)',
+                roleLabel: data.roleName ? `«${data.roleName}» (un rol con los permisos que te dio el dueño de la tienda)`
+                    : data.role === 'editor' ? 'editor (crea y edita productos, publica y propone cambios de precio y stock)' : 'lector (solo ver)',
                 acceptUrl: `${this.frontendUrl}/invitacion?token=${data.token}`,
                 days: data.days,
             },

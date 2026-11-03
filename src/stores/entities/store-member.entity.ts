@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Unique } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Store } from './store.entity';
+import { StoreCustomRole } from './store-custom-role.entity';
 
 /** owner: todo · editor: propone cambios · viewer: solo mira. */
 export type StoreRole = 'owner' | 'editor' | 'viewer';
@@ -21,8 +22,13 @@ export class StoreMember {
     @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: false })
     user: User;
 
+    /** Rol de fábrica. Con rol personalizado queda en «viewer» (el de menos poder); los permisos reales son los del rol personalizado. */
     @Column({ type: 'varchar', length: 10 })
     role: StoreRole;
+
+    /** Rol personalizado de la tienda, si tiene uno. Un rol en uso no se puede borrar. */
+    @ManyToOne(() => StoreCustomRole, { onDelete: 'RESTRICT', nullable: true })
+    customRole: StoreCustomRole | null;
 
     @CreateDateColumn()
     createdAt: Date;

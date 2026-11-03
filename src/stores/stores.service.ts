@@ -10,7 +10,8 @@ import { Store } from './entities/store.entity';
 import { StoreInvitation } from './entities/store-invitation.entity';
 import { STORE_ROLE_RANK, StoreMember, StoreRole } from './entities/store-member.entity';
 import { eliminarTienda, ResumenDeBorrado } from './store-removal';
-import { Permiso, permisosDeRol } from './permissions';
+import { NOMBRE_DE_ROL_DE_FABRICA, Permiso, permisosDeRol, permisosEfectivos } from './permissions';
+import { StoreCustomRole } from './entities/store-custom-role.entity';
 
 /** Las invitaciones caducan: un enlace olvidado en un correo no debe valer para siempre. */
 const INVITATION_DAYS = 7;
@@ -23,9 +24,17 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest('hex
 export interface StoreAccess {
     storeId: string;
     role: StoreRole;
-    /** Lo que esta persona puede hacer en la tienda (hoy, los permisos de su rol de fábrica). */
+    /** Lo que esta persona puede hacer en la tienda: los permisos de su rol de fábrica o de su rol personalizado. */
     permissions: Permiso[];
+    /** Nombre del rol que muestra la app: «Editor», «Lector», «Dueño» o el del rol personalizado. */
+    roleName: string;
+    customRoleId: string | null;
 }
+
+/** A qué rol pasa una persona: uno de fábrica (que no sea el de dueño) o un rol personalizado de la tienda. */
+export type AsignacionDeRol = Exclude<StoreRole, 'owner'> | { customRoleId: string };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const SIN_PERMISO = 'Tu rol en esta tienda no permite esta acción.';
 
@@ -38,6 +47,7 @@ export class StoresService {
         @InjectRepository(User) private readonly users: Repository<User>,
         @InjectRepository(ListingLink) private readonly links: Repository<ListingLink>,
         private readonly mail: MailService,
+        @InjectRepository(StoreCustomRole) private readonly customRoles: Repository<StoreCustomRole>,
     ) { }
 
     // ── Acceso ───────────────────────────────────────────────────
@@ -56,12 +66,14 @@ export class StoresService {
         if (!user) throw new ForbiddenException(NO_STORE_ACCESS);
 
         let role: StoreRole | null = null;
+        let customRole: StoreCustomRole | null = null;
         if (user.role === UserRole.ADMIN) {
             const exists = await this.stores.exist({ where: { id: storeId } });
             if (exists) role = 'owner';
         } else {
-            const member = await this.members.findOne({ where: { store: { id: storeId }, user: { id: userId } } });
+            const member = await this.members.findOne({ where: { store: { id: storeId }, user: { id: userId } }, relations: { customRole: true } });
             role = member?.role ?? null;
+            customRole = member?.customRole ?? null;
         }
 
         // Misma respuesta si la tienda no existe o si no es suya: no se revela cuál.
@@ -69,7 +81,7 @@ export class StoresService {
         if (STORE_ROLE_RANK[role] < STORE_ROLE_RANK[minimum]) {
             throw new ForbiddenException(SIN_PERMISO);
         }
-        return { storeId, role, permissions: permisosDeRol(role) };
+        return { storeId, role, permissions: permisosEfectivos(role, customRole), roleName: customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[role], customRoleId: customRole?.id ?? null };
     }
 
     /** Como `requireAccess`, pero exige además un permiso concreto. */
@@ -204,7 +216,7 @@ export class StoresService {
         await this.ensureDefaultStore(userId);
         const rows = await this.members.find({
             where: { user: { id: userId } },
-            relations: { store: true },
+            relations: { store: true, customRole: true },
             order: { createdAt: 'ASC' },
         });
         return {
@@ -213,7 +225,9 @@ export class StoresService {
                 name: m.store.name,
                 role: m.role,
                 /** Lo que puede hacer en esa tienda: la app muestra u oculta botones con esto. */
-                permissions: permisosDeRol(m.role),
+                permissions: permisosEfectivos(m.role, m.customRole),
+                roleName: m.customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[m.role],
+                customRoleId: m.customRole?.id ?? null,
                 publicEnabled: m.store.publicEnabled,
             })),
             canCreateStores: await this.canCreateStores(userId),
@@ -245,23 +259,37 @@ export class StoresService {
 
     async listMembers(userId: string, storeId: string) {
         await this.requireAccess(userId, storeId, 'viewer');
-        const rows = await this.members.find({ where: { store: { id: storeId } }, relations: { user: true }, order: { createdAt: 'ASC' } });
+        const rows = await this.members.find({ where: { store: { id: storeId } }, relations: { user: true, customRole: true }, order: { createdAt: 'ASC' } });
         return rows.map(m => ({
             userId: m.user.id,
             name: `${m.user.name} ${m.user.lastName}`.trim(),
             email: m.user.email,
             role: m.role,
+            roleName: m.customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[m.role],
+            customRoleId: m.customRole?.id ?? null,
         }));
     }
 
-    async changeRole(userId: string, storeId: string, targetUserId: string, role: Exclude<StoreRole, 'owner'>) {
+    /** Resuelve a qué rol se asigna: uno de fábrica, o un rol personalizado que tiene que ser de esta misma tienda. */
+    private async resolverAsignacion(storeId: string, asignacion: AsignacionDeRol): Promise<{ role: Exclude<StoreRole, 'owner'>; customRole: StoreCustomRole | null }> {
+        if (typeof asignacion === 'string') return { role: asignacion, customRole: null };
+        const id = asignacion?.customRoleId;
+        const custom = UUID.test(id ?? '') ? await this.customRoles.findOne({ where: { id, store: { id: storeId } } }) : null;
+        if (!custom) throw new BadRequestException('Ese rol no existe en esta tienda.');
+        // Con rol personalizado la columna «role» queda en «viewer» (el de menos poder): los permisos reales son los del rol.
+        return { role: 'viewer', customRole: custom };
+    }
+
+    async changeRole(userId: string, storeId: string, targetUserId: string, asignacion: AsignacionDeRol) {
         await this.requireAccess(userId, storeId, 'owner');
         const target = await this.members.findOne({ where: { store: { id: storeId }, user: { id: targetUserId } } });
         if (!target) throw new NotFoundException('Esa persona no es miembro de la tienda.');
         if (target.role === 'owner') throw new BadRequestException('El rol del dueño no se puede cambiar.');
+        const { role, customRole } = await this.resolverAsignacion(storeId, asignacion);
         target.role = role;
+        target.customRole = customRole;
         await this.members.save(target);
-        return { userId: targetUserId, role };
+        return { userId: targetUserId, role, roleName: customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[role], customRoleId: customRole?.id ?? null };
     }
 
     async removeMember(userId: string, storeId: string, targetUserId: string) {
@@ -275,8 +303,10 @@ export class StoresService {
 
     // ── Invitaciones ─────────────────────────────────────────────
 
-    async invite(userId: string, storeId: string, email: string, role: Exclude<StoreRole, 'owner'>) {
+    async invite(userId: string, storeId: string, email: string, asignacion: AsignacionDeRol) {
         await this.requireAccess(userId, storeId, 'owner');
+        const { role, customRole } = await this.resolverAsignacion(storeId, asignacion);
+        const roleName = customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[role];
         const clean = (email ?? '').trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new BadRequestException('Escribe un correo válido.');
 
@@ -292,6 +322,7 @@ export class StoresService {
             store: { id: storeId } as Store,
             email: clean,
             role,
+            customRole,
             tokenHash: sha256(token),
             expiresAt,
             acceptedAt: null,
@@ -309,6 +340,7 @@ export class StoresService {
                 storeName: store?.name ?? 'una tienda',
                 inviterName: `${inviter?.name ?? ''} ${inviter?.lastName ?? ''}`.trim(),
                 role,
+                roleName: customRole ? roleName : undefined,
                 token,
                 days: INVITATION_DAYS,
             });
@@ -321,13 +353,16 @@ export class StoresService {
         // El código solo existe ahora (en la base se guarda su huella): se entrega aquí al dueño
         // para que pueda copiar el enlace aunque el correo no haya salido.
         const acceptUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/invitacion?token=${token}`;
-        return { email: clean, role, expiresAt, emailSent, acceptUrl };
+        return { email: clean, role, roleName, customRoleId: customRole?.id ?? null, expiresAt, emailSent, acceptUrl };
     }
 
     async listInvitations(userId: string, storeId: string) {
         await this.requireAccess(userId, storeId, 'owner');
-        const rows = await this.invitations.find({ where: { store: { id: storeId }, acceptedAt: IsNull() }, order: { createdAt: 'DESC' } });
-        return rows.map(i => ({ id: i.id, email: i.email, role: i.role, expiresAt: i.expiresAt, expired: i.expiresAt < new Date() }));
+        const rows = await this.invitations.find({ where: { store: { id: storeId }, acceptedAt: IsNull() }, relations: { customRole: true }, order: { createdAt: 'DESC' } });
+        return rows.map(i => ({
+            id: i.id, email: i.email, role: i.role, roleName: i.customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[i.role], customRoleId: i.customRole?.id ?? null,
+            expiresAt: i.expiresAt, expired: i.expiresAt < new Date(),
+        }));
     }
 
     async revokeInvitation(userId: string, storeId: string, invitationId: string) {
@@ -346,7 +381,7 @@ export class StoresService {
         if (!token) return null;
         const invitation = await this.invitations.findOne({
             where: { tokenHash: sha256(token) },
-            relations: { store: true, invitedBy: true },
+            relations: { store: true, invitedBy: true, customRole: true },
         });
         if (!invitation || invitation.acceptedAt || invitation.expiresAt < new Date()) return null;
         return invitation;
@@ -363,6 +398,7 @@ export class StoresService {
         return {
             storeName: invitation.store.name,
             role: invitation.role,
+            roleName: invitation.customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[invitation.role],
             inviterName: [quien?.name, quien?.lastName].filter(Boolean).join(' ') || null,
             email: invitation.email,
             expiresAt: invitation.expiresAt,
@@ -382,7 +418,7 @@ export class StoresService {
     async acceptInvitation(userId: string, token: string) {
         const invitation = await this.invitations.findOne({
             where: { tokenHash: sha256(token ?? '') },
-            relations: { store: true },
+            relations: { store: true, customRole: true },
         });
         const user = await this.users.findOne({ where: { id: userId }, select: { id: true, email: true } });
 
@@ -399,9 +435,9 @@ export class StoresService {
 
         const exists = await this.members.exist({ where: { store: { id: invitation.store.id }, user: { id: userId } } });
         if (!exists) {
-            await this.members.save(this.members.create({ store: invitation.store, user: { id: userId } as User, role: invitation.role }));
+            await this.members.save(this.members.create({ store: invitation.store, user: { id: userId } as User, role: invitation.role, customRole: invitation.customRole ?? null }));
         }
-        return { storeId: invitation.store.id, name: invitation.store.name, role: invitation.role };
+        return { storeId: invitation.store.id, name: invitation.store.name, role: invitation.role, roleName: invitation.customRole?.name ?? NOMBRE_DE_ROL_DE_FABRICA[invitation.role] };
     }
 
     // ── Enlace público ───────────────────────────────────────────

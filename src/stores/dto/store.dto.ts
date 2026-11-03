@@ -1,5 +1,6 @@
+import { BadRequestException } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class CreateStoreDto {
     @ApiProperty({ example: 'Rivesi Home' })
@@ -20,15 +21,65 @@ export class InviteDto {
     @IsEmail()
     email: string;
 
-    @ApiProperty({ enum: ['editor', 'viewer'], description: 'editor trabaja el catálogo y publica; viewer solo mira (ver docs/roles-de-tienda.md)' })
+    @ApiPropertyOptional({ enum: ['editor', 'viewer'], description: 'Rol de fábrica: editor trabaja el catálogo y publica; viewer solo mira. Manda este o customRoleId, no los dos (ver docs/roles-de-tienda.md)' })
+    @IsOptional()
     @IsIn(['editor', 'viewer'])
-    role: 'editor' | 'viewer';
+    role?: 'editor' | 'viewer';
+
+    @ApiPropertyOptional({ description: 'Rol personalizado de la tienda' })
+    @IsOptional()
+    @IsUUID()
+    customRoleId?: string;
 }
 
 export class ChangeRoleDto {
-    @ApiProperty({ enum: ['editor', 'viewer'] })
+    @ApiPropertyOptional({ enum: ['editor', 'viewer'], description: 'Rol de fábrica. Manda este o customRoleId, no los dos' })
+    @IsOptional()
     @IsIn(['editor', 'viewer'])
-    role: 'editor' | 'viewer';
+    role?: 'editor' | 'viewer';
+
+    @ApiPropertyOptional({ description: 'Rol personalizado de la tienda' })
+    @IsOptional()
+    @IsUUID()
+    customRoleId?: string;
+}
+
+export class CreateRoleDto {
+    @ApiProperty({ example: 'Vendedor' })
+    @IsString()
+    @MinLength(2)
+    @MaxLength(40)
+    name: string;
+
+    @ApiProperty({ description: 'Claves de permisos (GET /stores/permissions/catalog). Los que otros necesitan se agregan solos', example: ['productos.ver', 'ventas.ver', 'ventas.registrar'] })
+    @IsArray()
+    @ArrayMaxSize(40)
+    @IsString({ each: true })
+    permissions: string[];
+}
+
+export class UpdateRoleDto {
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MinLength(2)
+    @MaxLength(40)
+    name?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(40)
+    @IsString({ each: true })
+    permissions?: string[];
+}
+
+/** De un cuerpo con `role` o `customRoleId` (exactamente uno) saca a qué rol se asigna. */
+export function asignacionDe(dto: { role?: 'editor' | 'viewer'; customRoleId?: string }): 'editor' | 'viewer' | { customRoleId: string } {
+    if (dto.role && dto.customRoleId) throw new BadRequestException('Elige un rol de fábrica o uno personalizado, no los dos.');
+    if (dto.customRoleId) return { customRoleId: dto.customRoleId };
+    if (dto.role) return dto.role;
+    throw new BadRequestException('Indica el rol.');
 }
 
 export class AcceptInvitationDto {

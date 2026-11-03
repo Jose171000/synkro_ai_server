@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, In
 import { User } from '../../users/entities/user.entity';
 import { Store } from './store.entity';
 import { StoreRole } from './store-member.entity';
+import { StoreCustomRole } from './store-custom-role.entity';
 
 /**
  * Invitación a una tienda por correo.
@@ -24,6 +25,10 @@ export class StoreInvitation {
 
     @Column({ type: 'varchar', length: 10 })
     role: Exclude<StoreRole, 'owner'>;
+
+    /** Si se invitó con un rol personalizado de la tienda (entonces `role` es «viewer»). */
+    @ManyToOne(() => StoreCustomRole, { onDelete: 'RESTRICT', nullable: true })
+    customRole: StoreCustomRole | null;
 
     @Column()
     @Index({ unique: true })

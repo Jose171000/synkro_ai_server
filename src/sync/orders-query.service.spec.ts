@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { OrdersQueryService } from './orders-query.service';
+import { permisosDeRol } from '../stores/permissions';
 
 /**
  * La pantalla «Ventas» muestra cada línea con su foto y el stock de ahora, y
@@ -244,5 +245,52 @@ describe('ventas manuales en la consulta', () => {
         expect(lista.items[0].manual).toBe(false);
         const dn: any = await normal.service.detail('t1', 'owner', ORDEN.id);
         expect(dn.manualEdit).toBeUndefined();
+    });
+});
+
+describe('«costos.ver»: quien no lo tiene no ve envío ni cupones', () => {
+    const CON_COSTOS = { ...ORDEN, shippingPaid: '12.5', shippingSellerCost: '8', shippingType: 'gratis', discountAmount: '5', discountSellerFunded: '3' };
+    const sinCostos = { role: 'viewer' as const, permissions: permisosDeRol('viewer').filter((p) => p !== 'costos.ver') };
+    const conCostos = { role: 'viewer' as const, permissions: permisosDeRol('viewer') };
+
+    it('con el permiso, la venta trae el envío cobrado, lo que cuesta al vendedor y el cupón', async () => {
+        const { service } = construir([CON_COSTOS]);
+        const [v] = (await service.list('t1', conCostos, {})).items;
+        expect(v).toMatchObject({ costsHidden: false, shippingPaid: 12.5, shippingSellerCost: 8, shippingType: 'gratis', discountAmount: 5, discountSellerFunded: 3 });
+    });
+
+    it('sin el permiso, esos campos vienen vacíos y la venta avisa que están ocultos (el total y los productos siguen)', async () => {
+        const { service } = construir([CON_COSTOS]);
+        const [v] = (await service.list('t1', sinCostos, {})).items;
+        expect(v).toMatchObject({ costsHidden: true, shippingPaid: 0, shippingSellerCost: null, shippingType: 'sin_dato', discountAmount: 0, discountSellerFunded: null, totalAmount: 149.9 });
+        expect(v.lines.length).toBe(2);
+        expect(JSON.stringify(v)).not.toContain('12.5');
+    });
+
+    it('el detalle de una venta también los oculta', async () => {
+        const { service } = construir([CON_COSTOS]);
+        const d: any = await service.detail('t1', sinCostos, ORDEN.id);
+        expect(d).toMatchObject({ costsHidden: true, shippingSellerCost: null, discountAmount: 0 });
+    });
+
+    it('el Excel de quien no lo tiene no trae las columnas de envío ni cupones, y el total es solo lo vendido', async () => {
+        const { service } = construir([CON_COSTOS]);
+        const { filas } = await service.exportar('t1', sinCostos, {});
+        for (const col of ['envio_cobrado', 'tipo_de_envio', 'costo_envio_para_el_vendedor', 'cupon_o_descuento']) expect(filas[0]).not.toHaveProperty(col);
+        expect(filas[0].total_del_pedido).toBe(159.9); // 149.9 + 10 de los productos, sin los 12.5 de envío
+    });
+
+    it('el Excel de quien sí lo tiene sigue trayéndolas', async () => {
+        const { service } = construir([CON_COSTOS]);
+        const { filas } = await service.exportar('t1', conCostos, {});
+        expect(filas[0]).toMatchObject({ envio_cobrado: 12.5, tipo_de_envio: 'gratis', costo_envio_para_el_vendedor: 8, cupon_o_descuento: 5, total_del_pedido: 172.4 });
+    });
+
+    it('quien solo se identifica con el nombre de su rol de fábrica sigue viendo costos (lector, editor y dueño los tienen)', async () => {
+        const { service } = construir([CON_COSTOS]);
+        for (const rol of ['viewer', 'editor', 'owner'] as const) {
+            const [v] = (await service.list('t1', rol, {})).items;
+            expect(v.costsHidden).toBe(false);
+        }
     });
 });

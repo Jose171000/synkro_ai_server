@@ -109,3 +109,29 @@ export function rolDeFabricaIgualA(permisos: Iterable<Permiso>): StoreRole | nul
     }
     return null;
 }
+
+// ── Roles personalizados ─────────────────────────────────────────────────
+
+/** Nombres que un rol personalizado no puede usar: se confundirían con los de fábrica. */
+export const NOMBRES_RESERVADOS = ['dueño', 'dueno', 'propietario', 'owner', 'editor', 'lector', 'viewer', 'personalizado'];
+
+/**
+ * Lo que llega del cliente (una lista de claves de permisos) convertido en un conjunto válido: sin repetidos, sin claves que no
+ * existan y con lo que cada permiso necesita ya marcado. Devuelve además lo que se tuvo que agregar y lo que se descartó.
+ */
+export function normalizarPermisos(crudos: unknown): { permisos: Permiso[]; invalidos: string[]; agregados: Permiso[] } {
+    const lista = Array.isArray(crudos) ? crudos : [];
+    const invalidos = [...new Set(lista.filter((p) => !esPermiso(p)).map((p) => String(p).slice(0, 60)))];
+    const pedidos = [...new Set(lista.filter(esPermiso))];
+    const permisos = cerrarDependencias(pedidos);
+    return { permisos, invalidos, agregados: permisos.filter((p) => !pedidos.includes(p)) };
+}
+
+/**
+ * Lo que una persona puede hacer en una tienda: los permisos de su rol de fábrica o, si tiene un rol personalizado, los de ese
+ * rol (siempre pasados por `normalizarPermisos`, así que un permiso retirado del catálogo nunca da acceso).
+ */
+export function permisosEfectivos(rol: StoreRole, personalizado?: { permissions?: unknown } | null): Permiso[] {
+    if (personalizado) return normalizarPermisos(personalizado.permissions).permisos;
+    return permisosDeRol(rol);
+}

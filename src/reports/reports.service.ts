@@ -118,7 +118,12 @@ export class ReportsService {
      *  - marketplace_orders (real orders synced from marketplaces)
      *  - the client's Google Sheet published as CSV (legacy AppScript data)
      */
-    async getSalesReport(storeId: string, from?: string, to?: string, status?: string, incluirEnvio = true) {
+    /**
+     * `verCostos` es el permiso «costos.ver»: sin él no se devuelven el envío ni los cupones, y las ventas son solo lo vendido
+     * (nunca suman lo que el cliente pagó por el envío).
+     */
+    async getSalesReport(storeId: string, from?: string, to?: string, status?: string, incluirEnvio = true, verCostos = true) {
+        if (!verCostos) incluirEnvio = false;
         const estados = estadosPedidos(status);
         const hoy = hoyEnLima();
         const end = to || hoy;
@@ -260,7 +265,7 @@ export class ReportsService {
         const totalSales = byDay.reduce((s, d) => s + d.sales, 0);
         const totalOrders = byDay.reduce((s, d) => s + d.orders, 0);
 
-        return {
+        const informe = {
             range: { from: start, to: end },
             totals: {
                 sales: Math.round(totalSales * 100) / 100,
@@ -315,6 +320,13 @@ export class ReportsService {
                 sheets: Boolean(profile?.sheetCsvUrl),
                 sheetError,
             },
+        };
+        if (verCostos) return { ...informe, costsHidden: false };
+        return {
+            ...informe,
+            costsHidden: true,
+            shipping: { paidTotal: 0, byType: [], byChannel: [] },
+            discounts: { orders: 0, amount: 0, sellerFunded: 0, ordersWithKnownFunding: 0, byChannel: [] },
         };
     }
 

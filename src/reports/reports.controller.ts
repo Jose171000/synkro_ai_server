@@ -33,6 +33,6 @@ export class ReportsController {
     @ApiQuery({ name: 'status', required: false, description: 'Solo ventas en este estado: pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma).' })
     @ApiQuery({ name: 'includeShipping', required: false, description: 'false para no sumar lo que el cliente pagó por el envío. Por defecto se incluye: las ventas son todo lo que pagó el cliente.' })
     getSales(@Req() req, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string, @Query('includeShipping') includeShipping?: string) {
-        return this.reportsService.getSalesReport(req.store.storeId, from, to, status, includeShipping !== 'false');
+        return this.reportsService.getSalesReport(req.store.storeId, from, to, status, includeShipping !== 'false', req.store.permissions.includes('costos.ver'));
     }
 }

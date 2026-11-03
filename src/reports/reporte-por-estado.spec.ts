@@ -79,3 +79,24 @@ describe('envío, cupones y mapa de calor en el reporte', () => {
         expect(Number.isFinite(r.shipping.paidTotal)).toBe(true);
     });
 });
+
+describe('reporte de ventas sin «costos.ver»', () => {
+    it('con el permiso trae el envío y los cupones, y por defecto las ventas incluyen lo que el cliente pagó por el envío', async () => {
+        const { service } = construir();
+        const r: any = await service.getSalesReport('t1', '2026-10-01', '2026-10-31');
+        expect(r.costsHidden).toBe(false);
+        expect(r.includeShipping).toBe(true);
+        expect(r.shipping.byType.length).toBeGreaterThan(0);
+    });
+
+    it('sin el permiso, el envío y los cupones vienen vacíos y las ventas NO suman el envío, aunque se pida', async () => {
+        const { service, selects } = construir();
+        const r: any = await service.getSalesReport('t1', '2026-10-01', '2026-10-31', undefined, true, false);
+        expect(r.costsHidden).toBe(true);
+        expect(r.includeShipping).toBe(false);
+        expect(r.shipping).toEqual({ paidTotal: 0, byType: [], byChannel: [] });
+        expect(r.discounts).toEqual({ orders: 0, amount: 0, sellerFunded: 0, ordersWithKnownFunding: 0, byChannel: [] });
+        // las ventas se calculan solo con los productos: nunca con «productsAmount + shippingPaid»
+        expect(selects.join(' ')).not.toContain('"o"."productsAmount" + "o"."shippingPaid"');
+    });
+});

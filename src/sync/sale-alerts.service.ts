@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { permisosEfectivos } from '../stores/permissions';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
@@ -32,8 +33,9 @@ export class SaleAlertsService {
         const storeId = order.store?.id;
 
         if (storeId) {
-            const filas = await this.members.find({ where: { store: { id: storeId } }, relations: { user: true } });
-            personas.push(...filas.map((f) => f.user));
+            const filas = await this.members.find({ where: { store: { id: storeId } }, relations: { user: true, customRole: true } });
+            // Un aviso de venta cuenta una venta: solo le llega a quien tiene permiso para verlas (un rol personalizado puede no tenerlo).
+            personas.push(...filas.filter((f) => permisosEfectivos(f.role, f.customRole).includes('ventas.ver')).map((f) => f.user));
             const tienda = await this.stores.findOne({ where: { id: storeId }, relations: { owner: true } });
             if (tienda?.owner) personas.push(tienda.owner);
         }

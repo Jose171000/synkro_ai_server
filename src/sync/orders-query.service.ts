@@ -44,11 +44,12 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
     const d = v.details;
     const lineas: any[] = v.lines?.length ? v.lines : [{ sku: null, title: 'Sin detalle de productos', quantity: 1, unitPrice: v.totalAmount }];
     const r2 = (n: number) => Math.round(n * 100) / 100;
-    const envioCobrado = Number(v.shippingPaid ?? d?.shippingAmount ?? 0);
+    const verCostos = !v.costsHidden;
+    const envioCobrado = verCostos ? Number(v.shippingPaid ?? d?.shippingAmount ?? 0) : 0;
     // Lo que pagó el comprador, igual en todos los canales: los productos (ya con el cupón del canal) más el envío que pagó.
     // El total que guarda cada canal no es comparable: el de Falabella incluía el envío y el de Mercado Libre no.
     const totalPagado = r2(lineas.reduce((s, l) => s + Number(l.quantity ?? 1) * Number(l.unitPrice ?? 0), 0) + envioCobrado);
-    return lineas.map((l, i) => ({
+    const filas = lineas.map((l, i): Record<string, string | number> => ({
         fecha,
         canal: v.marketplace,
         cuenta: v.account?.label ?? '',
@@ -77,6 +78,9 @@ export function filasDeExportacion(v: any): Record<string, string | number>[] {
         stock_tras_la_venta: l.stockAfter ?? '',
         stock_actual: l.currentStock ?? '',
     }));
+    // Sin «costos.ver» el archivo no trae envío ni cupones: solo lo vendido.
+    if (!verCostos) for (const f of filas) for (const col of ['envio_cobrado', 'tipo_de_envio', 'costo_envio_para_el_vendedor', 'cupon_o_descuento']) delete f[col];
+    return filas;
 }
 
 /** Lo que el formulario necesita para editar una venta manual, en el mismo formato con que se registró. */
@@ -298,6 +302,8 @@ export class OrdersQueryService {
 
         const detalles: OrderDetails | null = o.details ?? null;
         const visibles = permisos.includes('ventas.contacto') ? detalles : ocultarContacto(detalles);
+        // Sin «costos.ver» no se ve lo que costó el envío ni los cupones: solo lo vendido.
+        const verCostos = permisos.includes('costos.ver');
 
         return {
             id: o.id,
@@ -312,11 +318,13 @@ export class OrdersQueryService {
             /** Registrada a mano o desde Excel: es la única que se puede editar o eliminar. */
             manual: !!(o.details as any)?.manual,
             saleState: o.saleState,
-            shippingPaid: Number(o.shippingPaid ?? 0),
-            shippingSellerCost: o.shippingSellerCost != null ? Number(o.shippingSellerCost) : null,
-            shippingType: o.shippingType ?? 'sin_dato',
-            discountAmount: Number(o.discountAmount ?? 0),
-            discountSellerFunded: o.discountSellerFunded != null ? Number(o.discountSellerFunded) : null,
+            /** true cuando esta persona no tiene «costos.ver»: los campos de envío y cupones vienen vacíos. */
+            costsHidden: !verCostos,
+            shippingPaid: verCostos ? Number(o.shippingPaid ?? 0) : 0,
+            shippingSellerCost: verCostos && o.shippingSellerCost != null ? Number(o.shippingSellerCost) : null,
+            shippingType: verCostos ? (o.shippingType ?? 'sin_dato') : 'sin_dato',
+            discountAmount: verCostos ? Number(o.discountAmount ?? 0) : 0,
+            discountSellerFunded: verCostos && o.discountSellerFunded != null ? Number(o.discountSellerFunded) : null,
             customerName: o.customerName,
             shipByDate: o.shipByDate,
             totalAmount: Number(o.totalAmount),

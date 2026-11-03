@@ -3,7 +3,7 @@ import { SaleAlertsService } from './sale-alerts.service';
 const usuario = (email: string, extra: any = {}) => ({ id: email, email, name: email.split('@')[0], isActive: true, approvalStatus: 'approved', ...extra });
 
 function construir(opts: { miembros?: any[]; dueno?: any; ownerDeVenta?: any }) {
-    const members: any = { find: jest.fn(async () => (opts.miembros ?? []).map((user) => ({ user }))) };
+    const members: any = { find: jest.fn(async () => (opts.miembros ?? []).map((user: any) => ({ user, role: user.rol ?? 'viewer', customRole: user.rolPersonalizado ?? null }))) };
     const stores: any = { findOne: jest.fn(async () => ({ id: 's1', name: 'Laihome', owner: opts.dueno ?? null })) };
     const users: any = { findOne: jest.fn(async () => opts.ownerDeVenta ?? null) };
     const mail: any = { sendSaleAlert: jest.fn(async () => undefined) };
@@ -16,6 +16,18 @@ const venta: any = {
 };
 
 describe('avisos de venta por correo', () => {
+    it('solo avisa a quien puede ver ventas: un rol personalizado sin ese permiso no recibe el aviso', async () => {
+        const { service, mail } = construir({
+            dueno: usuario('dueno@x.com'),
+            miembros: [
+                usuario('bodega@x.com', { rolPersonalizado: { permissions: ['productos.ver', 'inventario.editar'] } }),
+                usuario('vendedor@x.com', { rolPersonalizado: { permissions: ['ventas.ver'] } }),
+            ],
+        });
+        await service.notificar(venta, 'Falabella');
+        expect(mail.sendSaleAlert.mock.calls.map((c: any[]) => c[0]).sort()).toEqual(['dueno@x.com', 'vendedor@x.com']);
+    });
+
     it('avisa al dueño y a todo el equipo, sin repetir correos', async () => {
         const { service, mail } = construir({
             dueno: usuario('dueno@x.com'),

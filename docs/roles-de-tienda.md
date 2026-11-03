@@ -13,8 +13,8 @@ o agregar una ruta de tienda sin permiso, hace fallar las pruebas a propósito.
 | Fase | Qué es | Estado |
 |---|---|---|
 | 1 | Motor de permisos en el servidor; los tres roles de fábrica según esta tabla; huecos cerrados | **Hecha** |
-| 2 | Roles personalizados de cada tienda: crear, editar, borrar y asignar | Pendiente |
-| 3 | Pestaña «Roles» en la app y botones según permisos | Pendiente (la app ya oculta botones con `can()`) |
+| 2 | Roles personalizados de cada tienda: crear, editar, borrar y asignar (servidor); `costos.ver` se aplica | **Hecha** (sin pantalla todavía) |
+| 3 | Pestaña «Roles» en la app, miembros e invitaciones con el nombre del rol, y ocultar lo que `costsHidden` indica | Pendiente (la app ya oculta botones con `can()`) |
 
 ## Permisos y roles de fábrica
 
@@ -43,6 +43,38 @@ nombre de la tienda) y ver el plan y los cobros de la tienda. Es siempre del due
 
 El superadmin de la plataforma entra a cualquier tienda como dueño, con todos los permisos.
 
+## Roles personalizados (fase 2)
+
+Código: `src/stores/store-roles.service.ts`, entidad `StoreCustomRole` (`store_custom_roles`), migración `1791400000000`.
+
+* Los gestiona **solo el dueño** (se comprueba por rol, no por permiso: no se delega). Un rol personalizado es de **una tienda**.
+* **Rutas** (todas bajo `/stores`):
+  * `GET permissions/catalog`: catálogo de permisos (título, ayuda, grupo, si es delicado, de qué depende) y roles de fábrica.
+  * `GET :storeId/roles`: roles de fábrica y personalizados, con cuántas personas e invitaciones tiene cada uno.
+  * `POST :storeId/roles` `{ name, permissions[] }`, `PATCH :storeId/roles/:roleId`, `DELETE :storeId/roles/:roleId`.
+  * Asignar: `PATCH :storeId/members/:userId` y `POST :storeId/invitations` aceptan `role` (editor o viewer) **o** `customRoleId`, uno solo.
+* **Validaciones:** nombre de 2 a 40 letras, sin `< > @`, único en la tienda sin distinguir mayúsculas, y que no sea el de un rol de
+  fábrica (dueño, editor, lector, personalizado…). Permisos que existan, al menos uno; los que otro necesita se agregan solos y la
+  respuesta lo dice (`addedAutomatically`). Un conjunto **idéntico** al de un rol de fábrica se rechaza: ese conjunto ES el rol de
+  fábrica. Máximo 20 roles por tienda.
+* **Borrar:** si alguien lo tiene o hay una invitación pendiente con él, no se puede (la clave foránea es `RESTRICT`); hay que cambiar antes
+  a esas personas.
+* **Cómo se guarda quién tiene qué:** `store_members.customRoleId` (y `store_invitations.customRoleId`). Con rol personalizado la columna
+  `role` queda en **`viewer`**, el rol de fábrica con menos poder, para que ninguna regla que mire solo el nombre del rol le dé de más.
+  Los permisos reales salen del rol y se leen **en cada petición**: un cambio vale desde la siguiente acción, sin volver a entrar.
+* Un permiso retirado del catálogo nunca da acceso (se descarta al leer el rol).
+* Efectos colaterales: la actividad de usuarios registra a esa persona con rol de tienda «viewer», y el aviso de venta por correo solo
+  llega a quien tiene `ventas.ver`.
+
+### `costos.ver` (aplicado en la fase 2)
+
+Sin este permiso:
+* cada venta trae `costsHidden: true` y `shippingPaid`, `shippingSellerCost`, `shippingType`, `discountAmount` y `discountSellerFunded` vacíos;
+* el Excel de ventas no trae las columnas de envío ni cupones y el total es solo lo vendido;
+* el reporte de ventas (`/reports/sales`) trae `costsHidden: true`, `shipping` y `discounts` vacíos, y las ventas **nunca** suman el envío.
+
+La app todavía no oculta las secciones de envío y cupones con `costsHidden` (fase 3).
+
 ## Dependencias
 
 Marcar un permiso marca también lo que necesita (`DEPENDENCIAS`): por ejemplo `inventario.editar` necesita `productos.ver` y
@@ -58,7 +90,7 @@ Marcar un permiso marca también lo que necesita (`DEPENDENCIAS`): por ejemplo `
   fábrica y pasa a **Personalizado** (se le pone nombre y se guarda como rol reutilizable de la tienda). Si el conjunto vuelve a
   ser exactamente el de un rol de fábrica, vuelve a ser ese rol (`rolDeFabricaIgualA`).
 * Reglas fijas: siempre queda al menos un dueño; un rol en uso no se borra hasta mover a sus personas; un cambio de rol vale desde
-  la siguiente petición (no se guarda en el token).
+  la siguiente petición (no se guarda en el token). El rol de dueño no se puede cambiar ni quitar, así que nunca recibe un rol personalizado.
 
 ## Qué cambió respecto a los roles anteriores (fase 1)
 
@@ -68,8 +100,6 @@ Marcar un permiso marca también lo que necesita (`DEPENDENCIAS`): por ejemplo `
 * **Productos por ID** (abrir, editar, usar la IA): el acceso es de la tienda, no de quien lo subió. Los productos anteriores a las
   tiendas, sin tienda, solo los ve su dueño. La IA consulta los canales de quien subió el producto, no los de quien pulsa el botón.
 * `ventas.contacto` es un permiso nuevo que antes era una regla escondida («el lector no ve el contacto de los clientes»).
-* `costos.ver` ya existe en el catálogo, pero **todavía no se aplica**: ningún rol de fábrica puede quitarlo. Se aplicará en la fase 2,
-  cuando haya roles que no lo tengan.
 
 ## Cómo agregar una ruta nueva de tienda
 
