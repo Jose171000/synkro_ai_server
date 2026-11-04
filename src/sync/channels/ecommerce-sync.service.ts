@@ -386,9 +386,21 @@ export class EcommerceSyncService implements OnModuleInit {
             if (await this.aplicarVenta(connection, orden, { soloRegistro: false })) nuevos++;
         }
         if (orders.length) {
-            console.log(`[Sync] ${NOMBRES[canal]} ${connection.externalNickname}: ${orders.length} ventas leídas, ${nuevos} nuevas`);
+            console.log(`[Sync] ${NOMBRES[canal]} ${connection.externalNickname}: ${orders.length} ventas leídas, ${nuevos} nuevas${this.desglosePorEstado(canal, orders)}`);
+        } else if (canal === 'ripley') {
+            // Ripley no avisa por webhook y la consulta es silenciosa: este renglón confirma que la pasada corrió y que no había pedidos.
+            console.log(`[Sync] Ripley ${connection.externalNickname}: 0 pedidos modificados en las últimas ${ORDER_LOOKBACK_HOURS} h`);
         }
         return { nuevos, revisados: orders.length };
+    }
+
+    /** Solo para Ripley: cuántos pedidos hay en cada estado del canal, para entender por qué una venta cuenta o no. */
+    private desglosePorEstado(canal: EcommerceChannel, orders: ChannelOrder[]): string {
+        if (canal !== 'ripley') return '';
+        const porEstado = new Map<string, number>();
+        for (const o of orders) porEstado.set(o.channelStatus, (porEstado.get(o.channelStatus) ?? 0) + 1);
+        const texto = [...porEstado].map(([estado, n]) => `${estado}=${n}`).join(', ');
+        return ` [${texto}; cuentan como venta: ${orders.filter(o => o.paid).length}]`;
     }
 
     /** Historial: deja la constancia de ventas ya ocurridas, sin tocar el stock ni avisar. */
@@ -404,6 +416,9 @@ export class EcommerceSyncService implements OnModuleInit {
         for (const orden of orders) {
             if (await this.aplicarVenta(connection, orden, { soloRegistro: true })) registradas++;
             else yaRegistradas++;
+        }
+        if (canal === 'ripley') {
+            console.log(`[Sync] Historial de Ripley ${connection.externalNickname}: ${orders.length} pedidos leídos, ${registradas} registrados${this.desglosePorEstado(canal, orders)}`);
         }
         return { registradas, yaRegistradas, incompleto };
     }
