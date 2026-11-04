@@ -306,6 +306,36 @@ describe('ventas', () => {
         expect(avisos.map(a => a.type)).toContain('sale');
     });
 
+    it('una venta de ANTES de conectar la cuenta queda como constancia: ni stock, ni correo, ni aviso', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
+        // La cuenta se conectó el 20 de octubre; la venta (por defecto del 9 de octubre) es anterior.
+        const conectada = cuenta({ createdAt: new Date('2026-10-20T12:00:00Z') });
+        const { service, ventas, avisos, sync } = construir({ conexiones: [conectada], productos: [producto] });
+        const alertas = (service as any).saleAlerts;
+
+        const registrada = await service.aplicarVenta(conectada as any, venta(), { soloRegistro: false });
+
+        expect(registrada).toBe(true);
+        expect(ventas).toHaveLength(1);
+        expect(producto.stock).toBe(20);
+        expect(sync.propagateStock).not.toHaveBeenCalled();
+        expect(alertas.notificar).not.toHaveBeenCalled();
+        expect(avisos).toHaveLength(0);
+    });
+
+    it('una venta de DESPUÉS de conectar sí descuenta el stock y avisa por correo', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
+        const conectada = cuenta({ createdAt: new Date('2026-10-01T12:00:00Z') });
+        const { service, avisos } = construir({ conexiones: [conectada], productos: [producto] });
+        const alertas = (service as any).saleAlerts;
+
+        await service.aplicarVenta(conectada as any, venta(), { soloRegistro: false });
+
+        expect(producto.stock).toBe(18);
+        expect(alertas.notificar).toHaveBeenCalledTimes(1);
+        expect(avisos.map(a => a.type)).toContain('sale');
+    });
+
     it('la misma venta no se aplica dos veces', async () => {
         const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
         const { service, ventas } = construir({ conexiones: [cuenta()], productos: [producto] });

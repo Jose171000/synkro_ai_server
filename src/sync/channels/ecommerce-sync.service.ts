@@ -8,6 +8,7 @@ import { ListingLink } from '../entities/listing-link.entity';
 import { MarketplaceOrder } from '../entities/marketplace-order.entity';
 import { Product } from '../../products/entities/product.entity';
 import { SaleAlertsService } from '../sale-alerts.service';
+import { ventaAnteriorALaConexion } from '../venta-anterior-a-la-conexion';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { SyncScope, SyncService } from '../sync.service';
 import { WooApiService } from '../woo/woo-api.service';
@@ -486,7 +487,8 @@ export class EcommerceSyncService implements OnModuleInit {
                 return false;
             }
         }
-        if (options.soloRegistro) return true;
+        // Una venta de antes de conectar la cuenta es historia: ni correo, ni aviso, ni stock.
+        if (options.soloRegistro || ventaAnteriorALaConexion(connection, orden.orderDate)) return true;
         if (guardada) void this.saleAlerts.notificar(guardada, NOMBRES[canal]);
 
         const efectos: Record<number, { productId: string; stockBefore: number; stockAfter: number }> = {};

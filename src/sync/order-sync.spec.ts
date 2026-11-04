@@ -25,7 +25,7 @@ import { StoresService } from '../stores/stores.service';
 const cuenta = (over: any = {}) => ({
     id: 'c1', marketplace: 'falabella', externalUserId: 'vendedor@x.com', accessToken: 'clave', status: 'active',
     currency: 'PEN', label: null, externalNickname: 'vendedor@x.com',
-    owner: { id: 'u1' }, store: { id: 't1' }, createdAt: new Date(), ...over,
+    owner: { id: 'u1' }, store: { id: 't1' }, createdAt: new Date('2026-01-01T00:00:00Z'), ...over,
 });
 
 async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: any[] } = {}) {
@@ -73,6 +73,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
         getOrders: jest.fn().mockResolvedValue([]),
         getOrderItems: jest.fn().mockResolvedValue([]),
     };
+    const alertas = { notificar: jest.fn() };
     const meli = { searchOrders: jest.fn().mockResolvedValue([]), getOrder: jest.fn(), refreshTokens: jest.fn(), getShipment: jest.fn().mockResolvedValue(null) };
 
     const modulo = await Test.createTestingModule({
@@ -89,13 +90,13 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
             { provide: YavendioApiService, useValue: {} },
             { provide: FalabellaApiService, useValue: falabella },
             { provide: NotificationsService, useValue: { notify: jest.fn(async (u: string, a: any) => { avisos.push({ u, ...a }); }) } },
-            { provide: SaleAlertsService, useValue: { notificar: jest.fn() } },
+            { provide: SaleAlertsService, useValue: alertas },
             { provide: ChangeRequestsService, useValue: {} },
             { provide: StoresService, useValue: {} },
         ],
     }).compile();
 
-    return { service: modulo.get(SyncService), ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones, repoVentas };
+    return { service: modulo.get(SyncService), alertas, ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones, repoVentas };
 }
 
 const pedidoFalabella = { OrderId: 100, OrderNumber: 9001, Price: '50.00', ItemsCount: 1, CreatedAt: '2026-10-09T12:00:00Z', Statuses: { Status: 'pending' } };
@@ -127,6 +128,31 @@ describe('ventas de Falabella', () => {
         expect(segunda).toMatchObject({ nuevos: 0, repetidos: 1 });
         expect(ventas).toHaveLength(1);
         expect(producto.stock).toBe(4);
+    });
+
+    it('los pedidos de antes de conectar la cuenta se guardan como historia: ni stock, ni correo, ni aviso', async () => {
+        // La cuenta se conectó el 4 de noviembre; el pedido es del 9 de octubre y solo «nuevo» porque Synkro aún no lo tenía.
+        const { service, ventas, producto, falabella, avisos, alertas } = await construir({ conexiones: [cuenta({ createdAt: new Date('2026-11-04T15:00:00Z') })] });
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+
+        const r = await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(r).toMatchObject({ nuevos: 1 });
+        expect(ventas).toHaveLength(1);
+        expect(producto.stock).toBe(5);
+        expect(alertas.notificar).not.toHaveBeenCalled();
+        expect(avisos.find(a => a.type === 'sale')).toBeUndefined();
+    });
+
+    it('un pedido de después de conectar sí avisa por correo', async () => {
+        const { service, falabella, alertas } = await construir({ conexiones: [cuenta({ createdAt: new Date('2026-10-01T00:00:00Z') })] });
+        falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+
+        await service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+
+        expect(alertas.notificar).toHaveBeenCalledTimes(1);
     });
 
     it('avisa de la venta a la persona dueña de la cuenta', async () => {

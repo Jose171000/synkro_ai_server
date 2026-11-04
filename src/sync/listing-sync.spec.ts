@@ -116,7 +116,7 @@ async function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?
 const SCOPE = { userId: 'u1', storeId: 't1' };
 const cuenta = (over: any = {}) => ({
     id: 'ml1', marketplace: 'mercadolibre', externalUserId: '555', externalNickname: 'MI_TIENDA', accessToken: 'tok', status: 'active',
-    currency: 'PEN', label: null, owner: { id: 'u1' }, store: { id: 't1' }, createdAt: new Date(), ...over,
+    currency: 'PEN', label: null, owner: { id: 'u1' }, store: { id: 't1' }, createdAt: new Date('2026-01-01T00:00:00Z'), ...over,
 });
 const itemSimple = (over: any = {}) => ({
     id: 'MPE1', title: 'Reloj', status: 'active', price: 90, currency_id: 'PEN', available_quantity: 7, seller_custom_field: 'REL-01',

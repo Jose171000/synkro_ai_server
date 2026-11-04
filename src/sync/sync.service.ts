@@ -26,6 +26,7 @@ import { MarketplaceConnection } from './entities/marketplace-connection.entity'
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceOrder } from './entities/marketplace-order.entity';
 import { SaleAlertsService } from './sale-alerts.service';
+import { ventaAnteriorALaConexion } from './venta-anterior-a-la-conexion';
 import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
@@ -3102,7 +3103,8 @@ export class SyncService implements OnModuleInit {
                 orderDate: fechaFalabella((pedido as any).CreatedAt, desfasePorMoneda(moneda)) ?? new Date(),
             }));
             nuevos++;
-            if (soloRegistro) continue;
+            // Una venta de antes de conectar la cuenta es historia: ni correo, ni aviso, ni stock (ya está reflejada en el stock traído).
+            if (soloRegistro || ventaAnteriorALaConexion(connection, guardada.orderDate)) continue;
             void this.saleAlerts.notificar(guardada, 'Falabella');
 
             // El stock que había antes y el que quedó después de ESTA venta se
@@ -3303,7 +3305,8 @@ export class SyncService implements OnModuleInit {
         }
         // Historial: queda la constancia de la venta, sin tocar el stock ni avisar.
         if (guardada) await this.repartirEnvioDePaquete(guardada.id);
-        if (options.soloRegistro) return true;
+        // Una venta de antes de conectar la cuenta es historia: ni correo, ni aviso, ni stock.
+        if (options.soloRegistro || ventaAnteriorALaConexion(connection, guardada?.orderDate)) return true;
         if (guardada) void this.saleAlerts.notificar(guardada, 'Mercado Libre');
 
         const efectos: Record<string, StockEffect> = {};
