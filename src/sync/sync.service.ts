@@ -923,6 +923,7 @@ export class SyncService implements OnModuleInit {
                     (incompleto ? ' El catálogo es muy grande y quedaron fichas sin leer.' : ''),
                 marketplace: 'falabella',
                 meta: { total: resumen.total, porEstado: resumen.porEstado },
+                storeId: scope.storeId,
             });
         }
 
@@ -4042,6 +4043,7 @@ export class SyncService implements OnModuleInit {
                     (incompleto ? ' El catálogo es muy grande y quedaron publicaciones sin leer.' : ''),
                 marketplace: 'mercadolibre',
                 meta: { total: resumen.total, porEstado: resumen.porEstado, sinSku: resumen.sinSku },
+                storeId: scope.storeId,
             });
         }
         return resumen;

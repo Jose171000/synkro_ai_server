@@ -36,6 +36,61 @@ describe('servicio de notificaciones', () => {
         });
     });
 
+    describe('tienda del aviso', () => {
+        const PRODUCTO = '11111111-1111-4111-8111-111111111111';
+        const CUENTA = '22222222-2222-4222-8222-222222222222';
+        function repoCon(filasPorTabla: Record<string, any[]>) {
+            const guardados: any[] = [];
+            const consultas: string[] = [];
+            const repo = {
+                create: (d: any) => d,
+                save: async (d: any) => { guardados.push(d); return d; },
+                manager: { query: async (sql: string) => { consultas.push(sql); const t = Object.keys(filasPorTabla).find(k => sql.includes(k)); return t ? filasPorTabla[t] : []; } },
+            };
+            return { repo, guardados, consultas };
+        }
+
+        it('toma la tienda del producto del aviso', async () => {
+            const { repo, guardados } = repoCon({ 'FROM products': [{ storeId: 'tienda-1' }] });
+            await servicio(repo).notify('u', { type: 'sale', title: 'Venta', body: 'x', meta: { productId: PRODUCTO } });
+            expect(guardados[0].store).toEqual({ id: 'tienda-1' });
+        });
+
+        it('sin producto, usa la tienda de la cuenta del canal', async () => {
+            const { repo, guardados } = repoCon({ 'FROM marketplace_connections': [{ storeId: 'tienda-2' }] });
+            await servicio(repo).notify('u', { type: 'connection', title: 'Cuenta', body: 'x', meta: { connectionId: CUENTA } });
+            expect(guardados[0].store).toEqual({ id: 'tienda-2' });
+        });
+
+        it('un envío en lote de Falabella se asocia a su tienda por el id del feed', async () => {
+            const { repo, guardados } = repoCon({ marketplace_feeds: [{ storeId: 'tienda-3' }] });
+            await servicio(repo).notify('u', { type: 'publish', title: 'Falabella publicó', body: 'x', meta: { feedId: 'abc' } });
+            expect(guardados[0].store).toEqual({ id: 'tienda-3' });
+        });
+
+        it('la tienda indicada gana sobre la deducida y no consulta nada', async () => {
+            const { repo, guardados, consultas } = repoCon({ 'FROM products': [{ storeId: 'otra' }] });
+            await servicio(repo).notify('u', { type: 'import', title: 'Importación', body: 'x', storeId: 'tienda-4', meta: { productId: PRODUCTO } });
+            expect(guardados[0].store).toEqual({ id: 'tienda-4' });
+            expect(consultas).toHaveLength(0);
+        });
+
+        it('un dato que no es un id no se consulta (nunca llega a la base)', async () => {
+            const { repo, guardados, consultas } = repoCon({});
+            await servicio(repo).notify('u', { type: 'sale', title: 'Venta', body: 'x', meta: { productId: "x'; DROP TABLE products;--" } });
+            expect(consultas).toHaveLength(0);
+            expect(guardados[0].store).toBeNull();
+        });
+
+        it('si deducir la tienda falla, el aviso se guarda igual, sin tienda', async () => {
+            const guardados: any[] = [];
+            const repo = { create: (d: any) => d, save: async (d: any) => { guardados.push(d); return d; }, manager: { query: async () => { throw new Error('base caída'); } } };
+            await servicio(repo).notify('u', { type: 'sale', title: 'Venta', body: 'x', meta: { productId: PRODUCTO } });
+            expect(guardados).toHaveLength(1);
+            expect(guardados[0].store).toBeNull();
+        });
+    });
+
     it('por defecto el aviso es informativo', async () => {
         const guardados: any[] = [];
         const repo = { create: (d: any) => d, save: async (d: any) => { guardados.push(d); return d; } };
@@ -60,6 +115,8 @@ describe('servicio de notificaciones', () => {
         const items = [{ id: 'a' }, { id: 'b' }];
         const repo = {
             createQueryBuilder: () => ({
+                leftJoin() { return this; },
+                addSelect() { return this; },
                 where() { return this; },
                 orderBy() { return this; },
                 take() { return this; },
@@ -76,6 +133,8 @@ describe('servicio de notificaciones', () => {
         let pedidos = 0;
         const repo = {
             createQueryBuilder: () => ({
+                leftJoin() { return this; },
+                addSelect() { return this; },
                 where() { return this; },
                 orderBy() { return this; },
                 take(n: number) { pedidos = n; return this; },

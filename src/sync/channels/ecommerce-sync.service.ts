@@ -254,6 +254,7 @@ export class EcommerceSyncService implements OnModuleInit {
                     (lectura.incompleto ? ' El catálogo es muy grande y quedaron productos sin leer.' : ''),
                 marketplace,
                 meta: { total: resumen.total, porEstado: resumen.porEstado, sinSku: resumen.sinSku },
+                storeId: scope.storeId,
             });
         }
         return resumen;

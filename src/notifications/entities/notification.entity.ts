@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { Store } from '../../stores/entities/store.entity';
 
 /** Qué originó el aviso. Sirve para agrupar y para elegir el icono. */
 export type NotificationType =
@@ -55,6 +56,13 @@ export class Notification {
 
     @ManyToOne(() => User, { onDelete: 'CASCADE' })
     owner: User;
+
+    /**
+     * La tienda a la que corresponde el aviso (la de su producto o su cuenta de canal). Una persona puede tener varias tiendas y
+     * los avisos llegan todos a su campana: con esto se ve de cuál es y el clic la lleva a ella. Nulo en avisos de la plataforma.
+     */
+    @ManyToOne(() => Store, { onDelete: 'SET NULL', nullable: true })
+    store: Store | null;
 
     @CreateDateColumn()
     createdAt: Date;
