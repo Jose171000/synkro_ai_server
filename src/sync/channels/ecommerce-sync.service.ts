@@ -12,6 +12,8 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { SyncScope, SyncService } from '../sync.service';
 import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
+import { RipleyApiService } from '../ripley/ripley-api.service';
+import { HOST_DE_RIPLEY_POR_DEFECTO, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
 import { resolverMoneda } from '../../common/currency';
 import { importeDeProductos, OrderLine } from '../order-details';
 import {
@@ -23,7 +25,13 @@ import {
     ECOMMERCE_CHANNELS,
 } from './channel-types';
 
-const NOMBRES: Record<EcommerceChannel, string> = { woocommerce: 'WooCommerce', shopify: 'Shopify' };
+const NOMBRES: Record<EcommerceChannel, string> = { woocommerce: 'WooCommerce', shopify: 'Shopify', ripley: 'Ripley' };
+
+/**
+ * Mandar stock y precio a Ripley está apagado hasta probarlo con la tienda real (POST /api/offers reemplaza la oferta entera).
+ * Se enciende con RIPLEY_PUSH_ENABLED=true.
+ */
+const ripleyPuedeEscribir = () => process.env.RIPLEY_PUSH_ENABLED === 'true';
 
 /** Por debajo de estas unidades se avisa que un producto se agota. */
 const LOW_STOCK_THRESHOLD = 5;
@@ -35,9 +43,9 @@ const HISTORY_MAX_ORDERS = 600;
 const ORDER_KEY_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 export interface EcommerceConnectInput {
-    /** WooCommerce: URL de la tienda. Shopify: dominio *.myshopify.com. */
+    /** WooCommerce: URL de la tienda. Shopify: dominio *.myshopify.com. Ripley: dirección del portal (*.mirakl.net; vacío = Perú). */
     site: string;
-    /** WooCommerce: consumer key. Shopify: token de la Admin API. */
+    /** WooCommerce: consumer key. Shopify: token de la Admin API. Ripley: la clave de API de la tienda. */
     token: string;
     /** WooCommerce: consumer secret. */
     secret?: string;
@@ -74,8 +82,9 @@ export class EcommerceSyncService implements OnModuleInit {
         private readonly saleAlerts: SaleAlertsService,
         woo: WooApiService,
         shopify: ShopifyApiService,
+        ripley: RipleyApiService,
     ) {
-        this.clients = { woocommerce: woo, shopify };
+        this.clients = { woocommerce: woo, shopify, ripley };
     }
 
     /** Se da de alta en SyncService para que su consulta periódica, historial y cola lo usen. */
@@ -85,7 +94,8 @@ export class EcommerceSyncService implements OnModuleInit {
                 poll: c => this.poll(c),
                 refresh: c => this.refresh(c),
                 history: (c, desde, hasta) => this.history(c, desde, hasta),
-                pushInventory: (productId, connectionId) => this.pushInventory(canal, productId, connectionId),
+                // Ripley todavía solo se lee: aunque un producto esté enlazado, su stock no se manda hasta activarlo.
+                pushInventory: (productId, connectionId) => (canal === 'ripley' && !ripleyPuedeEscribir() ? Promise.resolve() : this.pushInventory(canal, productId, connectionId)),
             });
         }
     }
@@ -110,6 +120,10 @@ export class EcommerceSyncService implements OnModuleInit {
                 secret: secrets.consumerSecret,
             };
         }
+        if (connection.marketplace === 'ripley') {
+            const secrets = (connection.secrets ?? {}) as { site?: string };
+            return { site: secrets.site || HOST_DE_RIPLEY_POR_DEFECTO, token: connection.accessToken };
+        }
         return { site: connection.externalUserId, token: connection.accessToken };
     }
 
@@ -119,10 +133,12 @@ export class EcommerceSyncService implements OnModuleInit {
         input: EcommerceConnectInput,
     ): Promise<{ id: string; marketplace: string; nickname: string; currency: string | null }> {
         const client = this.clientOf(marketplace);
-        const site = (input.site ?? '').trim();
-        const token = (input.token ?? '').trim();
+        const esRipley = marketplace === 'ripley';
+        // Ripley: la dirección se valida (solo *.mirakl.net) y, si va vacía, es la de Perú.
+        const site = esRipley ? normalizarHostDeRipley(input.site) : (input.site ?? '').trim();
+        const token = esRipley ? normalizarClaveDeRipley(input.token) : (input.token ?? '').trim();
         const secret = (input.secret ?? '').trim();
-        if (!site || !token) {
+        if (!esRipley && (!site || !token)) {
             throw new BadRequestException(
                 marketplace === 'woocommerce'
                     ? 'Faltan la dirección de la tienda o la Consumer Key de WooCommerce.'
@@ -146,7 +162,9 @@ export class EcommerceSyncService implements OnModuleInit {
         connection.secrets =
             marketplace === 'woocommerce'
                 ? { siteUrl: /^https?:\/\//i.test(site) ? site.replace(/\/+$/, '') : `https://${site.replace(/\/+$/, '')}`, consumerSecret: secret }
-                : null;
+                : esRipley
+                    ? { site }
+                    : null;
 
         const saved = await this.sync.saveConnection(scope, connection, input.label);
         return { id: saved.id, marketplace, nickname: cuenta.nickname, currency: saved.currency ?? null };
@@ -401,11 +419,21 @@ export class EcommerceSyncService implements OnModuleInit {
         orden: ChannelOrder,
         options: { soloRegistro: boolean },
     ): Promise<boolean> {
-        if (!orden.paid) return false;
-
         const canal = connection.marketplace as EcommerceChannel;
         // Los ids de venta se repiten entre tiendas WooCommerce distintas: se prefija con la tienda.
         const externalId = `${connection.externalUserId}:${orden.externalId}`;
+
+        // Un canal que informa el estado de la venta (Ripley): si ya la teníamos, solo se refleja lo que cambió en el canal
+        // (aceptada, enviada, recibida, cancelada…). Va antes de «no pagada» porque una venta registrada puede cancelarse después.
+        if (orden.saleState) {
+            const registrada = await this.orders.findOne({ where: { marketplace: canal, externalId, connection: { id: connection.id } } });
+            if (registrada) {
+                await this.reflejarEstado(registrada, orden);
+                return false;
+            }
+        }
+        if (!orden.paid) return false;
+
         const dedupeKey = `${canal}:order-applied:${connection.id}:${orden.externalId}`;
         const primeraVez = await this.redis.set(dedupeKey, '1', 'EX', ORDER_KEY_TTL_SECONDS, 'NX');
         if (!primeraVez) return false;
@@ -430,6 +458,8 @@ export class EcommerceSyncService implements OnModuleInit {
                 shipByDate: norm.shipByDate,
                 details: norm.details as any,
                 status: orden.channelStatus.slice(0, 30),
+                ...(orden.saleState ? { saleState: orden.saleState } : {}),
+                ...(norm.costs ?? {}),
                 orderDate: orden.orderDate,
             }));
         } catch (error: any) {
@@ -472,6 +502,31 @@ export class EcommerceSyncService implements OnModuleInit {
             });
         }
         return true;
+    }
+
+    /**
+     * Pone al día una venta ya registrada con lo que dice el canal ahora: su estado, el número de seguimiento y el transportista.
+     * Solo escribe si algo cambió (la consulta periódica repasa las últimas 48 horas en cada pasada). No toca el stock.
+     */
+    private async reflejarEstado(registrada: MarketplaceOrder, orden: ChannelOrder): Promise<void> {
+        const det: any = registrada.details ?? null;
+        const envio = orden.normalized.details.shipping;
+        const rastreo = envio.trackingCode ?? det?.shipping?.trackingCode ?? null;
+        const transportista = envio.carrier ?? det?.shipping?.carrier ?? null;
+        const igual =
+            registrada.status === orden.channelStatus.slice(0, 30) &&
+            registrada.saleState === orden.saleState &&
+            (det?.shipping?.status ?? null) === envio.status &&
+            (det?.shipping?.trackingCode ?? null) === rastreo &&
+            (det?.shipping?.carrier ?? null) === transportista;
+        if (igual) return;
+        await this.orders.update(registrada.id, {
+            status: orden.channelStatus.slice(0, 30),
+            saleState: orden.saleState,
+            ...(det
+                ? { details: { ...det, channelStatus: orden.channelStatus, shipping: { ...det.shipping, status: envio.status, trackingCode: rastreo, carrier: transportista } } as any }
+                : {}),
+        });
     }
 
     /** El producto de la tienda de la cuenta; si es anterior a las tiendas, el del dueño. */

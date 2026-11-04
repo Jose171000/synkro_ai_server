@@ -12,6 +12,7 @@ import { ConnectYavendioDto } from './dto/connect-yavendio.dto';
 import { ConnectFalabellaDto } from './dto/connect-falabella.dto';
 import { ConnectWooCommerceDto } from './dto/connect-woocommerce.dto';
 import { ConnectShopifyDto } from './dto/connect-shopify.dto';
+import { ConnectRipleyDto } from './dto/connect-ripley.dto';
 import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
@@ -205,6 +206,18 @@ export class SyncController {
     })
     connectShopify(@Body() dto: ConnectShopifyDto, @Req() req) {
         return this.ecommerce.connect(scopeOf(req), 'shopify', { site: dto.shop, token: dto.accessToken, label: dto.label });
+    }
+
+    @Post('ripley/connect')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.conectar')
+    @ApiOperation({
+        summary: 'Conecta una tienda de Mercado Ripley a la tienda',
+        description: 'Comprueba la clave con una consulta real antes de guardarla. La clave se guarda cifrada y nunca se devuelve. Por ahora solo lee ofertas y pedidos. Una tienda admite hasta 3 cuentas.',
+    })
+    connectRipley(@Body() dto: ConnectRipleyDto, @Req() req) {
+        return this.ecommerce.connect(scopeOf(req), 'ripley', { site: dto.site ?? '', token: dto.apiKey, label: dto.label });
     }
 
     @Post('channels/:marketplace/listings/import')

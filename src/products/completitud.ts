@@ -21,7 +21,7 @@ interface EnlaceParaMostrar {
     pausedByUser?: boolean;
 }
 
-const NOMBRES: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', shopify: 'Shopify', woocommerce: 'WooCommerce', yavendio: 'Yavendio' };
+const NOMBRES: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', shopify: 'Shopify', ripley: 'Ripley', woocommerce: 'WooCommerce', yavendio: 'Yavendio' };
 
 export const nombreDeCanal = (marketplace: string): string => NOMBRES[marketplace] ?? marketplace;
 

@@ -91,7 +91,7 @@ function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[
     const alertas: any = { notificar: jest.fn(async () => undefined) };
     const service = new EcommerceSyncService(
         sync, {} as any, repoEnlaces as any, repoVentas as any, repoProductos as any, redis, notificaciones, alertas,
-        cliente, cliente,
+        cliente, cliente, cliente,
     );
     return { service, cliente, sync, productos, enlaces, ventas, avisos, conexiones, repoProductos };
 }
@@ -401,10 +401,164 @@ describe('ventas', () => {
 });
 
 describe('registro en SyncService', () => {
-    it('se da de alta para los dos canales al arrancar', () => {
+    it('se da de alta para los tres canales al arrancar', () => {
         const { service, sync } = construir();
         service.onModuleInit();
-        expect(sync.registerChannel).toHaveBeenCalledTimes(2);
-        expect(sync.registerChannel.mock.calls.map((c: any[]) => c[0])).toEqual(['woocommerce', 'shopify']);
+        expect(sync.registerChannel).toHaveBeenCalledTimes(3);
+        expect(sync.registerChannel.mock.calls.map((c: any[]) => c[0])).toEqual(['woocommerce', 'shopify', 'ripley']);
+    });
+});
+
+// ── Ripley (Mirakl): la clave va en la cabecera, el estado del pedido se refleja y por ahora solo se lee ──
+
+const cuentaRipley = (over: any = {}) => ({
+    id: 'rp1', marketplace: 'ripley', externalUserId: '2001', externalNickname: 'Mi Tienda Ripley',
+    accessToken: 'clave-de-prueba-1234567890', status: 'active', currency: 'PEN', secrets: { site: 'ripleyperu-prod.mirakl.net' },
+    owner: { id: 'u1' }, store: { id: 't1' }, ...over,
+});
+const ventaRipley = (estado: string, saleState: any, extra: Partial<ChannelOrder> = {}, envio: any = {}): ChannelOrder => {
+    const base = venta({ externalId: '22032706-A', channelStatus: estado, saleState, paid: !['canceled', 'refused'].includes(estado) }, [{ sku: 'REL-01', title: 'Reloj', quantity: 2, unitPrice: 45 }]);
+    base.normalized.orderNumber = '22032706-A';
+    base.normalized.details.channelStatus = estado;
+    base.normalized.details.shipping = { ...base.normalized.details.shipping, status: estado, ...envio };
+    base.costs = { shippingPaid: 5, shippingSellerCost: null, shippingType: 'comprador', discountAmount: 2, discountSellerFunded: null };
+    base.normalized.costs = base.costs;
+    return Object.assign(base, extra);
+};
+
+describe('Ripley: conectar', () => {
+    it('sin dirección usa la de Perú, valida la clave contra la API y guarda la dirección en secrets', async () => {
+        const { service, conexiones, cliente } = construir();
+        cliente.verify.mockResolvedValue({ accountId: '2001', nickname: 'Mi Tienda Ripley', currency: 'PEN' });
+        const r = await service.connect(SCOPE, 'ripley', { site: '', token: ' clave-de-prueba-1234567890 ', label: 'Principal' });
+
+        expect(cliente.verify).toHaveBeenCalledWith({ site: 'ripleyperu-prod.mirakl.net', token: 'clave-de-prueba-1234567890', secret: undefined });
+        expect(r).toMatchObject({ marketplace: 'ripley', nickname: 'Mi Tienda Ripley', currency: 'PEN' });
+        expect(conexiones[0]).toMatchObject({ externalUserId: '2001', accessToken: 'clave-de-prueba-1234567890', secrets: { site: 'ripleyperu-prod.mirakl.net' }, status: 'active' });
+    });
+
+    it('una dirección que no es de Mirakl se rechaza ANTES de llamar a nadie (la clave no sale hacia otro sitio)', async () => {
+        const { service, conexiones, cliente } = construir();
+        await expect(service.connect(SCOPE, 'ripley', { site: 'https://malo.example.com', token: 'clave-de-prueba-1234567890' })).rejects.toThrow(/mirakl\.net/);
+        await expect(service.connect(SCOPE, 'ripley', { site: 'ripleyperu-prod.mirakl.net.malo.com', token: 'clave-de-prueba-1234567890' })).rejects.toThrow(/mirakl\.net/);
+        expect(cliente.verify).not.toHaveBeenCalled();
+        expect(conexiones).toHaveLength(0);
+    });
+
+    it('una clave vacía o con espacios en medio se rechaza', async () => {
+        const { service, cliente } = construir();
+        await expect(service.connect(SCOPE, 'ripley', { site: '', token: '   ' })).rejects.toThrow(/Falta la clave/);
+        await expect(service.connect(SCOPE, 'ripley', { site: '', token: 'clave con espacios 1234567890' })).rejects.toThrow(/no parece válida/);
+        expect(cliente.verify).not.toHaveBeenCalled();
+    });
+
+    it('las credenciales se reconstruyen con la dirección guardada (o la de Perú si faltara)', () => {
+        const { service } = construir();
+        expect(service.authOf(cuentaRipley() as any)).toEqual({ site: 'ripleyperu-prod.mirakl.net', token: 'clave-de-prueba-1234567890' });
+        expect(service.authOf(cuentaRipley({ secrets: null }) as any).site).toBe('ripleyperu-prod.mirakl.net');
+    });
+});
+
+describe('Ripley: ventas y estados', () => {
+    it('una venta nueva (esperando tu aceptación) se registra con su estado y su envío, descuenta stock y avisa', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
+        const { service, ventas, avisos } = construir({ conexiones: [cuentaRipley()], productos: [producto] });
+
+        const nueva = await service.aplicarVenta(cuentaRipley() as any, ventaRipley('waiting_acceptance', 'pendiente'), { soloRegistro: false });
+
+        expect(nueva).toBe(true);
+        expect(producto.stock).toBe(18);
+        expect(ventas[0]).toMatchObject({
+            marketplace: 'ripley', externalId: '2001:22032706-A', status: 'waiting_acceptance', saleState: 'pendiente',
+            shippingPaid: 5, shippingType: 'comprador', discountAmount: 2,
+        });
+        expect(avisos.map((a) => a.type)).toContain('sale');
+    });
+
+    it('cuando aceptas y despachas en el portal, la app solo cambia el estado: no duplica la venta ni toca el stock', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
+        const { service, ventas, sync } = construir({ conexiones: [cuentaRipley()], productos: [producto] });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('waiting_acceptance', 'pendiente'), { soloRegistro: false });
+        sync.propagateStock.mockClear();
+
+        const otraVez = await service.aplicarVenta(
+            cuentaRipley() as any,
+            ventaRipley('shipped', 'enviado', {}, { trackingCode: 'TRK-99', carrier: 'Chilexpress' }),
+            { soloRegistro: false },
+        );
+
+        expect(otraVez).toBe(false);
+        expect(ventas).toHaveLength(1);
+        expect(producto.stock).toBe(18);
+        expect(sync.propagateStock).not.toHaveBeenCalled();
+        expect(ventas[0]).toMatchObject({ status: 'shipped', saleState: 'enviado' });
+        expect(ventas[0].details.shipping).toMatchObject({ status: 'shipped', trackingCode: 'TRK-99', carrier: 'Chilexpress' });
+        expect(ventas[0].details.channelStatus).toBe('shipped');
+    });
+
+    it('recibida y cancelada también se reflejan, aunque una cancelada ya no «cuente» como venta nueva', async () => {
+        const { service, ventas } = construir({ conexiones: [cuentaRipley()], productos: [{ id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } }] });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('waiting_acceptance', 'pendiente'), { soloRegistro: false });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('received', 'entregado'), { soloRegistro: false });
+        expect(ventas[0]).toMatchObject({ status: 'received', saleState: 'entregado' });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('canceled', 'cancelado'), { soloRegistro: false });
+        expect(ventas[0]).toMatchObject({ status: 'canceled', saleState: 'cancelado' });
+    });
+
+    it('una venta cancelada o rechazada que nunca registramos no se crea', async () => {
+        const { service, ventas } = construir({ conexiones: [cuentaRipley()] });
+        expect(await service.aplicarVenta(cuentaRipley() as any, ventaRipley('refused', 'cancelado'), { soloRegistro: false })).toBe(false);
+        expect(ventas).toHaveLength(0);
+    });
+
+    it('si nada cambió en Ripley, la consulta periódica no escribe en la base', async () => {
+        const { service, ventas } = construir({ conexiones: [cuentaRipley()], productos: [{ id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } }] });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('shipping', 'pendiente'), { soloRegistro: false });
+        const antes = JSON.stringify(ventas[0]);
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('shipping', 'pendiente'), { soloRegistro: false });
+        expect(JSON.stringify(ventas[0])).toBe(antes);
+    });
+
+    it('el historial registra la venta sin tocar el stock ni avisar', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } };
+        const { service, ventas, avisos } = construir({ conexiones: [cuentaRipley()], productos: [producto] });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('closed', 'entregado'), { soloRegistro: true });
+        expect(ventas).toHaveLength(1);
+        expect(producto.stock).toBe(20);
+        expect(avisos).toHaveLength(0);
+    });
+
+    it('los otros canales siguen igual: una venta de WooCommerce ya registrada no cambia de estado', async () => {
+        const { service, ventas } = construir({ conexiones: [cuenta()], productos: [{ id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } }] });
+        await service.aplicarVenta(cuenta() as any, venta(), { soloRegistro: false });
+        await service.aplicarVenta(cuenta() as any, venta({ channelStatus: 'completed' }), { soloRegistro: false });
+        expect(ventas[0].status).toBe('processing');
+        expect(ventas[0].saleState).toBeUndefined();
+    });
+});
+
+describe('Ripley: por ahora solo se lee', () => {
+    const handlerDe = (sync: any, canal: string) => sync.registerChannel.mock.calls.find((c: any[]) => c[0] === canal)[1];
+
+    it('un cambio de stock de un producto enlazado a Ripley NO se manda a Ripley', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 5, price: 30 };
+        const enlace = { id: 'e1', marketplace: 'ripley', product: producto, connection: { id: 'rp1' }, syncStatus: 'published', externalId: '77', variationId: null };
+        const { service, sync, cliente } = construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enlace] });
+        service.onModuleInit();
+
+        await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+
+        expect(cliente.setInventory).not.toHaveBeenCalled();
+    });
+
+    it('los demás canales siguen recibiendo su stock', async () => {
+        const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 5, price: 30 };
+        const enlace = { id: 'e1', marketplace: 'woocommerce', product: producto, connection: { id: 'wc1' }, syncStatus: 'published', externalId: '10', variationId: null };
+        const { service, sync, cliente } = construir({ conexiones: [cuenta()], productos: [producto], enlaces: [enlace] });
+        service.onModuleInit();
+
+        await handlerDe(sync, 'woocommerce').pushInventory('p1', 'wc1');
+
+        expect(cliente.setInventory).toHaveBeenCalledTimes(1);
     });
 });

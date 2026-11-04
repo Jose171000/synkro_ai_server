@@ -78,6 +78,7 @@ const MARKETPLACE_NAMES: Record<string, string> = {
     yavendio: 'Yavendió',
     woocommerce: 'WooCommerce',
     shopify: 'Shopify',
+    ripley: 'Ripley',
 };
 const nombreCanal = (id: string) => MARKETPLACE_NAMES[id] ?? id;
 

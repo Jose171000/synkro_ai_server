@@ -49,6 +49,7 @@ const TABLA: Record<string, string> = {
     'Sync POST /sync/falabella/connect': 'canales.conectar',
     'Sync POST /sync/woocommerce/connect': 'canales.conectar',
     'Sync POST /sync/shopify/connect': 'canales.conectar',
+    'Sync POST /sync/ripley/connect': 'canales.conectar',
     'Sync POST /sync/channels/:marketplace/listings/import': 'canales.conectar',
     'Sync GET /sync/listings': 'canales.ver',
     'Sync DELETE /sync/connections/:connectionId': 'canales.conectar',

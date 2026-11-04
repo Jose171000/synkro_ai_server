@@ -21,7 +21,7 @@ export interface ResultadoManual {
 }
 
 /** Canales que Synkro trae solo: sus ventas no se registran a mano para no duplicarlas. */
-const CANALES_CONECTABLES = ['mercadolibre', 'falabella', 'yavendio', 'woocommerce', 'shopify'];
+const CANALES_CONECTABLES = ['mercadolibre', 'falabella', 'yavendio', 'woocommerce', 'shopify', 'ripley'];
 
 /**
  * Registro de ventas de canales que la tienda no tiene conectados. Cada venta queda como cualquier otra (cuenta en

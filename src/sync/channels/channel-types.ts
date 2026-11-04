@@ -1,7 +1,9 @@
 import { NormalizedOrder } from '../order-details';
+import { EstadoDeVenta } from '../estado-de-venta';
+import { CostosDeVenta } from '../costos-de-venta';
 
 /**
- * Contrato común de los canales de tienda propia (WooCommerce, Shopify).
+ * Contrato común de los canales de tienda propia (WooCommerce, Shopify) y de Ripley.
  *
  * Cada canal sabe hablar con su API y traducir lo que recibe a estas formas;
  * la lógica de Synkro (importar por SKU, enlazar, mantener al día, descontar
@@ -10,18 +12,19 @@ import { NormalizedOrder } from '../order-details';
  */
 
 /** Canales de tienda propia que habla EcommerceSyncService. */
-export type EcommerceChannel = 'woocommerce' | 'shopify';
+export type EcommerceChannel = 'woocommerce' | 'shopify' | 'ripley';
 
-export const ECOMMERCE_CHANNELS: EcommerceChannel[] = ['woocommerce', 'shopify'];
+export const ECOMMERCE_CHANNELS: EcommerceChannel[] = ['woocommerce', 'shopify', 'ripley'];
 
 /** Credenciales ya descifradas de una cuenta. */
 export interface ChannelAuth {
     /**
      * WooCommerce: dirección de la tienda, por ejemplo https://mitienda.com
      * Shopify: dominio de la tienda, por ejemplo mitienda.myshopify.com
+     * Ripley: dirección de su instancia, por ejemplo ripleyperu-prod.mirakl.net
      */
     site: string;
-    /** WooCommerce: consumer key. Shopify: token de acceso de la Admin API. */
+    /** WooCommerce: consumer key. Shopify: token de acceso de la Admin API. Ripley: la clave de API de la tienda. */
     token: string;
     /** WooCommerce: consumer secret. Shopify: no se usa. */
     secret?: string;
@@ -70,6 +73,13 @@ export interface ChannelOrder {
     paid: boolean;
     /** Estado tal como lo muestra el canal, en minúsculas. */
     channelStatus: string;
+    /**
+     * Estado común de la venta (pendiente, enviado, entregado, cancelado, devuelto), si el canal lo informa. Cuando viene, la venta
+     * guarda su estado y los cambios de estado de una venta ya registrada se reflejan en cada consulta.
+     */
+    saleState?: EstadoDeVenta;
+    /** Envío y cupones de la venta, si el canal los informa. */
+    costs?: CostosDeVenta;
     totalAmount: number;
     currency: string | null;
     orderDate: Date;

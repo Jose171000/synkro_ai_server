@@ -20,7 +20,7 @@ export interface ResultadoDeCanal {
     message: string;
 }
 
-const NOMBRE_DE_CANAL: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', shopify: 'Shopify', woocommerce: 'WooCommerce', yavendio: 'Yavendio' };
+const NOMBRE_DE_CANAL: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', shopify: 'Shopify', woocommerce: 'WooCommerce', yavendio: 'Yavendio', ripley: 'Ripley' };
 
 /** Estados en los que cada acción tiene sentido. */
 const ESTADOS_QUE_ADMITEN: Record<AccionDeCanal, ListingLink['syncStatus'][]> = {
