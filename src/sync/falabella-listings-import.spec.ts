@@ -525,6 +525,44 @@ describe('importFalabellaListings', () => {
             expect(resumen.variantes.aplicado).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
         });
 
+        it('agrupa las familias estructuradas a mano EN LA MISMA importación, con los productos que ella crea', async () => {
+            // Dos fichas sin atributos de variación: Synkro no puede armar el grupo solo; la persona lo estructuró en la vista previa.
+            await construir([
+                ficha({ SellerSku: 'CAM-30', ShopSku: 'S1', Name: 'CANGURO EPIFANIA CASUAL', ParentSku: 'CAM-30' }),
+                ficha({ SellerSku: 'CAM-31', ShopSku: 'S2', Name: 'CANGURO EPIFANIA CASUAL', ParentSku: 'CAM-30' }),
+            ]);
+            const aplicar = jest.fn(async () => ({ gruposCreados: 0, gruposActualizados: 0, variantesAgrupadas: 0, omitidos: [] }));
+            const aplicarManuales = jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] }));
+            (service as any).variantImport = { aplicar, aplicarManuales };
+            const gruposManuales = [{
+                parentSku: 'CAM-30', name: 'CANGURO EPIFANIA CASUAL', axes: ['Color'],
+                variants: [{ sellerSku: 'CAM-30', values: { Color: 'Rosa' } }, { sellerSku: 'CAM-31', values: { Color: 'Negro' } }],
+            }];
+
+            const resumen = await service.importFalabellaListings(SCOPE, undefined, { gruposManuales });
+
+            expect(aplicarManuales).toHaveBeenCalledTimes(1);
+            const [, entradas, porSku] = aplicarManuales.mock.calls[0] as any[];
+            expect(entradas).toEqual(gruposManuales);
+            // Los productos ya existen (los creó esta importación) cuando se agrupa.
+            expect([...porSku.keys()].sort()).toEqual(['CAM-30', 'CAM-31']);
+            expect(resumen.variantes.manuales).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2 });
+        });
+
+        it('la vista previa no agrupa nada aunque haya familias a mano', async () => {
+            await construir([
+                ficha({ SellerSku: 'CAM-30', ShopSku: 'S1', Name: 'CANGURO', ParentSku: 'CAM-30' }),
+                ficha({ SellerSku: 'CAM-31', ShopSku: 'S2', Name: 'CANGURO', ParentSku: 'CAM-30' }),
+            ]);
+            const aplicarManuales = jest.fn();
+            (service as any).variantImport = { aplicar: jest.fn(), aplicarManuales };
+
+            await service.importFalabellaListings(SCOPE, undefined, { dryRun: true, gruposManuales: [{ parentSku: 'CAM-30', name: 'X', axes: ['Color'], variants: [] }] });
+
+            expect(aplicarManuales).not.toHaveBeenCalled();
+            expect(productos).toHaveLength(0);
+        });
+
         describe('con la página pública', () => {
             const URL_P = 'https://www.falabella.com.pe/falabella-pe/product/153461795/Sabana-King/153461796';
             const mismaPagina = () => [

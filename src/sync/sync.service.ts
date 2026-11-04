@@ -14,7 +14,7 @@ import { GrupoSinResolver, nombreDelGrupo, PlanDeGrupo, planearGruposDeFalabella
 import { familiasPorPagina, planearGrupoDesdePagina, skuComparable, VarianteDePagina } from './falabella/pagina-publica';
 import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPropuestaDeIA } from './falabella/ejes-ia';
 import { FalabellaPublicPageService } from './falabella-public-page.service';
-import { FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
+import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, variacionPorTallaYColor, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -705,7 +705,7 @@ export class SyncService implements OnModuleInit {
     async importFalabellaListings(
         scope: SyncScope,
         connectionId: string | undefined,
-        options: { dryRun?: boolean } = {},
+        options: { dryRun?: boolean; gruposManuales?: EntradaManual[] } = {},
     ) {
         const userId = scope.userId;
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
@@ -733,6 +733,8 @@ export class SyncService implements OnModuleInit {
                 aplicado: null as ResultadoDeAgrupar | null,
                 /** Familias que ya estaban agrupadas en Synkro (a mano o antes): no se vuelven a proponer. */
                 yaAgrupadas: 0,
+                /** Familias que la persona estructuró a mano en la vista previa y se agruparon en esta misma importación. */
+                manuales: null as ResultadoDeAgrupar | null,
                 /** Lectura de la página pública de Falabella para las familias que los atributos no resolvieron. */
                 paginaPublica: { familias: 0, leidas: 0, resueltas: 0, bloqueada: false, pendientes: 0, sinDatos: [] as { parentSku: string; motivo: string }[] },
                 /** Segundo recurso: la IA propone los ejes y se comprueban contra los datos de cada ficha. */
@@ -898,6 +900,12 @@ export class SyncService implements OnModuleInit {
         // Las fichas que son variantes de un mismo producto (mismo ParentSku) se agrupan con sus ejes; la vista previa
         // (dryRun) solo cuenta cómo quedarían.
         const plan = planearGruposDeFalabella(productos);
+        // Lo que la persona estructuró a mano manda sobre lo que Synkro pudo armar solo con esa misma familia.
+        const manuales = options.gruposManuales ?? [];
+        if (manuales.length) {
+            const claves = new Set(manuales.map((m) => String(m.parentSku ?? '').trim().toLowerCase()));
+            plan.grupos = plan.grupos.filter((g) => !claves.has(g.parentSku.trim().toLowerCase()));
+        }
         // Lo que dijo la página de cada ficha (aunque no bastara para armar el grupo) también le sirve a la IA como evidencia.
         resumen.variantes.yaAgrupadas = await this.quitarYaAgrupadas(scope, plan);
         const datosDePagina = new Map<string, Record<string, string>>();
@@ -909,6 +917,10 @@ export class SyncService implements OnModuleInit {
         resumen.variantes.ejemplos = plan.grupos.slice(0, 8).map(g => ({ parentSku: g.parentSku, nombre: g.name, ejes: g.axes, variantes: g.variants.length }));
         if (!options.dryRun && this.variantImport && plan.grupos.length) {
             resumen.variantes.aplicado = await this.variantImport.aplicar(scope, plan.grupos, vinculados);
+        }
+        // Las familias estructuradas a mano se agrupan ahora que sus productos ya existen: todo en un solo paso.
+        if (!options.dryRun && this.variantImport && manuales.length) {
+            resumen.variantes.manuales = await this.variantImport.aplicarManuales(scope, manuales, vinculados);
         }
 
         resumen.notaMedia = conNota > 0 ? Math.round(sumaNotas / conNota) : null;

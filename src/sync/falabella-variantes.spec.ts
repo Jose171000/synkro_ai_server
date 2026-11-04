@@ -211,3 +211,61 @@ describe('agrupar a mano (último recurso)', () => {
         await expect(servicio.agruparManual(scope, entrada({ variants: [{ sellerSku: 'CN-26-RO', values: { Color: 'Rosa' } }] }))).rejects.toThrow(/al menos dos/);
     });
 });
+
+describe('agrupar al importar (las familias que la persona estructuró en la vista previa)', () => {
+    function construir() {
+        const grupos: any[] = [];
+        const productos: any = {
+            find: jest.fn(async () => []),
+            update: jest.fn(async () => undefined),
+        };
+        const repoGrupos: any = {
+            find: jest.fn(async () => grupos),
+            create: jest.fn((d: any) => ({ ...d })),
+            save: jest.fn(async (g: any) => { if (!g.id) { g.id = `g${grupos.length + 1}`; grupos.push(g); } return g; }),
+        };
+        return { servicio: new FalabellaVariantImportService(productos, repoGrupos), productos, grupos };
+    }
+    const scope = { userId: 'u1', storeId: 's1' };
+    const entrada = (over: any = {}) => ({
+        parentSku: 'CAMCO9066730', name: 'CANGURO EPIFANIA CASUAL', axes: ['Modelo', 'Color'],
+        variants: [
+            { sellerSku: 'CAMCO9066730', values: { Modelo: 'CANGURO', Color: 'Rosa' } },
+            { sellerSku: 'CAMCO9066731', values: { Modelo: 'CANGURO', Color: 'Negro' } },
+        ],
+        ...over,
+    });
+    // Los productos los acaba de crear la propia importación: no estaban en la tienda cuando la persona los estructuró.
+    const recienCreados = () => new Map<string, any>([['CAMCO9066730', { id: 'p1', sku: 'CAMCO9066730' }], ['CAMCO9066731', { id: 'p2', sku: 'CAMCO9066731' }]]);
+
+    it('agrupa productos que la importación acaba de crear, con los ejes y valores escritos', async () => {
+        const { servicio, productos, grupos } = construir();
+        const r = await servicio.aplicarManuales(scope, [entrada()], recienCreados());
+        expect(r).toMatchObject({ gruposCreados: 1, variantesAgrupadas: 2, omitidos: [] });
+        expect(grupos[0]).toMatchObject({ name: 'CANGURO EPIFANIA CASUAL', axes: [{ name: 'Modelo', values: ['CANGURO'] }, { name: 'Color', values: ['Rosa', 'Negro'] }] });
+        expect(productos.update).toHaveBeenCalledWith('p2', { group: { id: 'g1' }, variantValues: { Modelo: 'CANGURO', Color: 'Negro' } });
+    });
+
+    it('un grupo mal armado no frena a los demás: queda omitido con su motivo', async () => {
+        const { servicio, grupos } = construir();
+        const malo = entrada({ parentSku: 'MALO', variants: [{ sellerSku: 'CAMCO9066730', values: { Modelo: 'A', Color: 'Rosa' } }, { sellerSku: 'CAMCO9066731', values: { Modelo: 'A', Color: 'rosa' } }] });
+        const r = await servicio.aplicarManuales(scope, [malo, entrada()], recienCreados());
+        expect(r.variantesAgrupadas).toBe(2);
+        expect(grupos).toHaveLength(1);
+        expect(r.omitidos).toEqual([expect.objectContaining({ parentSku: 'MALO', motivo: expect.stringMatching(/misma combinación/) })]);
+    });
+
+    it('si el canal no trajo sus productos (SKU de otra tienda, quitado a propósito), el grupo se omite y se explica', async () => {
+        const { servicio, grupos } = construir();
+        const r = await servicio.aplicarManuales(scope, [entrada()], new Map([['CAMCO9066730', { id: 'p1', sku: 'CAMCO9066730' } as any]]));
+        expect(grupos).toHaveLength(0);
+        expect(r.omitidos[0].motivo).toMatch(/menos de dos/);
+    });
+
+    it('sin familias a mano no hace nada', async () => {
+        const { servicio, grupos } = construir();
+        const r = await servicio.aplicarManuales(scope, [], recienCreados());
+        expect(r).toMatchObject({ gruposCreados: 0, variantesAgrupadas: 0 });
+        expect(grupos).toHaveLength(0);
+    });
+});

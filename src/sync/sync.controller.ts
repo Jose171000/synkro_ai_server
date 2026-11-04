@@ -29,6 +29,7 @@ import { ListingActionsService } from './listing-actions.service';
 import { DuplicatesActionDto } from './dto/duplicates-action.dto';
 import { FalabellaVariantImportService } from './falabella-variant-import.service';
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
+import { ImportFalabellaDto } from './dto/import-falabella.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
@@ -611,9 +612,10 @@ export class SyncController {
         description: 'true para previsualizar sin guardar nada.',
     })
     @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta de Falabella; obligatoria si la tienda tiene varias.' })
-    importFalabellaListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string) {
+    importFalabellaListings(@Req() req, @Query('dryRun') dryRun?: string, @Query('connectionId') connectionId?: string, @Body() dto?: ImportFalabellaDto) {
         return this.syncService.importFalabellaListings(scopeOf(req), connectionId, {
             dryRun: dryRun === 'true',
+            gruposManuales: dto?.gruposManuales,
         });
     }
 
