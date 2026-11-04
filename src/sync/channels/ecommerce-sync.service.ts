@@ -524,7 +524,7 @@ export class EcommerceSyncService implements OnModuleInit {
 
     /**
      * Pone al día una venta ya registrada con lo que dice el canal ahora: su estado, el número de seguimiento y el transportista.
-     * Solo escribe si algo cambió (la consulta periódica repasa las últimas 48 horas en cada pasada). No toca el stock.
+     * Solo escribe si algo cambió (la consulta periódica repasa las últimas 48 horas en cada pasada). El stock solo se toca si la venta pasa a cancelada o devuelta (ver `reponerStockDeVenta`).
      */
     private async reflejarEstado(registrada: MarketplaceOrder, orden: ChannelOrder): Promise<void> {
         const det: any = registrada.details ?? null;
@@ -538,6 +538,7 @@ export class EcommerceSyncService implements OnModuleInit {
             (det?.shipping?.trackingCode ?? null) === rastreo &&
             (det?.shipping?.carrier ?? null) === transportista;
         if (igual) return;
+        const estadoAntes = registrada.saleState;
         await this.orders.update(registrada.id, {
             status: orden.channelStatus.slice(0, 30),
             saleState: orden.saleState,
@@ -545,6 +546,8 @@ export class EcommerceSyncService implements OnModuleInit {
                 ? { details: { ...det, channelStatus: orden.channelStatus, shipping: { ...det.shipping, status: envio.status, trackingCode: rastreo, carrier: transportista } } as any }
                 : {}),
         });
+        // Cancelada o devuelta: lo que no había salido vuelve al stock; lo ya enviado queda por reponer hasta que llegue.
+        await this.sync.reponerStockDeVenta(registrada.id, estadoAntes, orden.saleState);
     }
 
     /** El producto de la tienda de la cuenta; si es anterior a las tiendas, el del dueño. */

@@ -36,6 +36,10 @@ export interface OrderLine {
     productId?: string | null;
     stockBefore?: number | null;
     stockAfter?: number | null;
+    /** La venta se canceló o devolvió y esta línea ya devolvió su stock al producto. */
+    repuesto?: boolean | null;
+    /** La venta se canceló o devolvió después de enviarse: el stock espera a que el producto vuelva (se confirma a mano). */
+    porReponer?: boolean | null;
 }
 
 export interface OrderDetails {

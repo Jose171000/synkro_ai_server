@@ -81,6 +81,7 @@ function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[
             return p.store && p.store.id !== 't1' ? { product: null, otraTienda: true } : { product: p, otraTienda: false };
         }),
         propagateStock: jest.fn().mockResolvedValue(undefined),
+        reponerStockDeVenta: jest.fn().mockResolvedValue(undefined),
     };
     const repoProductos = repoEnMemoria(productos, 'prod');
     const repoEnlaces = repoEnMemoria(enlaces, 'enl');
@@ -533,6 +534,15 @@ describe('Ripley: ventas y estados', () => {
         expect(ventas[0]).toMatchObject({ status: 'received', saleState: 'entregado' });
         await service.aplicarVenta(cuentaRipley() as any, ventaRipley('canceled', 'cancelado'), { soloRegistro: false });
         expect(ventas[0]).toMatchObject({ status: 'canceled', saleState: 'cancelado' });
+    });
+
+    it('al pasar a cancelada o devuelta avisa de ello para reponer el stock, con el estado que tenía antes', async () => {
+        const { service, ventas, sync } = construir({ conexiones: [cuentaRipley()], productos: [{ id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 20, store: { id: 't1' } }] });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('waiting_acceptance', 'pendiente'), { soloRegistro: false });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('shipped', 'enviado'), { soloRegistro: false });
+        await service.aplicarVenta(cuentaRipley() as any, ventaRipley('closed', 'devuelto'), { soloRegistro: false });
+
+        expect(sync.reponerStockDeVenta).toHaveBeenLastCalledWith(ventas[0].id, 'enviado', 'devuelto');
     });
 
     it('una venta cancelada o rechazada que nunca registramos no se crea', async () => {

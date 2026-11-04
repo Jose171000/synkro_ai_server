@@ -784,6 +784,18 @@ export class SyncController {
         return this.manualSales.importarExcel(scopeOf(req), excel.buffer);
     }
 
+    @Post('orders/:id/restock')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('ventas.registrar')
+    @ApiOperation({
+        summary: 'Confirma que el producto de una venta cancelada o devuelta ya volvió al almacén',
+        description: 'Repone al stock las unidades de esa venta que estaban «por reponer» (la venta ya se había enviado) y las manda a los canales.',
+    })
+    restockOrder(@Param('id') id: string, @Req() req) {
+        return this.syncService.confirmarReposicionDeVenta(scopeOf(req), id);
+    }
+
     @Get('orders/:id')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

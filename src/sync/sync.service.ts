@@ -39,7 +39,8 @@ import { FalabellaAttribute, FalabellaCategory } from './falabella/falabella-api
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { StoresService } from '../stores/stores.service';
-import { desfasePorMoneda, fechaFalabella, importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder } from './order-details';
+import { desfasePorMoneda, fechaFalabella, importeDeProductos, normalizeFalabellaOrder, normalizeMeliOrder, OrderLine } from './order-details';
+import { accionDeReposicion, lineaPendienteDeResolver, lineaPorReponer } from './reposicion-de-stock';
 import { costosFalabella, costosMeli } from './costos-de-venta';
 import { ESTADOS_FINALES, EstadoDeVenta, estadoDeVenta, estadoDeVentaMeli, estadosDePedidoFalabella } from './estado-de-venta';
 import { filasDeItemMeli, MeliListingRow, publicacionesSinSku, PublicacionSinSku } from './meli/meli-listings';
@@ -3512,12 +3513,73 @@ export class SyncService implements OnModuleInit {
         const det: any = orden.details;
         const envioActual = det?.shipping?.status ?? null;
         if (orden.status === texto.slice(0, 30) && orden.saleState === estado && (!det || envioActual === envio)) return false;
+        const estadoAntes = orden.saleState;
         await this.orderRepository.update(orden.id, {
             status: texto.slice(0, 30),
             saleState: estado,
             ...(det ? { details: { ...det, channelStatus: texto, shipping: { ...det.shipping, status: envio } } as any } : {}),
         });
+        await this.reponerStockDeVenta(orden.id, estadoAntes, estado);
         return true;
+    }
+
+    /**
+     * Una venta que ya había descontado stock se cancela o se devuelve (lo dice el canal): lo que no había salido vuelve al
+     * stock al instante; lo que ya había salido queda «por reponer» hasta que alguien confirme que el producto llegó.
+     * Se llama justo después de guardar el nuevo estado; repetirlo no repone dos veces. Un fallo aquí no frena la consulta.
+     */
+    async reponerStockDeVenta(ordenId: string, estadoAntes: EstadoDeVenta | null | undefined, estadoAhora: EstadoDeVenta | null | undefined): Promise<void> {
+        try {
+            const accion = accionDeReposicion(estadoAntes, estadoAhora);
+            if (accion === 'ninguna') return;
+            const orden = await this.orderRepository.findOne({ where: { id: ordenId }, relations: { owner: true } });
+            if (!orden || !Array.isArray(orden.items)) return;
+            const lineas = orden.items as OrderLine[];
+            if (!lineas.some(lineaPendienteDeResolver)) return;
+
+            const nuevas: OrderLine[] = [];
+            for (const l of lineas) {
+                if (!lineaPendienteDeResolver(l)) { nuevas.push(l); continue; }
+                if (accion === 'por_reponer') { nuevas.push({ ...l, porReponer: true }); continue; }
+                const r = await this.devolverStockAlProducto(orden.owner?.id, l.productId!, Number(l.quantity) || 0);
+                nuevas.push(r ? { ...l, repuesto: true } : l);
+                if (r) console.log(`[Sync] Venta ${orden.marketplace} ${orden.externalId} ${estadoAhora} sin haberse enviado: ${l.quantity}x ${l.sku} → stock ${r.despues}`);
+            }
+            await this.orderRepository.update(orden.id, { items: nuevas as any });
+            if (accion === 'por_reponer') console.log(`[Sync] Venta ${orden.marketplace} ${orden.externalId} ${estadoAhora} después de enviarse: el stock queda por reponer hasta que el producto vuelva.`);
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo tratar el stock de la venta ${ordenId}: ${error?.message}`);
+        }
+    }
+
+    /** Alguien confirma que el producto de una venta cancelada o devuelta ya volvió al almacén: se repone su stock. */
+    async confirmarReposicionDeVenta(scope: { storeId: string }, ordenId: string): Promise<{ repuestas: number }> {
+        const orden = await this.orderRepository.findOne({ where: { id: ordenId, store: { id: scope.storeId } }, relations: { owner: true } });
+        if (!orden) throw new NotFoundException('No se encontró la venta.');
+        const lineas = (Array.isArray(orden.items) ? orden.items : []) as OrderLine[];
+        if (!lineas.some(lineaPorReponer)) throw new BadRequestException('Esta venta no tiene stock por reponer.');
+        let repuestas = 0;
+        const nuevas: OrderLine[] = [];
+        for (const l of lineas) {
+            if (!lineaPorReponer(l)) { nuevas.push(l); continue; }
+            const r = await this.devolverStockAlProducto(orden.owner?.id, l.productId!, Number(l.quantity) || 0);
+            if (r) { nuevas.push({ ...l, repuesto: true, porReponer: false }); repuestas++; } else nuevas.push(l);
+        }
+        await this.orderRepository.update(orden.id, { items: nuevas as any });
+        return { repuestas };
+    }
+
+    /** Suma unidades al stock de un producto y lo manda a todas las cuentas donde está publicado. */
+    private async devolverStockAlProducto(userId: string | undefined, productId: string, cantidad: number): Promise<{ antes: number; despues: number } | null> {
+        if (!cantidad) return null;
+        const producto = await this.productRepository.findOne({ where: { id: productId } });
+        if (!producto) return null;
+        const antes = producto.stock;
+        producto.stock = antes + cantidad;
+        await this.productRepository.save(producto);
+        // El stock vuelve a todas las cuentas, también a la de la venta: el canal no lo repone solo.
+        if (userId) await this.propagateStock(userId, producto.id, '');
+        return { antes, despues: producto.stock };
     }
 
     /**

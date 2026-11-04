@@ -560,3 +560,71 @@ describe('envío, cupón y hora de las ventas', () => {
         expect(ventas[0]).toMatchObject({ shippingPaid: 10.9, shippingType: 'comprador', productsAmount: 35 });
     });
 });
+
+describe('stock al cancelarse o devolverse una venta de Falabella', () => {
+    const preparar = async () => {
+        const t = await construir();
+        t.repoVentas.findOne.mockImplementation(async ({ where }: any) =>
+            t.ventas.find(v => (where.id ? v.id === where.id : v.externalId === where.externalId)) ?? null);
+        t.falabella.getOrderItems.mockResolvedValue([lineaFalabella]);
+        t.falabella.getOrders.mockResolvedValue([pedidoFalabella]);
+        await t.service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+        return t;
+    };
+    const cambiarA = async (t: any, estado: string) => {
+        t.falabella.getOrders.mockResolvedValue([{ ...pedidoFalabella, Statuses: { Status: estado } }]);
+        await t.service.processFalabellaOrders({ userId: 'u1', connectionId: 'c1' });
+    };
+
+    it('cancelada antes de salir: el stock vuelve al instante y se manda a los canales', async () => {
+        const t = await preparar();
+        expect(t.producto.stock).toBe(4);
+
+        await cambiarA(t, 'canceled');
+
+        expect(t.producto.stock).toBe(5);
+        expect(t.ventas[0].saleState).toBe('cancelado');
+        expect(t.ventas[0].items[0]).toMatchObject({ repuesto: true });
+    });
+
+    it('cancelada después de enviarse: el stock NO vuelve solo, queda por reponer', async () => {
+        const t = await preparar();
+        await cambiarA(t, 'shipped');
+        await cambiarA(t, 'canceled');
+
+        expect(t.producto.stock).toBe(4);
+        expect(t.ventas[0].items[0]).toMatchObject({ porReponer: true });
+        expect(t.ventas[0].items[0].repuesto).toBeFalsy();
+    });
+
+    it('al confirmar que el producto llegó se repone una sola vez', async () => {
+        const t = await preparar();
+        await cambiarA(t, 'shipped');
+        await cambiarA(t, 'canceled');
+
+        const r = await t.service.confirmarReposicionDeVenta({ storeId: 't1' }, t.ventas[0].id);
+        expect(r.repuestas).toBe(1);
+        expect(t.producto.stock).toBe(5);
+        expect(t.ventas[0].items[0]).toMatchObject({ repuesto: true, porReponer: false });
+
+        await expect(t.service.confirmarReposicionDeVenta({ storeId: 't1' }, t.ventas[0].id)).rejects.toThrow('no tiene stock por reponer');
+        expect(t.producto.stock).toBe(5);
+    });
+
+    it('repasar la venta cancelada varias veces no repone de más', async () => {
+        const t = await preparar();
+        await cambiarA(t, 'canceled');
+        await cambiarA(t, 'canceled');
+        await t.service.reponerStockDeVenta(t.ventas[0].id, 'pendiente', 'cancelado');
+
+        expect(t.producto.stock).toBe(5);
+    });
+
+    it('una venta sin stock descontado (historial) no repone nada al cancelarse', async () => {
+        const t = await preparar();
+        t.ventas[0].items = t.ventas[0].items.map((l: any) => ({ ...l, stockBefore: null, stockAfter: null }));
+        await cambiarA(t, 'canceled');
+
+        expect(t.producto.stock).toBe(4);
+    });
+});
