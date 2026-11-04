@@ -21,7 +21,7 @@ Fases 1, 2 y 3 hechas y subidas (servidor y frontend). Falta que el usuario cree
 
 ## 3. Actividad de usuarios (Superadmin › Actividad)
 
-Fases 1, 2 y 3 hechas. Falta confirmar que la Fase 3 (pestaña con mapas de clics) está en el frontend subido a SiteGround y probarla con datos reales. Falta la **Fase 4**: descargas en Excel de varias hojas y PDF visual desde el servidor, con «Personalizar…». Detalle en `docs/actividad-de-usuarios.md`.
+Las 4 fases están hechas (la Fase 4, descargas en Excel y PDF con «Personalizar…», ya estaba en el servidor y el frontend). Mapas de clics como zonas de calor en degradado, también en el PDF. Falta que el usuario suba el último paquete a SiteGround y pruebe las descargas con datos reales. Detalle en `docs/actividad-de-usuarios.md`.
 
 ## 4. Correos de avisos de venta (Brevo) — decisión del usuario
 

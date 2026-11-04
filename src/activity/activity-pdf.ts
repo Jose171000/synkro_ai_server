@@ -163,14 +163,26 @@ export function informeAPdf(i: Informe): Promise<Buffer> {
                     // Sin plano, se estira hacia abajo hasta la zona con clics; con plano, las posiciones son las reales.
                     const alcance = Math.max(0, ...conPos.map((c) => c.y + c.h));
                     const escala = plano ? 1 : alcance > 0 ? Math.min(8, Math.max(1, 1000 / (alcance * 1.15))) : 1;
-                    const grandes = [...conPos].sort((a, b) => b.w * b.h - a.w * a.h);
-                    for (const { e, x, y: yy, w, h } of grandes) {
-                        const rw = Math.max(w, 18), rh = Math.max(h * escala, 26);
-                        const bx = M + Math.min(x, 1000 - rw) / 1000 * UTIL;
-                        const by = y + Math.min(yy * escala, 1000 - rh) / 1000 * alto;
-                        const bw = rw / 1000 * UTIL, bh = rh / 1000 * alto;
-                        doc.save().roundedRect(bx, by, bw, bh, 2).fillOpacity(0.35 + 0.5 * e.intensidad).fill(rgb(colorDeCalor(e.intensidad))).restore();
-                        texto(bw >= 55 ? `${nombreDeElemento(e.elemento)} · ${e.clics}` : String(e.clics), bx + 2, by + Math.max(1, bh / 2 - 4), { size: 6.5, w: bw - 4, align: 'center', color: '#222222' });
+                    // Zonas de calor: una mancha redonda que se desvanece hacia los bordes (igual que en la pantalla); lo menos tocado
+                    // primero, para que donde se mezclan mande la más caliente. Se recorta al marco del mapa.
+                    const centros = [...conPos]
+                        .sort((a, b) => a.e.intensidad - b.e.intensidad)
+                        .map(({ e, x, y: yy, w, h }) => ({
+                            e,
+                            cx: M + Math.min(1000, Math.max(0, x + w / 2)) / 1000 * UTIL,
+                            cy: y + Math.min(1000, Math.max(0, (yy + h / 2) * escala)) / 1000 * alto,
+                            r: (14 + 22 * Math.sqrt(e.intensidad)) / 100 * UTIL / 2,
+                        }));
+                    doc.save().roundedRect(M, y, UTIL, alto, 6).clip();
+                    for (const { e, cx, cy, r } of centros) {
+                        const color = '#' + colorDeCalor(e.intensidad).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+                        const g = doc.radialGradient(cx, cy, 0, cx, cy, r);
+                        g.stop(0, color, 0.9).stop(0.54, color, 0.45).stop(1, color, 0);
+                        doc.circle(cx, cy, r).fill(g);
+                    }
+                    doc.restore();
+                    for (const { e, cx, cy } of centros) {
+                        texto(String(e.clics), cx - 15, cy - 3.5, { size: 7, bold: true, w: 30, align: 'center', color: '#222222' });
                     }
                 }
                 y += alto + 8;

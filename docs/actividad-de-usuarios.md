@@ -98,4 +98,7 @@ descarta cualquier otro campo.
    mapa de clics por pantalla (con interruptor y lista), tabla de personas y línea de tiempo de una persona. Los controles de
    ventanas emergentes no tienen posición: salen en la lista como «emergente» y no se dibujan en el mapa. Los mapas se dibujan
    sobre el plano de la pantalla (ver arriba).
-4. Descargas Excel y PDF.
+4. **Descargas Excel y PDF (hecha):** menú «Descargar» en Superadmin › Actividad (frontend: `DescargasDeActividad.tsx`). Por defecto
+   baja todo con los filtros puestos; «Personalizar…» deja elegir bloques y pantallas. Excel con una hoja por tema; PDF visual del
+   servidor (`activity-pdf.ts`). Solo superadmin. Los mapas de clics del PDF usan el mismo estilo que la pantalla: zonas de calor
+   en degradado (mancha redonda que se desvanece), no cuadrados.
