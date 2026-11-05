@@ -171,7 +171,10 @@ export class RipleyApiService implements ChannelClient {
                 familiasConVariasOfertas: conVarias.length,
                 ofertasEnFamiliasConVarias: conVarias.reduce((s, [, l]) => s + l.length, 0),
                 ejemploDeFamilias: conVarias.slice(0, 12).map(([base, l]) => ({ base, ofertas: l })),
-                ofertasCrudasDeEjemplo: ofertas.slice(0, 3),
+                ofertasCrudasDeEjemplo: ofertas.slice(0, 1),
+                // Lista corta de todas las ofertas para ver cómo se relacionan sus códigos (s=SKU de la tienda, p=código de producto, c=categoría, a=activa).
+                lista: ofertas.map((o) => ({ s: o.shop_sku, p: o.product_sku, c: o.category_code, a: o.active, t: String(o.product_title ?? '').slice(0, 45) })),
+                categoriasUsadas: Object.entries(ofertas.reduce((acc: Record<string, number>, o) => { const k = `${o.category_code} ${o.category_label}`; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {})),
             };
         });
 
@@ -189,6 +192,14 @@ export class RipleyApiService implements ChannelClient {
                 deVariante: a.filter((x) => x?.variant === true).slice(0, 40).map((x) => ({ codigo: x.code, etiqueta: x.label, tipo: x.type, categoria: x.hierarchy_code, obligatorio: x.required })),
                 muestra: a.slice(0, 5),
             };
+        });
+        await intentar('atributosDeLasCategoriasUsadas', async () => {
+            const codigos = new Set(ofertas.map((o) => o?.category_code).filter(Boolean));
+            const r = await this.get<any>(auth, '/api/products/attributes');
+            const a: any[] = Array.isArray(r?.attributes) ? r.attributes : [];
+            return a
+                .filter((x) => codigos.has(x?.hierarchy_code))
+                .map((x) => ({ categoria: x.hierarchy_code, codigo: x.code, etiqueta: x.label, tipo: x.type, variante: x.variant === true, obligatorio: x.required === true, nivel: x.requirement_level }));
         });
         await intentar('productoDeUnaOferta', async () => {
             const o = ofertas.find((x) => x?.product_sku);
