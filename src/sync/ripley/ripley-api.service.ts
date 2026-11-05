@@ -133,6 +133,73 @@ export class RipleyApiService implements ChannelClient {
     }
 
     /**
+     * SOLO LECTURA. Reconocimiento de lo que Ripley dice sobre variantes, categorías y atributos (fase 0 del plan de variantes).
+     * No escribe nada ni devuelve la clave. Cada parte se intenta por separado: si Ripley rechaza una, las demás siguen.
+     */
+    async diagnostico(auth: ChannelAuth): Promise<Record<string, any>> {
+        const salida: Record<string, any> = {};
+        const intentar = async (nombre: string, fn: () => Promise<any>) => {
+            try { salida[nombre] = await fn(); } catch (error: any) { salida[nombre] = { error: error?.message ?? String(error) }; }
+        };
+
+        const ofertas: any[] = [];
+        await intentar('ofertas', async () => {
+            for (let offset = 0; offset < 1000; offset += PAGINA) {
+                const pagina = await this.get<any>(auth, '/api/offers', { paginate: true, max: PAGINA, offset });
+                const lote: any[] = Array.isArray(pagina?.offers) ? pagina.offers : [];
+                ofertas.push(...lote);
+                if (lote.length < PAGINA) break;
+            }
+            const campos = new Set<string>();
+            ofertas.forEach((o) => Object.keys(o ?? {}).forEach((k) => campos.add(k)));
+            const conProducto = ofertas.filter((o) => typeof o?.product_sku === 'string' && o.product_sku);
+            // Familias por base del código de producto: «PMP20001695273-5» → base «PMP20001695273».
+            const familias = new Map<string, any[]>();
+            for (const o of conProducto) {
+                const m = /^(.*?)-(d+)$/.exec(o.product_sku);
+                const base = m ? m[1] : o.product_sku;
+                const lista = familias.get(base) ?? [];
+                lista.push({ shop_sku: o.shop_sku, product_sku: o.product_sku, titulo: o.product_title, categoria: o.category_code ?? o.category_label ?? null });
+                familias.set(base, lista);
+            }
+            const conVarias = [...familias.entries()].filter(([, l]) => l.length > 1);
+            return {
+                leidas: ofertas.length,
+                campos: [...campos].sort(),
+                conProductSku: conProducto.length,
+                familias: familias.size,
+                familiasConVariasOfertas: conVarias.length,
+                ofertasEnFamiliasConVarias: conVarias.reduce((s, [, l]) => s + l.length, 0),
+                ejemploDeFamilias: conVarias.slice(0, 12).map(([base, l]) => ({ base, ofertas: l })),
+                ofertasCrudasDeEjemplo: ofertas.slice(0, 3),
+            };
+        });
+
+        await intentar('categorias', async () => {
+            const r = await this.get<any>(auth, '/api/hierarchies');
+            const h: any[] = Array.isArray(r?.hierarchies) ? r.hierarchies : [];
+            return { total: h.length, muestra: h.slice(0, 8) };
+        });
+        await intentar('atributos', async () => {
+            const r = await this.get<any>(auth, '/api/products/attributes');
+            const a: any[] = Array.isArray(r?.attributes) ? r.attributes : [];
+            return {
+                total: a.length,
+                camposDeUnAtributo: Object.keys(a[0] ?? {}),
+                deVariante: a.filter((x) => x?.variant === true).slice(0, 40).map((x) => ({ codigo: x.code, etiqueta: x.label, tipo: x.type, categoria: x.hierarchy_code, obligatorio: x.required })),
+                muestra: a.slice(0, 5),
+            };
+        });
+        await intentar('productoDeUnaOferta', async () => {
+            const o = ofertas.find((x) => x?.product_sku);
+            if (!o) return { aviso: 'ninguna oferta trae product_sku' };
+            const r = await this.get<any>(auth, '/api/products', { product_references: `SKU|${o.product_sku}` });
+            return { consultado: o.product_sku, respuesta: r };
+        });
+        return salida;
+    }
+
+    /**
      * Mandar stock o precio a Ripley todavía no está activado: POST /api/offers reemplaza la oferta entera (lo que no se
      * manda se borra), así que se activará después de probarlo con la tienda real. Nunca se llega aquí por las vías normales.
      */

@@ -128,6 +128,12 @@ export class EcommerceSyncService implements OnModuleInit {
         return { site: connection.externalUserId, token: connection.accessToken };
     }
 
+    /** SOLO LECTURA: lo que Ripley dice sobre variantes, categorías y atributos (reconocimiento previo al agrupado de variantes). */
+    async diagnosticoDeRipley(scope: SyncScope, connectionId?: string) {
+        const connection = await this.sync.resolveConnection(scope.storeId, 'ripley', connectionId);
+        return (this.clientOf('ripley') as RipleyApiService).diagnostico(this.authOf(connection));
+    }
+
     async connect(
         scope: SyncScope,
         marketplace: EcommerceChannel,

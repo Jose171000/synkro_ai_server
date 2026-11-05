@@ -221,6 +221,19 @@ export class SyncController {
         return this.ecommerce.connect(scopeOf(req), 'ripley', { site: dto.site ?? '', token: dto.apiKey, label: dto.label });
     }
 
+    @Get('ripley/diagnostico')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.conectar')
+    @ApiOperation({
+        summary: 'Reconocimiento de solo lectura de Ripley: variantes, categorías y atributos',
+        description: 'No escribe nada en Ripley ni devuelve la clave. Sirve para decidir cómo agrupar variantes al importar.',
+    })
+    @ApiQuery({ name: 'connectionId', required: false })
+    ripleyDiagnostico(@Req() req, @Query('connectionId') connectionId?: string) {
+        return this.ecommerce.diagnosticoDeRipley(scopeOf(req), connectionId);
+    }
+
     @Post('channels/:marketplace/listings/import')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
