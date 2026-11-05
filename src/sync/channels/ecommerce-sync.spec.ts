@@ -53,7 +53,7 @@ const venta = (over: Partial<ChannelOrder> = {}, lineas: any[] = [{ sku: 'REL-01
     ...over,
 });
 
-function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[] } = {}) {
+function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[]; variantImport?: any } = {}) {
     const conexiones = over.conexiones ?? [];
     const productos = over.productos ?? [];
     const enlaces = over.enlaces ?? [];
@@ -92,7 +92,7 @@ function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[
     const alertas: any = { notificar: jest.fn(async () => undefined) };
     const service = new EcommerceSyncService(
         sync, {} as any, repoEnlaces as any, repoVentas as any, repoProductos as any, redis, notificaciones, alertas,
-        cliente, cliente, cliente,
+        cliente, cliente, cliente, over.variantImport,
     );
     return { service, cliente, sync, productos, enlaces, ventas, avisos, conexiones, repoProductos };
 }
@@ -600,5 +600,76 @@ describe('Ripley: por ahora solo se lee', () => {
         await handlerDe(sync, 'woocommerce').pushInventory('p1', 'wc1');
 
         expect(cliente.setInventory).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Ripley: variantes al importar', () => {
+    const ofertaDe = (sku: string, titulo: string, grupo: string | null, over: Partial<ChannelListingRow> = {}) =>
+        fila({ sku, externalId: sku, title: titulo, groupKey: grupo, ...over });
+    const lectura = (rows: ChannelListingRow[]) => ({ rows, sinSku: 0, productos: rows.length, incompleto: false });
+    const rows = [
+        ofertaDe('LCH-1', 'LONCHERA ROSADA TÉRMICA', 'PMP1'),
+        ofertaDe('LCH-2', 'LONCHERA NEGRO TÉRMICA', 'PMP1'),
+        ofertaDe('MOR-1', 'MORRAL DESSY', 'PMP2'),
+        ofertaDe('MOR-2', 'MORRAL DESSY', 'PMP2'),
+        ofertaDe('SOLO-1', 'CANGURO', 'PMP3'),
+    ];
+    const falsoAgrupador = () => ({
+        aplicar: jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] })),
+        aplicarManuales: jest.fn(async () => ({ gruposCreados: 1, gruposActualizados: 0, variantesAgrupadas: 2, omitidos: [] })),
+    });
+
+    it('la vista previa propone las familias, deja sin resolver las que no dicen en qué se diferencian y no escribe nada', async () => {
+        const variantImport = falsoAgrupador();
+        const { service, cliente, productos } = construir({ conexiones: [cuentaRipley()], variantImport });
+        cliente.listListings.mockResolvedValue(lectura(rows));
+
+        const r = await service.importListings(SCOPE, 'ripley', undefined, { dryRun: true });
+
+        expect(r.variantes).toMatchObject({ grupos: 1, variantes: 2 });
+        expect(r.variantes?.ejemplos[0]).toMatchObject({ parentSku: 'PMP1', nombre: 'LONCHERA TÉRMICA' });
+        expect(r.variantes?.sinResolver.map((g) => g.parentSku)).toEqual(['PMP2']);
+        expect(productos).toHaveLength(0);
+        expect(variantImport.aplicar).not.toHaveBeenCalled();
+    });
+
+    it('al importar crea los productos y los agrupa en el mismo paso, sobre los productos recién creados', async () => {
+        const variantImport = falsoAgrupador();
+        const { service, cliente, productos } = construir({ conexiones: [cuentaRipley()], variantImport });
+        cliente.listListings.mockResolvedValue(lectura(rows));
+
+        const r = await service.importListings(SCOPE, 'ripley', undefined, {});
+
+        expect(productos).toHaveLength(5);
+        expect(variantImport.aplicar).toHaveBeenCalledTimes(1);
+        const [, grupos, vinculados] = variantImport.aplicar.mock.calls[0] as any[];
+        expect(grupos.map((g: any) => g.parentSku)).toEqual(['PMP1']);
+        expect([...vinculados.keys()].sort()).toEqual(['LCH-1', 'LCH-2', 'MOR-1', 'MOR-2', 'SOLO-1']);
+        expect(vinculados.get('LCH-1')).toBe(productos.find((p) => p.sku === 'LCH-1'));
+        expect(r.variantes?.aplicado).toMatchObject({ gruposCreados: 1 });
+    });
+
+    it('las familias estructuradas a mano se agrupan también, y mandan sobre la automática de la misma familia', async () => {
+        const variantImport = falsoAgrupador();
+        const { service, cliente } = construir({ conexiones: [cuentaRipley()], variantImport });
+        cliente.listListings.mockResolvedValue(lectura(rows));
+        const manual = { parentSku: 'PMP1', name: 'Lonchera', axes: ['Color'], variants: [{ sellerSku: 'LCH-1', values: { Color: 'Rosa' } }, { sellerSku: 'LCH-2', values: { Color: 'Negro' } }] };
+
+        const r = await service.importListings(SCOPE, 'ripley', undefined, { gruposManuales: [manual] });
+
+        expect(variantImport.aplicar).not.toHaveBeenCalled(); // la única familia automática era la manual
+        expect(variantImport.aplicarManuales).toHaveBeenCalledWith(SCOPE, [manual], expect.any(Map));
+        expect(r.variantes?.manuales).toMatchObject({ gruposCreados: 1 });
+    });
+
+    it('los otros canales no agrupan ni traen el bloque de variantes', async () => {
+        const variantImport = falsoAgrupador();
+        const { service, cliente } = construir({ conexiones: [cuenta()], variantImport });
+        cliente.listListings.mockResolvedValue(lectura([ofertaDe('A', 'X ROJO', 'G'), ofertaDe('B', 'X AZUL', 'G')]));
+
+        const r = await service.importListings(SCOPE, 'woocommerce', undefined, {});
+
+        expect(r.variantes).toBeUndefined();
+        expect(variantImport.aplicar).not.toHaveBeenCalled();
     });
 });

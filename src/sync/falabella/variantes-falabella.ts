@@ -19,7 +19,7 @@ export interface PlanDeGrupo {
     axes: EjeDeVariacion[];
     variants: { sellerSku: string; values: Record<string, string> }[];
     /** De dónde salieron los ejes: los atributos de las fichas o la página pública de Falabella. */
-    origen?: 'atributos' | 'pagina' | 'ia' | 'manual';
+    origen?: 'atributos' | 'pagina' | 'ia' | 'manual' | 'titulo';
 }
 
 export interface GrupoSinResolver {

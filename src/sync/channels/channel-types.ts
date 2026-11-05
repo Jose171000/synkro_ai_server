@@ -53,6 +53,8 @@ export interface ChannelListingRow {
     imageUrl: string | null;
     images: string[];
     currency: string | null;
+    /** Familia de variantes a la que pertenece, si el canal la informa (Ripley: la base del código de producto). */
+    groupKey?: string | null;
 }
 
 export interface ChannelListingsResult {

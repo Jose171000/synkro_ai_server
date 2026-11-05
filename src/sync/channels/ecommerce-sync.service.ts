@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import Redis from 'ioredis';
@@ -14,6 +14,9 @@ import { SyncScope, SyncService } from '../sync.service';
 import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
 import { RipleyApiService } from '../ripley/ripley-api.service';
+import { planearGruposDeRipley } from '../ripley/variantes-ripley';
+import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from '../falabella-variant-import.service';
+import { GrupoSinResolver } from '../falabella/variantes-falabella';
 import { HOST_DE_RIPLEY_POR_DEFECTO, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
 import { resolverMoneda } from '../../common/currency';
 import { importeDeProductos, OrderLine } from '../order-details';
@@ -84,6 +87,7 @@ export class EcommerceSyncService implements OnModuleInit {
         woo: WooApiService,
         shopify: ShopifyApiService,
         ripley: RipleyApiService,
+        @Optional() private readonly variantImport?: FalabellaVariantImportService,
     ) {
         this.clients = { woocommerce: woo, shopify, ripley };
     }
@@ -190,7 +194,7 @@ export class EcommerceSyncService implements OnModuleInit {
         scope: SyncScope,
         marketplace: EcommerceChannel,
         connectionId: string | undefined,
-        options: { dryRun?: boolean } = {},
+        options: { dryRun?: boolean; gruposManuales?: EntradaManual[] } = {},
     ) {
         const client = this.clientOf(marketplace);
         const connection = await this.sync.resolveConnection(scope.storeId, marketplace, connectionId);
@@ -208,7 +212,30 @@ export class EcommerceSyncService implements OnModuleInit {
             porEstado: {} as Record<string, number>,
             notaMedia: null as number | null,
             ejemplos: [] as { sku: string; nombre: string; estado: string; nota: number | null; enCatalogo: boolean }[],
+            // Solo Ripley: ofertas del mismo producto del catálogo de Ripley, agrupadas como variantes.
+            variantes: undefined as undefined | {
+                grupos: number;
+                variantes: number;
+                ejemplos: { parentSku: string; nombre: string; ejes: { name: string; values: string[] }[]; variantes: number }[];
+                sinResolver: GrupoSinResolver[];
+                aplicado?: ResultadoDeAgrupar;
+                manuales?: ResultadoDeAgrupar;
+            },
         };
+
+        // Las familias de variantes (solo Ripley por ahora). Las que la persona estructuró a mano mandan sobre las automáticas.
+        const manuales = options.gruposManuales ?? [];
+        const plan = marketplace === 'ripley' ? planearGruposDeRipley(lectura.rows) : null;
+        const grupos = (plan?.grupos ?? []).filter((g) => !manuales.some((m) => m.parentSku === g.parentSku));
+        if (plan) {
+            resumen.variantes = {
+                grupos: grupos.length,
+                variantes: grupos.reduce((n, g) => n + g.variants.length, 0),
+                ejemplos: grupos.slice(0, 8).map((g) => ({ parentSku: g.parentSku, nombre: g.name, ejes: g.axes, variantes: g.variants.length })),
+                sinResolver: plan.sinResolver,
+            };
+        }
+        const vinculados = new Map<string, Product>();
 
         for (const fila of lectura.rows) {
             resumen.total++;
@@ -246,7 +273,14 @@ export class EcommerceSyncService implements OnModuleInit {
                 }));
             }
             await this.guardarEnlace(connection, product, fila);
+            vinculados.set(fila.sku, product);
             resumen.enlazadas++;
+        }
+
+        // Con los productos ya creados o enlazados, se agrupan en el mismo paso (nunca se tocan fotos, precio ni stock).
+        if (!options.dryRun && plan && this.variantImport && resumen.variantes) {
+            if (grupos.length) resumen.variantes.aplicado = await this.variantImport.aplicar(scope, grupos, vinculados);
+            if (manuales.length) resumen.variantes.manuales = await this.variantImport.aplicarManuales(scope, manuales, vinculados);
         }
 
         if (!options.dryRun && resumen.enlazadas > 0) {

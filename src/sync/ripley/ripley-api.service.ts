@@ -207,6 +207,21 @@ export class RipleyApiService implements ChannelClient {
             const r = await this.get<any>(auth, '/api/products', { product_references: `SKU|${o.product_sku}` });
             return { consultado: o.product_sku, respuesta: r };
         });
+        // Sondeo del catálogo de producto (qué formas de consulta acepta Ripley y qué atributos trae cada producto).
+        await intentar('sondeoDeCatalogo', async () => {
+            const o = ofertas.find((x) => x?.product_sku);
+            if (!o) return { aviso: 'sin ofertas' };
+            const pruebas: [string, string, Record<string, string>][] = [
+                ['P31 MIRAKL_PRODUCT_SKU', '/api/products', { product_references: `MIRAKL_PRODUCT_SKU|${o.product_sku}` }],
+                ['P31 SHOP_SKU', '/api/products', { product_references: `SHOP_SKU|${o.shop_sku}` }],
+                ['P11 product_ids', '/api/products/offers', { product_ids: o.product_sku }],
+            ];
+            const r: Record<string, any> = { consultado: { shop_sku: o.shop_sku, product_sku: o.product_sku } };
+            for (const [nombre, ruta, params] of pruebas) {
+                try { r[nombre] = JSON.stringify(await this.get<any>(auth, ruta, params)).slice(0, 2500); } catch (error: any) { r[nombre] = { error: error?.message }; }
+            }
+            return r;
+        });
         return salida;
     }
 

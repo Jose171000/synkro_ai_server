@@ -240,7 +240,7 @@ export class SyncController {
     @RequirePermission('canales.conectar')
     @ApiOperation({
         summary: 'Trae los productos que ya existen en una tienda WooCommerce o Shopify',
-        description: 'Los enlaza con el catálogo por SKU; los nuevos se crean como borrador. Con dryRun=true no escribe nada.',
+        description: 'Los enlaza con el catálogo por SKU; los nuevos se crean como borrador. Con dryRun=true no escribe nada. En Ripley las ofertas del mismo producto se agrupan como variantes; el cuerpo puede traer familias estructuradas a mano (gruposManuales).',
     })
     @ApiQuery({ name: 'dryRun', required: false, type: Boolean })
     @ApiQuery({ name: 'connectionId', required: false, description: 'Cuenta del canal; obligatoria si la tienda tiene varias.' })
@@ -249,11 +249,12 @@ export class SyncController {
         @Req() req,
         @Query('dryRun') dryRun?: string,
         @Query('connectionId') connectionId?: string,
+        @Body() dto?: ImportFalabellaDto,
     ) {
         if (!ECOMMERCE_CHANNELS.includes(marketplace as EcommerceChannel)) {
             throw new NotFoundException('Ese canal no existe.');
         }
-        return this.ecommerce.importListings(scopeOf(req), marketplace as EcommerceChannel, connectionId, { dryRun: dryRun === 'true' });
+        return this.ecommerce.importListings(scopeOf(req), marketplace as EcommerceChannel, connectionId, { dryRun: dryRun === 'true', gruposManuales: dto?.gruposManuales });
     }
 
     @Get('listings')

@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { EstadoDeVenta } from '../estado-de-venta';
+import { familiaDeProducto } from './variantes-ripley';
 import { CostosDeVenta } from '../costos-de-venta';
 import { NormalizedOrder, OrderLine } from '../order-details';
 import { ChannelListingRow, ChannelOrder } from '../channels/channel-types';
@@ -230,5 +231,7 @@ export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null
         imageUrl: null,
         images: [],
         currency: texto(oferta?.currency_iso_code) ?? monedaDeLaCuenta ?? null,
+        // «PMP20001695273-5»: la base es la familia de variantes.
+        ...(familiaDeProducto(oferta?.product_sku) ? { groupKey: familiaDeProducto(oferta?.product_sku)!.base } : {}),
     };
 }
