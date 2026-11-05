@@ -122,3 +122,17 @@ portal te quita tiempo. Si no, se omite.
 3. Para la fase 2: ¿qué **SKU** usamos de piloto (uno con poco movimiento)?
 4. Para la fase 3: ¿autorizas bajar el CSV de ejemplo y la imagen de reglas?
 5. ¿Despachas desde el portal de Ripley y te sirve así (fase 4 omitida)?
+
+---
+
+## Resultado de la fase 0 (2026-11-05, Chumpi Bags, solo lectura)
+
+- Las **266 ofertas** traen `product_sku` (`PMP<base>-<n>`) y `category_code`. Agrupando por la base (todo menos el `-n` final) salen **69 familias**:
+  21 de una sola oferta y 48 con varias (de 2 a 13). **El patrón se confirma.**
+- Dentro de cada familia la categoría es siempre la misma. Los títulos solo difieren en la palabra del color (4 familias, p. ej. lonchera rosada/negra/azul).
+- Las ofertas de **Fulfillment** (`-FF`) tienen su propio producto (otra base), así que quedan como familia aparte.
+- **Eje de variante:** en todas las categorías usadas el único atributo de variante es `color_80` (lista de valores de Ripley; obligatorio en casi todas). Talla no es variante en estas categorías.
+- Árbol de categorías: 3.606. Atributos: 38.907 filas (categoría × atributo). La consulta de catálogo `GET /api/products?product_references=SKU|…` devolvió vacío (formato de la consulta por revisar; no hace falta para agrupar).
+- Aviso: el primer informe del diagnóstico decía «0 familias» por un error de mi expresión regular en el propio diagnóstico (no de los datos). Corregido al leer la lista completa.
+
+**Decisión:** la fase 1 agrupa **automáticamente por la base de `product_sku`**, con vista previa y agrupado manual para corregir. Eje de variante: Color.
