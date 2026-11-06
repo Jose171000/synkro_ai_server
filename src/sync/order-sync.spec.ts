@@ -28,7 +28,7 @@ const cuenta = (over: any = {}) => ({
     owner: { id: 'u1' }, store: { id: 't1' }, createdAt: new Date('2026-01-01T00:00:00Z'), ...over,
 });
 
-async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: any[] } = {}) {
+async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: any[]; changeRequests?: any } = {}) {
     const conexiones = opts.conexiones ?? [cuenta()];
     const producto = opts.producto ?? { id: 'p1', sku: 'SKU-1', name: 'Gafas', stock: 5 };
     const ventas: any[] = [];
@@ -58,6 +58,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
     const repoProductos = {
         findOne: jest.fn(async () => producto),
         save: jest.fn(async (p: any) => p),
+        update: jest.fn(),
     };
     const repoEnlaces = {
         findOne: jest.fn(async () => (opts.enlaces ?? [{ product: producto }])[0]),
@@ -91,7 +92,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
             { provide: FalabellaApiService, useValue: falabella },
             { provide: NotificationsService, useValue: { notify: jest.fn(async (u: string, a: any) => { avisos.push({ u, ...a }); }) } },
             { provide: SaleAlertsService, useValue: alertas },
-            { provide: ChangeRequestsService, useValue: {} },
+            { provide: ChangeRequestsService, useValue: opts.changeRequests ?? {} },
             { provide: StoresService, useValue: {} },
         ],
     }).compile();
@@ -587,6 +588,20 @@ describe('stock al cancelarse o devolverse una venta de Falabella', () => {
         expect(t.ventas[0].items[0]).toMatchObject({ repuesto: true });
     });
 
+    it('cancelada antes de salir: el stock se avisa a los OTROS canales, nunca al canal de la venta (ese ya devolvió su unidad)', async () => {
+        const t = await preparar();
+        t.repoEnlaces.find.mockResolvedValue([
+            { marketplace: 'falabella', connection: { id: 'c1' } },
+            { marketplace: 'mercadolibre', connection: { id: 'c2' } },
+        ]);
+        t.trabajos.length = 0;
+
+        await cambiarA(t, 'canceled');
+
+        const inventario = t.trabajos.filter((j: any) => j.n === 'inventory').map((j: any) => j.d.connectionId);
+        expect(inventario).toEqual(['c2']);
+    });
+
     it('cancelada después de enviarse: el stock NO vuelve solo, queda por reponer', async () => {
         const t = await preparar();
         await cambiarA(t, 'shipped');
@@ -626,5 +641,48 @@ describe('stock al cancelarse o devolverse una venta de Falabella', () => {
         await cambiarA(t, 'canceled');
 
         expect(t.producto.stock).toBe(4);
+    });
+});
+
+describe('reenviar el stock de Synkro a un canal que quedó con otro número', () => {
+    const enlace = (over: any = {}) => ({ id: 'l1', marketplace: 'falabella', syncStatus: 'published', pausedByUser: false, lastStockSynced: 417, connection: { id: 'c1' }, product: { id: 'p1' }, ...over });
+    const armar = async (enlaceOver: any = {}, revision = true) => {
+        const changeRequests = { isReviewMode: jest.fn(async () => revision), createStockResend: jest.fn(async () => ({ id: 'sol-1' })) };
+        const t = await construir({ producto: { id: 'p1', sku: '107-001-116', name: 'Silla', stock: 0 }, enlaces: [enlace(enlaceOver)], changeRequests });
+        return { ...t, changeRequests };
+    };
+
+    it('con el modo revisión encendido deja una solicitud pendiente con lo que tiene el canal y lo que tiene Synkro, sin tocar el canal', async () => {
+        const t = await armar();
+        const r = await t.service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1');
+
+        expect(r.pending).toBe(1);
+        expect(t.changeRequests.createStockResend).toHaveBeenCalledWith(
+            { userId: 'u1', storeId: 't1' }, expect.objectContaining({ stock: 0 }), { marketplace: 'falabella', connectionId: 'c1', channelStock: 417 },
+        );
+        expect(t.trabajos).toHaveLength(0);
+    });
+
+    it('con el modo revisión apagado manda el stock solo a ESA cuenta', async () => {
+        const t = await armar({}, false);
+        const r = await t.service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1');
+
+        expect(r.pending).toBeUndefined();
+        expect(t.trabajos).toEqual([{ n: 'inventory', d: { productId: 'p1', userId: 'u1', marketplace: 'falabella', connectionId: 'c1' } }]);
+        expect(t.changeRequests.createStockResend).not.toHaveBeenCalled();
+    });
+
+    it('si el canal ya tiene el mismo stock no hay nada que reenviar', async () => {
+        const t = await armar({ lastStockSynced: 0 });
+        await expect(t.service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('ya tiene el mismo stock');
+        expect(t.trabajos).toHaveLength(0);
+    });
+
+    it('una publicación pausada por la persona, de Ripley o que no es de la tienda no se toca', async () => {
+        await expect((await armar({ pausedByUser: true })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('La pausaste');
+        await expect((await armar({ marketplace: 'ripley' })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('Ripley');
+        const t = await armar();
+        t.repoEnlaces.findOne.mockResolvedValue(null as any);
+        await expect(t.service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('No se encontró');
     });
 });

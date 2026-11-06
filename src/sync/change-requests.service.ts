@@ -98,6 +98,28 @@ export class ChangeRequestsService {
     }
 
     /**
+     * Reenviar a UNA cuenta el stock que Synkro tiene, porque el canal quedó con otro número. Con el modo revisión encendido es una
+     * solicitud más (el valor ya está en el producto: aprobarla solo lo manda). Reemplaza a una pendiente anterior de lo mismo.
+     */
+    async createStockResend(scope: ChangeScope, product: Product, target: { marketplace: string; connectionId: string; channelStock: number | null }): Promise<SyncChangeRequest> {
+        await this.repository.update(
+            { product: { id: product.id }, connection: { id: target.connectionId }, field: 'stock', status: 'pending' },
+            { status: 'rejected', resultMessage: 'Reemplazada por un cambio más reciente.', resolvedAt: new Date() },
+        );
+        return this.repository.save(this.repository.create({
+            product: { id: product.id } as Product,
+            store: { id: scope.storeId } as Store,
+            connection: { id: target.connectionId } as MarketplaceConnection,
+            marketplace: target.marketplace,
+            field: 'stock',
+            previousValue: target.channelStock == null ? '' : String(target.channelStock),
+            newValue: String(product.stock),
+            status: 'pending',
+            requestedBy: { id: scope.userId } as User,
+        }));
+    }
+
+    /**
      * Las solicitudes de la tienda. Las anteriores a las tiendas no tienen
      * tienda asignada: se muestran a quien las pidió, para no perderlas.
      */

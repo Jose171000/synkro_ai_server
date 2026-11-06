@@ -421,6 +421,20 @@ export class SyncController {
         return this.syncService.publishBatchToFalabella(scopeOf(req), dto.connectionId, dto.productIds);
     }
 
+    @Post('listings/:id/resend-stock')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'Vuelve a mandar a UNA cuenta el stock que tiene Synkro, cuando el canal quedó con otro número',
+        description: 'Con el modo revisión encendido no toca el canal: crea una solicitud pendiente y responde 202.',
+    })
+    async resendListingStock(@Param('id') id: string, @Req() req, @Res({ passthrough: true }) res: Response) {
+        const result = await this.syncService.resendListingStock(scopeOf(req), id);
+        if (result.pending) res.status(HttpStatus.ACCEPTED);
+        return result;
+    }
+
     @Patch('products/:id/inventory')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

@@ -2538,6 +2538,31 @@ export class SyncService implements OnModuleInit {
         };
     }
 
+    /**
+     * El canal de una publicación tiene un stock distinto al de Synkro (alguien lo cambió allí, o un envío no llegó): vuelve a mandar
+     * el de Synkro a ESA cuenta. Con el modo revisión encendido queda como solicitud pendiente, igual que cualquier cambio de stock.
+     */
+    async resendListingStock(scope: SyncScope, linkId: string): Promise<{ pending?: number; message: string }> {
+        const link = await this.listingLinkRepository.findOne({
+            where: { id: linkId, connection: { store: { id: scope.storeId } } },
+            relations: { connection: true, product: true },
+        });
+        if (!link || !link.connection || !link.product) throw new NotFoundException('No se encontró esa publicación en esta tienda.');
+        if (!['published', 'paused'].includes(link.syncStatus)) throw new BadRequestException('Esa publicación no está activa en el canal.');
+        if (link.pausedByUser) throw new BadRequestException('La pausaste tú: reanúdala antes de reenviarle el stock.');
+        if (link.marketplace === 'ripley') throw new BadRequestException('Ripley todavía no recibe stock desde Synkro.');
+        const product = await this.findScopedProduct(scope, link.product.id);
+        if (link.lastStockSynced === product.stock) throw new BadRequestException(`El canal ya tiene el mismo stock que Synkro (${product.stock}).`);
+
+        const canal = nombreCanal(link.marketplace);
+        if (await this.changeRequests.isReviewMode(scope.storeId)) {
+            await this.changeRequests.createStockResend(scope, product, { marketplace: link.marketplace, connectionId: link.connection.id, channelStock: link.lastStockSynced ?? null });
+            return { pending: 1, message: `Reenvío en revisión: apruébalo en la pestaña Revisión para mandar ${product.stock} u. a ${canal}.` };
+        }
+        await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: link.marketplace, connectionId: link.connection.id });
+        return { message: `Enviando ${product.stock} u. a ${canal}.` };
+    }
+
     /** Programa el envío de stock y precio (con su descuento) de un producto a una cuenta de un canal. */
     async programarEnvioDeInventario(userId: string, productId: string, marketplace: string, connectionId: string): Promise<void> {
         await this.syncQueue.add('inventory', { productId, userId, marketplace, connectionId });
@@ -3532,7 +3557,7 @@ export class SyncService implements OnModuleInit {
         try {
             const accion = accionDeReposicion(estadoAntes, estadoAhora);
             if (accion === 'ninguna') return;
-            const orden = await this.orderRepository.findOne({ where: { id: ordenId }, relations: { owner: true } });
+            const orden = await this.orderRepository.findOne({ where: { id: ordenId }, relations: { owner: true, connection: true } });
             if (!orden || !Array.isArray(orden.items)) return;
             const lineas = orden.items as OrderLine[];
             if (!lineas.some(lineaPendienteDeResolver)) return;
@@ -3541,7 +3566,10 @@ export class SyncService implements OnModuleInit {
             for (const l of lineas) {
                 if (!lineaPendienteDeResolver(l)) { nuevas.push(l); continue; }
                 if (accion === 'por_reponer') { nuevas.push({ ...l, porReponer: true }); continue; }
-                const r = await this.devolverStockAlProducto(orden.owner?.id, l.productId!, Number(l.quantity) || 0);
+                // Una venta cancelada ANTES de salir: el canal de la venta ya devuelve esa unidad a su propia publicación. Synkro solo
+                // actualiza su stock y avisa a los DEMÁS canales; mandarle al mismo canal el número de Synkro lo pisaría (y si el de
+                // Synkro está desfasado, dejaría la publicación con un stock equivocado).
+                const r = await this.devolverStockAlProducto(orden.owner?.id, l.productId!, Number(l.quantity) || 0, orden.connection?.id ?? '');
                 nuevas.push(r ? { ...l, repuesto: true } : l);
                 if (r) console.log(`[Sync] Venta ${orden.marketplace} ${orden.externalId} ${estadoAhora} sin haberse enviado: ${l.quantity}x ${l.sku} → stock ${r.despues}`);
             }
@@ -3570,15 +3598,15 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Suma unidades al stock de un producto y lo manda a todas las cuentas donde está publicado. */
-    private async devolverStockAlProducto(userId: string | undefined, productId: string, cantidad: number): Promise<{ antes: number; despues: number } | null> {
+    private async devolverStockAlProducto(userId: string | undefined, productId: string, cantidad: number, exceptConnectionId = ''): Promise<{ antes: number; despues: number } | null> {
         if (!cantidad) return null;
         const producto = await this.productRepository.findOne({ where: { id: productId } });
         if (!producto) return null;
         const antes = producto.stock;
         producto.stock = antes + cantidad;
         await this.productRepository.save(producto);
-        // El stock vuelve a todas las cuentas, también a la de la venta: el canal no lo repone solo.
-        if (userId) await this.propagateStock(userId, producto.id, '');
+        // Sin cuenta excluida (confirmación a mano de un producto que volvió al almacén) llega a todas las cuentas.
+        if (userId) await this.propagateStock(userId, producto.id, exceptConnectionId);
         return { antes, despues: producto.stock };
     }
 
