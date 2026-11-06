@@ -12,7 +12,7 @@ function construir(conSheet = false) {
         getRawOne: jest.fn(async () => ({ last: null })),
     };
     const repoOrdenes = { createQueryBuilder: jest.fn(() => qb) };
-    const service = new ReportsService(repoOrdenes as any, {} as any, {} as any, {} as any);
+    const service = new ReportsService(repoOrdenes as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     (service as any).legacyProfile = jest.fn(async () => (conSheet ? { sheetCsvUrl: 'http://sheet' } : null));
     (service as any).fetchSheetRows = jest.fn(async () => [{ date: '2026-10-05', channel: null, sales: 10, orders: 1 }]);
     return { service, condiciones, selects, hoja: (service as any).fetchSheetRows };

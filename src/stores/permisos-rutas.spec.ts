@@ -41,6 +41,9 @@ function rutasDeTienda() {
  */
 const TABLA: Record<string, string> = {
     'Sync GET /sync/connections': 'canales.ver',
+    'Sync GET /sync/ripley/diagnostico': 'canales.conectar',
+    'Sync POST /sync/listings/:id/resend-stock': 'inventario.editar',
+    'Sync POST /sync/orders/:id/restock': 'ventas.registrar',
     'Sync GET /sync/mercadolibre/auth-url': 'canales.conectar',
     'Sync POST /sync/yavendio/connect': 'canales.conectar',
     'Sync GET /sync/yavendio/import/products': 'canales.conectar',
@@ -127,6 +130,8 @@ const TABLA: Record<string, string> = {
     'Export GET /export/ai-content/:format': 'productos.descargar',
     'Reports GET /reports/config': 'analiticas.ver',
     'Reports GET /reports/sales': 'analiticas.ver',
+    'Reports GET /reports/top-products': 'analiticas.ver',
+    'Reports GET /reports/export': 'analiticas.ver',
 };
 
 describe('permisos de cada ruta de tienda', () => {

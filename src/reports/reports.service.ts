@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import axios from 'axios';
 import { MarketplaceOrder } from '../sync/entities/marketplace-order.entity';
 import { ESTADOS_DE_VENTA, ESTADOS_QUE_NO_CUENTAN } from '../sync/estado-de-venta';
@@ -11,6 +11,37 @@ import { ClientProfile } from '../admin/entities/client-profile.entity';
 import { parseAmount } from '../common/parse-amount';
 import { Store } from '../stores/entities/store.entity';
 import { StoresService } from '../stores/stores.service';
+import { Product } from '../products/entities/product.entity';
+import { ListingLink } from '../sync/entities/listing-link.entity';
+import {
+    acumularVentas, CriterioDeOrden, estimarStock, EstimacionDeStock, LineaDeVenta, ordenarGanadores, ritmoPorProducto,
+} from './productos-ganadores';
+
+export interface ProductoGanador {
+    productId: string | null;
+    sku: string | null;
+    name: string;
+    variant: string | null;
+    imageUrl: string | null;
+    /** Unidades e ingresos del periodo elegido (solo productos, sin envío). */
+    units: number;
+    revenue: number;
+    orders: number;
+    /** Qué parte de los ingresos del periodo representa (en %). */
+    share: number;
+    /** Stock en Synkro (puede diferir del que tiene cada canal). null si el producto ya no está en el catálogo. */
+    stock: number | null;
+    estimate: EstimacionDeStock;
+}
+
+export interface ProductosGanadoresInforme {
+    range: { from: string; to: string };
+    sort: CriterioDeOrden;
+    /** Los días sobre los que se mide el ritmo de venta para estimar cuándo se agota el stock. */
+    paceWindowDays: number;
+    totals: { units: number; revenue: number; products: number };
+    items: ProductoGanador[];
+}
 
 export interface DayPoint {
     date: string;          // YYYY-MM-DD
@@ -28,6 +59,10 @@ export class ReportsService {
         @InjectRepository(Store)
         private readonly storeRepository: Repository<Store>,
         private readonly stores: StoresService,
+        @InjectRepository(Product)
+        private readonly productRepository: Repository<Product>,
+        @InjectRepository(ListingLink)
+        private readonly linkRepository: Repository<ListingLink>,
     ) { }
 
     /**
@@ -327,6 +362,114 @@ export class ReportsService {
             costsHidden: true,
             shipping: { paidTotal: 0, byType: [], byChannel: [] },
             discounts: { orders: 0, amount: 0, sellerFunded: 0, ordersWithKnownFunding: 0, byChannel: [] },
+        };
+    }
+
+    /**
+     * Productos ganadores de la tienda: lo más vendido del periodo (por unidades o por ingresos), cuánto stock queda y en cuánto
+     * tiempo se agotaría según lo que vendió en los últimos 30 días. Las ventas canceladas o devueltas no cuentan.
+     */
+    async getTopProducts(storeId: string, from?: string, to?: string, status?: string, sort: CriterioDeOrden = 'units', limit = 200): Promise<ProductosGanadoresInforme> {
+        const estados = estadosPedidos(status);
+        const hoy = hoyEnLima();
+        const end = to || hoy;
+        const start = from || new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const FECHA = `("o"."orderDate" AT TIME ZONE 'America/Lima')::date`;
+        const inicioRitmo = new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+        const ventas = (desde: string, hasta: string, conEstados: boolean) => this.orderRepository.createQueryBuilder('o')
+            .select('"o"."id"', 'id')
+            .addSelect('"o"."items"', 'items')
+            .addSelect(`TO_CHAR(${FECHA}, 'YYYY-MM-DD')`, 'fecha')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .andWhere(`${FECHA} BETWEEN :desde AND :hasta`, { desde, hasta })
+            .andWhere(conEstados && estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
+            .getRawMany();
+        const [delPeriodo, delRitmo] = await Promise.all([ventas(start, end, true), ventas(inicioRitmo, hoy, false)]);
+
+        // Cada línea de cada venta, con su producto de Synkro si se conoce (por id o, si no, por SKU).
+        const lineasDe = (filas: any[]) => filas.flatMap((v) => (Array.isArray(v.items) ? v.items : []).map((l: any) => ({ v, l })));
+        const periodo = lineasDe(delPeriodo);
+        const ritmoLineas = lineasDe(delRitmo);
+        const todas = [...periodo, ...ritmoLineas];
+        const ids = [...new Set(todas.map(({ l }) => l?.productId).filter((x): x is string => typeof x === 'string' && !!x))];
+        const skus = [...new Set(todas.map(({ l }) => String(l?.sku ?? '').trim().toLowerCase()).filter(Boolean))];
+        const productos: Product[] = ids.length || skus.length
+            ? await this.productRepository.createQueryBuilder('p')
+                .leftJoinAndSelect('p.images', 'img')
+                .where('p.storeId = :storeId', { storeId })
+                .andWhere(new Brackets((q) => {
+                    if (ids.length) q.where('p.id IN (:...ids)', { ids });
+                    if (skus.length) q.orWhere('LOWER(TRIM(p.sku)) IN (:...skus)', { skus });
+                }))
+                .getMany()
+            : [];
+        const porId = new Map(productos.map((p) => [p.id, p]));
+        const porSku = new Map(productos.map((p) => [p.sku.trim().toLowerCase(), p]));
+        const resolver = (l: any): { clave: string; sku: string | null; titulo: string } => {
+            const sku = String(l?.sku ?? '').trim() || null;
+            const producto = (typeof l?.productId === 'string' ? porId.get(l.productId) : undefined) ?? (sku ? porSku.get(sku.toLowerCase()) : undefined);
+            return { clave: producto ? producto.id : sku ? `sku:${sku.toLowerCase()}` : '', sku, titulo: String(l?.title ?? '') };
+        };
+        const aLineas = (filas: { v: any; l: any }[]): LineaDeVenta[] => filas.map(({ v, l }) => ({
+            clave: resolver(l).clave,
+            cantidad: Number(l?.quantity) || 0,
+            ingreso: (Number(l?.unitPrice) || 0) * (Number(l?.quantity) || 0),
+            fecha: v.fecha,
+            pedido: String(v.id),
+        }));
+
+        const acumulado = acumularVentas(aLineas(periodo));
+        const ritmo = ritmoPorProducto(aLineas(ritmoLineas), hoy);
+
+        // Nombre y SKU de lo que no está en el catálogo: salen de la propia venta.
+        const dePropia = new Map<string, { sku: string | null; titulo: string }>();
+        for (const { l } of periodo) {
+            const r = resolver(l);
+            if (r.clave && !dePropia.has(r.clave)) dePropia.set(r.clave, { sku: r.sku, titulo: r.titulo });
+        }
+
+        // Foto: la del producto; si no tiene, la de su publicación en un canal.
+        const sinFoto = productos.filter((p) => !p.images?.length).map((p) => p.id);
+        const fotoDeEnlace = new Map<string, string>();
+        if (sinFoto.length) {
+            for (const e of await this.linkRepository.find({ where: { product: { id: In(sinFoto) } }, relations: { product: true } })) {
+                if (e.imageUrl && !fotoDeEnlace.has(e.product.id)) fotoDeEnlace.set(e.product.id, e.imageUrl);
+            }
+        }
+
+        const totalIngresos = [...acumulado.values()].reduce((t, a) => t + a.ingresos, 0);
+        const totalUnidades = [...acumulado.values()].reduce((t, a) => t + a.unidades, 0);
+        const items = [...acumulado.values()].map((a) => {
+            const producto = a.clave.startsWith('sku:') ? null : porId.get(a.clave) ?? null;
+            const propia = dePropia.get(a.clave);
+            const stock = producto ? producto.stock : null;
+            const estimate = estimarStock(stock, ritmo.get(a.clave), hoy);
+            const item: ProductoGanador = {
+                productId: producto?.id ?? null,
+                sku: producto?.sku ?? propia?.sku ?? null,
+                name: producto?.name ?? propia?.titulo ?? 'Producto sin nombre',
+                variant: producto?.variantValues ? Object.values(producto.variantValues).join(' / ') : null,
+                imageUrl: producto ? (producto.images?.[0]?.url ?? fotoDeEnlace.get(producto.id) ?? null) : null,
+                units: a.unidades,
+                revenue: a.ingresos,
+                orders: a.pedidos,
+                share: totalIngresos ? Math.round((a.ingresos / totalIngresos) * 1000) / 10 : 0,
+                stock,
+                estimate,
+            };
+            return item;
+        });
+        const ordenados = ordenarGanadores(
+            items.map((i) => ({ ...i, unidades: i.units, ingresos: i.revenue, stockEstimado: i.estimate })),
+            sort,
+        ).slice(0, Math.max(1, Math.min(limit, 500)));
+        return {
+            range: { from: start, to: end },
+            sort,
+            paceWindowDays: 30,
+            totals: { units: totalUnidades, revenue: Math.round(totalIngresos * 100) / 100, products: acumulado.size },
+            items: ordenados.map(({ unidades, ingresos, stockEstimado, ...resto }) => resto),
         };
     }
 
