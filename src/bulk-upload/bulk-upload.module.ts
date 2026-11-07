@@ -22,6 +22,7 @@ import { StoresModule } from '../stores/stores.module';
 import { BulkBatch } from './entities/bulk-batch.entity';
 import { BulkBatchItem } from './entities/bulk-batch-item.entity';
 import { BulkBatchService } from './bulk-batch.service';
+import { EdicionMasivaService } from './edicion-masiva.service';
 
 @Module({
     imports: [
@@ -47,6 +48,6 @@ import { BulkBatchService } from './bulk-batch.service';
         CategoryProcessor,
         ProductEditProcessor,
         CategoryEditProcessor,
-        BatchNotificationService, BulkBatchService, SectionAccessGuard],
+        BatchNotificationService, BulkBatchService, EdicionMasivaService, SectionAccessGuard],
 })
 export class BulkUploadModule { }

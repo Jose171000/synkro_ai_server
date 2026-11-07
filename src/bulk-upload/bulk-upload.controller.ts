@@ -28,6 +28,7 @@ import { BatchNotificationService } from './batch-notification.service';
 import { allSettledConLimite, concurrenciaDeFotos } from './concurrencia-fotos';
 import { BulkBatchService } from './bulk-batch.service';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
+import { EdicionMasivaService } from './edicion-masiva.service';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
 /** Canales donde la carga masiva puede publicar sola. */
@@ -51,6 +52,7 @@ export class BulkUploadController {
         private readonly skuGenerator: SkuGeneratorService,
         private readonly batchNotification: BatchNotificationService,
         private readonly bulkBatch: BulkBatchService,
+        private readonly edicionMasiva: EdicionMasivaService,
     ) { }
 
     // ─────────────────────────────────────────────────────────────
@@ -361,6 +363,48 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             reintentados: lote.fallidos.length,
             falabellaReenviados: lote.falabellaPendientes.length,
         };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Edición masiva con vista previa (por tienda; precio y stock pasan por el modo revisión)
+    // ─────────────────────────────────────────────────────────────
+    @Get('products/bulk-edit/template')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @ApiOperation({ summary: 'Excel con los productos actuales de la tienda (SKU, nombre, precio, stock), listo para editar y volver a subir' })
+    async plantillaDeEdicion(@Req() req, @Res() res: Response) {
+        const buffer = await this.edicionMasiva.plantilla(req.store.storeId);
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="productos-para-editar.xlsx"',
+        });
+        return res.send(buffer);
+    }
+
+    @Post('products/bulk-edit/preview')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Vista previa de la edición masiva: qué cambiaría en cada producto. No escribe nada.' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @UseInterceptors(FileInterceptor('file'))
+    async vistaPreviaDeEdicion(@UploadedFile() file: Express.Multer.File, @Req() req) {
+        if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
+        return this.edicionMasiva.procesar({ userId: req.user.id, storeId: req.store.storeId }, file.buffer, false, req.store.permissions.includes('inventario.editar'));
+    }
+
+    @Post('products/bulk-edit/apply')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Aplica la edición masiva. Precio y stock siguen el modo revisión de la tienda (quedan pendientes de aprobar si está encendido).' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @UseInterceptors(FileInterceptor('file'))
+    async aplicarEdicion(@UploadedFile() file: Express.Multer.File, @Req() req) {
+        if (!file) throw new BadRequestException('El archivo Excel es obligatorio.');
+        return this.edicionMasiva.procesar({ userId: req.user.id, storeId: req.store.storeId }, file.buffer, true, req.store.permissions.includes('inventario.editar'));
     }
 
     @Post('products/edit')

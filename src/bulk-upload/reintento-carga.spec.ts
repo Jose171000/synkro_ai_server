@@ -9,7 +9,7 @@ function construir(paraReintentar: any) {
         marcarReintentados: jest.fn(async () => undefined),
     };
     const lote: any = { iniciar: jest.fn(async () => undefined) };
-    const controller = new BulkUploadController(cola, cola, cola, cola, {} as any, {} as any, {} as any, {} as any, {} as any, lote, bulkBatch);
+    const controller = new BulkUploadController(cola, cola, cola, cola, {} as any, {} as any, {} as any, {} as any, {} as any, lote, bulkBatch, {} as any);
     return { controller, cola, bulkBatch, lote };
 }
 
