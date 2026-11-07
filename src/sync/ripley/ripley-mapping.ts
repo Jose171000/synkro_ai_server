@@ -210,6 +210,33 @@ export function normalizarPedidoRipley(orden: any, monedaDeLaCuenta?: string | n
 
 // ── Ofertas (publicaciones) ───────────────────────────────────────────────
 
+/** Solo se aceptan fotos servidas por Mirakl por https (la IA y el navegador las abren: no deben apuntar a cualquier sitio). */
+export function esFotoDeMirakl(url: unknown): url is string {
+    if (typeof url !== 'string') return false;
+    try {
+        const u = new URL(url);
+        return u.protocol === 'https:' && (u.hostname === 'mirakl.net' || u.hostname.endsWith('.mirakl.net'));
+    } catch { return false; }
+}
+
+/**
+ * Las fotos de la respuesta de P11 (GET /api/products/offers): código de producto → primera foto válida.
+ * Se busca de forma tolerante porque Mirakl las puede dar como lista o como objeto (product_media) según la versión.
+ */
+export function fotosDeRespuestaP11(respuesta: any): Map<string, string> {
+    const fotos = new Map<string, string>();
+    const productos: any[] = Array.isArray(respuesta?.products) ? respuesta.products : [];
+    for (const p of productos) {
+        const codigo = texto(p?.product_sku) ?? texto(p?.product_id) ?? texto(p?.sku);
+        if (!codigo) continue;
+        const media = p?.product_media ?? p?.media ?? [];
+        const lista: any[] = Array.isArray(media) ? media : [media];
+        const url = lista.map((m) => (typeof m === 'string' ? m : m?.media_url ?? m?.url)).find(esFotoDeMirakl);
+        if (url) fotos.set(codigo, url);
+    }
+    return fotos;
+}
+
 /** Una oferta de Ripley (GET /api/offers) como fila por SKU. Sin SKU de la tienda no se puede enlazar: devuelve null. */
 export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null): ChannelListingRow | null {
     const sku = texto(oferta?.shop_sku);
@@ -233,5 +260,6 @@ export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null
         currency: texto(oferta?.currency_iso_code) ?? monedaDeLaCuenta ?? null,
         // «PMP20001695273-5»: la base es la familia de variantes.
         ...(familiaDeProducto(oferta?.product_sku) ? { groupKey: familiaDeProducto(oferta?.product_sku)!.base } : {}),
+        ...(texto(oferta?.product_sku) ? { productSku: texto(oferta?.product_sku) } : {}),
     };
 }

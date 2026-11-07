@@ -15,9 +15,13 @@ import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
 import { RipleyApiService } from '../ripley/ripley-api.service';
 import { planearGruposDeRipley } from '../ripley/variantes-ripley';
+import type { ColoresDeFamilia, FamiliaParaColores } from '../../ai/product-vision.service';
+
+/** Cuántas familias se miran con IA por petición (cada una es una llamada de visión). */
+export const MAX_FAMILIAS_PARA_COLORES = 8;
 import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from '../falabella-variant-import.service';
 import { GrupoSinResolver } from '../falabella/variantes-falabella';
-import { HOST_DE_RIPLEY_POR_DEFECTO, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
+import { HOST_DE_RIPLEY_POR_DEFECTO, esFotoDeMirakl, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
 import { resolverMoneda } from '../../common/currency';
 import { importeDeProductos, OrderLine } from '../order-details';
 import {
@@ -132,6 +136,23 @@ export class EcommerceSyncService implements OnModuleInit {
         return { site: connection.externalUserId, token: connection.accessToken };
     }
 
+    /**
+     * Sugerencia de color por foto para las familias de Ripley que no se pudieron resolver por el título. No escribe nada:
+     * la persona revisa cada sugerencia antes de aplicarla. Solo se miran fotos servidas por Mirakl (nunca direcciones ajenas).
+     */
+    async sugerirColoresDeRipley(familias: FamiliaParaColores[]): Promise<ColoresDeFamilia[]> {
+        if (!this.sync.coloresConIA) throw new BadRequestException('La sugerencia de colores con IA no está disponible en este momento.');
+        const validas = familias
+            .slice(0, MAX_FAMILIAS_PARA_COLORES)
+            .map((f) => ({
+                parentSku: String(f.parentSku ?? '').slice(0, 120),
+                fichas: (f.fichas ?? []).slice(0, 24).map((x) => ({ sku: String(x.sku ?? ''), nombre: String(x.nombre ?? '').slice(0, 200), imagen: esFotoDeMirakl(x.imagen) ? x.imagen : '' })),
+            }))
+            .filter((f) => f.parentSku && f.fichas.length >= 2);
+        if (!validas.length) return [];
+        return this.sync.coloresConIA(validas);
+    }
+
     /** SOLO LECTURA: lo que Ripley dice sobre variantes, categorías y atributos (reconocimiento previo al agrupado de variantes). */
     async diagnosticoDeRipley(scope: SyncScope, connectionId?: string) {
         const connection = await this.sync.resolveConnection(scope.storeId, 'ripley', connectionId);
@@ -199,6 +220,14 @@ export class EcommerceSyncService implements OnModuleInit {
         const client = this.clientOf(marketplace);
         const connection = await this.sync.resolveConnection(scope.storeId, marketplace, connectionId);
         const lectura = await client.listListings(this.authOf(connection));
+        // Ripley no trae fotos en sus ofertas: se piden aparte (solo lectura) para los productos nuevos y para las fichas de «Estructurar».
+        if (marketplace === 'ripley') {
+            const fotos = await (client as RipleyApiService).fotosDeProductos(this.authOf(connection), lectura.rows.map((r) => r.productSku ?? ''));
+            for (const fila of lectura.rows) {
+                const url = fila.productSku ? fotos.get(fila.productSku) : undefined;
+                if (url) { fila.imageUrl = url; fila.images = [url]; }
+            }
+        }
 
         const resumen = {
             publicaciones: lectura.productos,

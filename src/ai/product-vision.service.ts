@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
+import { normalizar } from '../products/variantes';
 
 /** Lo que la IA puede ver en las fotos de un producto. */
 export interface ProductVision {
@@ -155,6 +156,48 @@ export function normalizarDeteccion(crudo: any, totalFotos = MAX_FOTOS_DETECCION
     return { nivel, recomendar, ejes: recomendar ? ejes : [], fotos: recomendar ? fotos : [], resumen: texto(crudo.resumen).slice(0, 300) };
 }
 
+
+/** Una familia de ofertas del mismo producto de la que se quiere saber el color de cada una. */
+export interface FamiliaParaColores {
+    parentSku: string;
+    fichas: { sku: string; nombre: string; imagen: string }[];
+}
+export interface ColoresDeFamilia {
+    parentSku: string;
+    /** SKU de la oferta → color. Vacío si la IA no pudo distinguirlos con seguridad. */
+    colores: Record<string, string>;
+}
+
+const MAX_PALABRAS_DE_COLOR = 3;
+
+/**
+ * Valida lo que devuelva la IA: cada oferta debe traer un color corto y TODOS deben ser distintos entre sí. Si falla algo, la
+ * familia queda sin sugerencia (nunca se completa a medias ni se inventa).
+ */
+export function normalizarColores(crudo: any, skus: string[]): Record<string, string> {
+    const lista: any[] = Array.isArray(crudo?.fotos) ? crudo.fotos : [];
+    const colores: Record<string, string> = {};
+    const vistos = new Set<string>();
+    for (let i = 0; i < skus.length; i++) {
+        // La IA responde por número de foto (1, 2, 3…): el número manda, no un SKU que pudiera inventar.
+        const f = lista.find((x) => Number(x?.foto) === i + 1);
+        const bruto = typeof f?.color === 'string' ? f.color.trim().replace(/\s+/g, ' ') : '';
+        if (!bruto || bruto.length > 30 || bruto.split(' ').length > MAX_PALABRAS_DE_COLOR) return {};
+        const color = bruto.charAt(0).toUpperCase() + bruto.slice(1).toLowerCase();
+        if (vistos.has(normalizar(color))) return {};
+        vistos.add(normalizar(color));
+        colores[skus[i]] = color;
+    }
+    return colores;
+}
+
+const SISTEMA_COLORES = `Eres un revisor de catálogo. Recibes una foto por cada versión de un mismo producto que solo cambia de COLOR.
+Di el color principal que muestra cada foto, en español, con una o dos palabras (por ejemplo «Rosado», «Azul marino»).
+Reglas estrictas:
+- Cada foto debe llevar un color distinto de las demás. Si dos fotos parecen del mismo color, o no distingues el color de alguna, devuelve null en esa foto.
+- No uses nombres de marca ni de estampado: solo el color predominante.
+- Responde únicamente con un JSON válido.`;
+
 /**
  * Mira las fotos del producto y extrae lo que el cliente no escribió.
  * Nunca lanza: si falla, el flujo sigue con lo que el cliente haya escrito.
@@ -199,6 +242,40 @@ export class ProductVisionService {
             this.logger.warn(`No se pudo comprobar si el producto tiene variantes: ${error?.message}`);
             return null;
         }
+    }
+
+
+    /**
+     * Sugiere el color de cada oferta de una familia mirando su foto. Solo es una sugerencia: la persona la revisa antes de aplicarla.
+     * Nunca lanza: si falla o no es concluyente, esa familia sale con los colores vacíos.
+     */
+    async coloresDeFotos(familias: FamiliaParaColores[]): Promise<ColoresDeFamilia[]> {
+        return Promise.all(familias.map(async (fam): Promise<ColoresDeFamilia> => {
+            const fichas = fam.fichas.filter((f) => /^https:\/\//i.test(f.imagen ?? ''));
+            if (fichas.length < 2 || fichas.length !== fam.fichas.length) return { parentSku: fam.parentSku, colores: {} };
+            try {
+                const respuesta = await this.openai.chat.completions.create({
+                    model: process.env.VISION_MODEL || 'gpt-4o-mini',
+                    response_format: { type: 'json_object' },
+                    temperature: 0,
+                    messages: [
+                        { role: 'system', content: SISTEMA_COLORES },
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: `Hay ${fichas.length} fotos, numeradas en el orden en que llegan. Devuelve exactamente este JSON: { "fotos": [ { "foto": 1, "color": "Rosado" } ] }` },
+                                ...fichas.map((f) => ({ type: 'image_url' as const, image_url: { url: f.imagen, detail: 'low' as const } })),
+                            ],
+                        },
+                    ],
+                });
+                const crudo = JSON.parse(respuesta.choices[0]?.message?.content || '{}');
+                return { parentSku: fam.parentSku, colores: normalizarColores(crudo, fichas.map((f) => f.sku)) };
+            } catch (error: any) {
+                this.logger.warn(`No se pudieron sugerir colores para ${fam.parentSku}: ${error?.message}`);
+                return { parentSku: fam.parentSku, colores: {} };
+            }
+        }));
     }
 
     async analyze(imageUrls: string[], hint?: { name?: string; description?: string }): Promise<ProductVision | null> {

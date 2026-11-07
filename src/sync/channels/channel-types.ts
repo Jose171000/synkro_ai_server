@@ -55,6 +55,8 @@ export interface ChannelListingRow {
     currency: string | null;
     /** Familia de variantes a la que pertenece, si el canal la informa (Ripley: la base del código de producto). */
     groupKey?: string | null;
+    /** Código del producto en el catálogo del canal (Ripley: «PMP20001695273-5»), para pedirle sus fotos. */
+    productSku?: string | null;
 }
 
 export interface ChannelListingsResult {

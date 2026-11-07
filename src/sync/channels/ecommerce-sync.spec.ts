@@ -65,6 +65,7 @@ function construir(over: { conexiones?: any[]; productos?: any[]; enlaces?: any[
         channel: 'woocommerce',
         verify: jest.fn().mockResolvedValue({ accountId: 'mitienda.com', nickname: 'mitienda.com', currency: 'PEN' }),
         listListings: jest.fn().mockResolvedValue({ rows: [], sinSku: 0, productos: 0, incompleto: false }),
+        fotosDeProductos: jest.fn().mockResolvedValue(new Map()),
         setInventory: jest.fn().mockResolvedValue(undefined),
         listOrders: jest.fn().mockResolvedValue({ orders: [], incompleto: false }),
     };
@@ -631,6 +632,30 @@ describe('Ripley: variantes al importar', () => {
         expect(r.variantes?.sinResolver.map((g) => g.parentSku)).toEqual(['PMP2']);
         expect(productos).toHaveLength(0);
         expect(variantImport.aplicar).not.toHaveBeenCalled();
+    });
+
+    it('las fichas sin resolver llevan la foto que Ripley da de cada producto', async () => {
+        const { service, cliente } = construir({ conexiones: [cuentaRipley()], variantImport: falsoAgrupador() });
+        cliente.listListings.mockResolvedValue(lectura([
+            ofertaDe('MOR-1', 'MORRAL DESSY', 'PMP2', { productSku: 'PMP2-1' }),
+            ofertaDe('MOR-2', 'MORRAL DESSY', 'PMP2', { productSku: 'PMP2-2' }),
+        ]));
+        cliente.fotosDeProductos.mockResolvedValue(new Map([['PMP2-1', 'https://x.mirakl.net/a.webp'], ['PMP2-2', 'https://x.mirakl.net/b.webp']]));
+
+        const r = await service.importListings(SCOPE, 'ripley', undefined, { dryRun: true });
+
+        expect(r.variantes?.sinResolver[0].fichas?.map((f) => f.imagen)).toEqual(['https://x.mirakl.net/a.webp', 'https://x.mirakl.net/b.webp']);
+    });
+
+    it('sugiere colores solo con fotos de Mirakl y con un máximo de familias', async () => {
+        const { service } = construir({ conexiones: [cuentaRipley()] });
+        const coloresConIA = jest.fn(async (f: any[]) => f.map((x) => ({ parentSku: x.parentSku, colores: {} })));
+        (service as any).sync.coloresConIA = coloresConIA;
+        const fam = (n: string) => ({ parentSku: n, fichas: [{ sku: 'a', nombre: 'a', imagen: 'https://x.mirakl.net/a.jpg' }, { sku: 'b', nombre: 'b', imagen: 'https://evil.com/b.jpg' }] });
+        await service.sugerirColoresDeRipley(Array.from({ length: 12 }, (_, i) => fam('F' + i)));
+        const enviadas = coloresConIA.mock.calls[0][0];
+        expect(enviadas).toHaveLength(8);
+        expect(enviadas[0].fichas[1].imagen).toBe('');
     });
 
     it('al importar crea los productos y los agrupa en el mismo paso, sobre los productos recién creados', async () => {

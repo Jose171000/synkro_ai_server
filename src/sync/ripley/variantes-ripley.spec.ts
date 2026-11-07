@@ -91,3 +91,33 @@ describe('planearGruposDeRipley', () => {
         expect(r.grupos.map((g) => [g.parentSku, g.variants.length])).toEqual([['F1', 2], ['F2', 2]]);
     });
 });
+
+describe('fotos de Ripley (P11)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { fotosDeRespuestaP11, esFotoDeMirakl } = require('./ripley-mapping');
+    const oferta = (over: any = {}) => ({ shop_sku: 'BOL1', offer_id: 1, product_title: 'Bolso', price: 89, quantity: 3, ...over });
+
+    it('toma la primera foto válida de cada producto, venga como lista u objeto', () => {
+        const r = fotosDeRespuestaP11({
+            products: [
+                { product_sku: 'PMP1-1', product_media: [{ media_url: 'https://ripleyperu-prod.mirakl.net/img/a.webp' }] },
+                { product_sku: 'PMP1-2', product_media: { media_url: 'https://ripleyperu-prod.mirakl.net/img/b.webp' } },
+                { product_sku: 'PMP1-3', product_media: [{ media_url: 'http://ripleyperu-prod.mirakl.net/img/c.webp' }, { media_url: 'https://evil.com/x.jpg' }] },
+                { product_sku: 'PMP1-4' },
+            ],
+        });
+        expect([...r.entries()]).toEqual([['PMP1-1', 'https://ripleyperu-prod.mirakl.net/img/a.webp'], ['PMP1-2', 'https://ripleyperu-prod.mirakl.net/img/b.webp']]);
+    });
+
+    it('solo acepta https de mirakl.net (ni http, ni dominios parecidos)', () => {
+        expect(esFotoDeMirakl('https://x.mirakl.net/a.jpg')).toBe(true);
+        expect(esFotoDeMirakl('https://mirakl.net.evil.com/a.jpg')).toBe(false);
+        expect(esFotoDeMirakl('https://evilmirakl.net/a.jpg')).toBe(false);
+        expect(esFotoDeMirakl('http://x.mirakl.net/a.jpg')).toBe(false);
+        expect(esFotoDeMirakl(null)).toBe(false);
+    });
+
+    it('guarda el código del producto en la fila', () => {
+        expect(filaDeOfertaRipley(oferta({ product_sku: 'PMP9-3' }))?.productSku).toBe('PMP9-3');
+    });
+});

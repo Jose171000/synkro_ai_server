@@ -9,7 +9,7 @@ import {
     ChannelOrdersQuery,
     ChannelOrdersResult,
 } from '../channels/channel-types';
-import { filaDeOfertaRipley, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
+import { filaDeOfertaRipley, fotosDeRespuestaP11, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
 
 /** Ripley pagina de a 100 como máximo. */
 const PAGINA = 100;
@@ -98,6 +98,24 @@ export class RipleyApiService implements ChannelClient {
             if (ofertas.length < PAGINA || (Number.isFinite(total) && offset + PAGINA >= total)) break;
         }
         return { rows, sinSku, productos: leidas, incompleto };
+    }
+
+    /**
+     * Una foto por producto del catálogo de Ripley (P11, solo lectura): código de producto → dirección de la imagen.
+     * Se pide de a 100 códigos. Si Ripley falla en un lote, ese lote queda sin fotos y el resto sigue.
+     */
+    async fotosDeProductos(auth: ChannelAuth, productSkus: string[]): Promise<Map<string, string>> {
+        const fotos = new Map<string, string>();
+        const unicos = [...new Set(productSkus.filter(Boolean))];
+        for (let i = 0; i < unicos.length; i += PAGINA) {
+            try {
+                const r = await this.get<any>(auth, '/api/products/offers', { product_ids: unicos.slice(i, i + PAGINA).join(',') });
+                for (const [codigo, url] of fotosDeRespuestaP11(r)) fotos.set(codigo, url);
+            } catch (error: any) {
+                this.logger.warn(`No se pudieron leer las fotos de ${Math.min(PAGINA, unicos.length - i)} productos de Ripley: ${error?.message}`);
+            }
+        }
+        return fotos;
     }
 
     /** Los pedidos (OR11). Ripley filtra por fecha de actualización; el filtro por creación se completa aquí. */

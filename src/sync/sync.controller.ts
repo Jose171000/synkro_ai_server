@@ -30,6 +30,7 @@ import { DuplicatesActionDto } from './dto/duplicates-action.dto';
 import { FalabellaVariantImportService } from './falabella-variant-import.service';
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ImportFalabellaDto } from './dto/import-falabella.dto';
+import { SugerirColoresDto } from './dto/sugerir-colores.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
@@ -232,6 +233,18 @@ export class SyncController {
     @ApiQuery({ name: 'connectionId', required: false })
     ripleyDiagnostico(@Req() req, @Query('connectionId') connectionId?: string) {
         return this.ecommerce.diagnosticoDeRipley(scopeOf(req), connectionId);
+    }
+
+    @Post('ripley/colores-ia')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.conectar')
+    @ApiOperation({
+        summary: 'Sugiere el color de cada oferta de familias de Ripley mirando sus fotos',
+        description: 'Solo sugiere: no escribe nada. Hasta 8 familias por llamada; solo se miran fotos de Mirakl.',
+    })
+    ripleyColoresIA(@Body() dto: SugerirColoresDto) {
+        return this.ecommerce.sugerirColoresDeRipley(dto.familias as any);
     }
 
     @Post('channels/:marketplace/listings/import')

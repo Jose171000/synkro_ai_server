@@ -702,6 +702,8 @@ export class SyncService implements OnModuleInit {
      */
     /** Lo registra el módulo de IA: propone los ejes de una familia cuando la página pública no los dio. */
     proponerEjesConIA?: ProponerEjesConIA;
+    /** Lo registra el módulo de IA: sugiere el color de cada oferta de una familia de Ripley mirando sus fotos. */
+    coloresConIA?: (familias: import('../ai/product-vision.service').FamiliaParaColores[]) => Promise<import('../ai/product-vision.service').ColoresDeFamilia[]>;
 
     async importFalabellaListings(
         scope: SyncScope,
