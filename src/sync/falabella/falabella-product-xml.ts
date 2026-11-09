@@ -124,6 +124,11 @@ export function esCampoDeVariacion(nombre: string): boolean {
     return /variant$/i.test(nombre);
 }
 
+/** «Color», «ColorBasico», «Talla» (o «Size»): lo que distingue a las variantes de calzado y ropa. */
+export function esCampoDeTallaYColor(nombre: string): boolean {
+    return /^(color|colorbasico|talla|size)$/i.test(String(nombre ?? '').replace(/[^a-z0-9]/gi, ''));
+}
+
 function buildProduct(product: FalabellaProductInput, options: BuildOptions): string {
     const businessUnit = [
         tag('OperatorCode', options.operatorCode),
@@ -135,9 +140,14 @@ function buildProduct(product: FalabellaProductInput, options: BuildOptions): st
     // Los campos de variación («ColorVariant», «TamanoCamaVariant»…) van a nivel de Product, no dentro de ProductData: dentro
     // Falabella los rechaza como vacíos aunque lleven valor (según su documentación, color y tamaño de un producto con variaciones
     // se informan a nivel de Product).
+    // Calzado y ropa no traen campos «…Variant»: varían por «Color», «ColorBasico» y «Talla». Cuando la ficha es parte de un grupo
+    // (lleva ParentSku) y no hay campos «…Variant», Falabella los pide a nivel de Product y rechaza los de ProductData como vacíos
+    // («Field 'Color' cannot be empty»).
     const entradas = Object.entries(product.extraAttributes ?? {});
-    const extras = entradas.filter(([name]) => !esCampoDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
-    const deVariacion = entradas.filter(([name]) => esCampoDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
+    const porTallaYColor = !!product.parentSku && !entradas.some(([name]) => esCampoDeVariacion(name));
+    const esDeVariacion = (name: string) => esCampoDeVariacion(name) || (porTallaYColor && esCampoDeTallaYColor(name));
+    const extras = entradas.filter(([name]) => !esDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
+    const deVariacion = entradas.filter(([name]) => esDeVariacion(name)).map(([name, value]) => tag(name, value)).join('');
 
     const productData = [
         tag('ConditionType', product.conditionType ?? 'Nuevo'),

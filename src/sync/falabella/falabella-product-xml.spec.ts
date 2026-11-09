@@ -259,3 +259,35 @@ describe('campos de variación (…Variant)', () => {
         expect(xml).not.toContain('Variant');
     });
 });
+
+describe('calzado y ropa: Color, ColorBasico y Talla de una variante van a nivel de Product', () => {
+    const extras = { Genero: 'Mujer', Color: 'Negro', ColorBasico: 'Negro', Talla: '38', Model: 'Sandalia' };
+
+    it('con ParentSku (grupo) salen junto al ParentSku y no dentro de ProductData; el resto queda en ProductData', () => {
+        const xml = buildProductFeedXml([producto({ parentSku: 'SAN-DEM', extraAttributes: extras })], OPCIONES);
+        const productData = xml.match(/<ProductData>([\s\S]*?)<\/ProductData>/)![1];
+        expect(productData).toContain('<Genero>Mujer</Genero>');
+        expect(productData).toContain('<Model>Sandalia</Model>');
+        expect(productData).not.toMatch(/<(Color|ColorBasico|Talla)>/);
+        const antes = xml.slice(0, xml.indexOf('<ProductData>'));
+        expect(antes).toContain('<ParentSku>SAN-DEM</ParentSku>');
+        expect(antes).toContain('<Color>Negro</Color>');
+        expect(antes).toContain('<ColorBasico>Negro</ColorBasico>');
+        expect(antes).toContain('<Talla>38</Talla>');
+    });
+
+    it('sin ParentSku (ficha suelta) siguen dentro de ProductData, como antes', () => {
+        const xml = buildProductFeedXml([producto({ extraAttributes: extras })], OPCIONES);
+        const productData = xml.match(/<ProductData>([\s\S]*?)<\/ProductData>/)![1];
+        expect(productData).toContain('<Color>Negro</Color>');
+        expect(productData).toContain('<Talla>38</Talla>');
+    });
+
+    it('si la categoría trae campos «…Variant», Color y Talla se quedan en ProductData (solo se mueven los «…Variant»)', () => {
+        const xml = buildProductFeedXml([producto({ parentSku: 'P', extraAttributes: { ColorVariant: 'Blanco', Color: 'Azul', Talla: 'M' } })], OPCIONES);
+        const productData = xml.match(/<ProductData>([\s\S]*?)<\/ProductData>/)![1];
+        expect(productData).toContain('<Color>Azul</Color>');
+        expect(productData).not.toContain('ColorVariant');
+        expect(xml.slice(0, xml.indexOf('<ProductData>'))).toContain('<ColorVariant>Blanco</ColorVariant>');
+    });
+});
