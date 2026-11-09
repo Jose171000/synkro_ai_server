@@ -253,6 +253,39 @@ export class ProductGroupsService {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Lo común de un grupo
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Guarda en TODAS las variantes lo que es común a un grupo: la descripción original, la categoría, la subcategoría y los
+     * marketplaces destino. El nombre, el SKU, el precio, el stock y las fotos son de cada variante y no se tocan.
+     * Solo se aplica lo que viene; lo vacío no borra nada (igual que al editar un producto suelto).
+     */
+    async actualizarGeneral(
+        grupoId: string,
+        entrada: { description?: string; category?: string; subCategory?: string; targetMarketplaces?: string[] },
+        ambito: AmbitoDeGrupo,
+    ): Promise<{ saved: true; variantes: number }> {
+        const grupo = await this.groupRepository.findOne({ where: { id: grupoId }, relations: { store: true, owner: true } });
+        const esDeLaTienda = !!grupo && (grupo.store?.id === ambito.storeId || (!grupo.store && grupo.owner?.id === ambito.userId));
+        if (!grupo || !esDeLaTienda) throw new NotFoundException('Grupo no encontrado');
+
+        const cambios: Partial<Product> = {};
+        const descripcion = entrada.description?.trim();
+        if (entrada.description !== undefined && !descripcion) throw new BadRequestException('La descripción no puede quedar vacía.');
+        if (descripcion) cambios.description = descripcion;
+        if (entrada.category?.trim()) cambios.category = entrada.category.trim();
+        if (entrada.subCategory?.trim()) cambios.subCategory = entrada.subCategory.trim();
+        if (entrada.targetMarketplaces?.length) cambios.targetMarketplaces = [...new Set(entrada.targetMarketplaces)];
+        if (!Object.keys(cambios).length) throw new BadRequestException('No hay nada común que guardar.');
+
+        const variantes = await this.productRepository.find({ where: { group: { id: grupo.id } }, select: { id: true } });
+        if (!variantes.length) throw new NotFoundException('El grupo no tiene variantes.');
+        await this.productRepository.update(variantes.map((v) => v.id), cambios as any);
+        return { saved: true, variantes: variantes.length };
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Consultar un grupo
     // ─────────────────────────────────────────────────────────────
 

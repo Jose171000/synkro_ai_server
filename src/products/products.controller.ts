@@ -12,6 +12,7 @@ import { RequirePermission, StoreAccessGuard } from '../stores/store-access.guar
 import { ProductGroupsService } from './product-groups.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
+import { UpdateProductGroupDto } from './dto/update-product-group.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -144,6 +145,17 @@ export class ProductsController {
   @ApiOperation({ summary: 'Un producto con variantes y todas sus variantes' })
   getGroup(@Param('id') id: string, @Req() req) {
     return this.groups.obtener(id, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Patch('groups/:id')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Guardar lo común de un producto con variantes en todas a la vez',
+    description: 'Aplica la descripción, la categoría, la subcategoría y los marketplaces destino a todas las variantes. El nombre, el SKU, el precio, el stock y las fotos de cada una no se tocan.',
+  })
+  updateGroup(@Param('id') id: string, @Body() dto: UpdateProductGroupDto, @Req() req) {
+    return this.groups.actualizarGeneral(id, dto, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post(':id/variants')

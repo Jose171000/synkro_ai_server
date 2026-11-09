@@ -108,6 +108,38 @@ const entrada = () => ({
     ],
 });
 
+describe('guardar lo común de un grupo en todas las variantes', () => {
+    const armar = () => {
+        const t = construir({ productos: [{ id: 'a', group: { id: 'g1' } }, { id: 'b', group: { id: 'g1' } }, { id: 'z', group: { id: 'otro' } }] });
+        t.grupos.push({ id: 'g1', store: { id: 't1' }, owner: { id: 'u1' } });
+        t.grupos.push({ id: 'g-ajeno', store: { id: 'otra-tienda' }, owner: { id: 'x' } });
+        t.productRepo.update = jest.fn(async () => undefined);
+        return t;
+    };
+
+    it('aplica descripción, categoría, subcategoría y marketplaces a todas las variantes del grupo, y a ninguna más', async () => {
+        const { service, productRepo } = armar();
+        const r = await service.actualizarGeneral('g1', { description: '  Nueva descripción  ', category: 'Calzado', subCategory: 'Sandalias', targetMarketplaces: ['falabella', 'falabella', 'ripley'] }, ambito);
+        expect(r).toEqual({ saved: true, variantes: 2 });
+        expect(productRepo.update).toHaveBeenCalledWith(['a', 'b'], { description: 'Nueva descripción', category: 'Calzado', subCategory: 'Sandalias', targetMarketplaces: ['falabella', 'ripley'] });
+    });
+
+    it('solo se aplica lo que viene: lo vacío no borra nada, y sin nada que guardar o con descripción vacía se rechaza', async () => {
+        const { service, productRepo } = armar();
+        await service.actualizarGeneral('g1', { description: 'Solo esto', category: '  ', targetMarketplaces: [] }, ambito);
+        expect(productRepo.update).toHaveBeenCalledWith(['a', 'b'], { description: 'Solo esto' });
+        await expect(service.actualizarGeneral('g1', {}, ambito)).rejects.toThrow(/nada común/);
+        await expect(service.actualizarGeneral('g1', { description: '   ' }, ambito)).rejects.toThrow(/descripción no puede quedar vacía/);
+    });
+
+    it('un grupo de otra tienda o inexistente no se toca', async () => {
+        const { service, productRepo } = armar();
+        await expect(service.actualizarGeneral('g-ajeno', { description: 'x' }, ambito)).rejects.toThrow(/no encontrado/i);
+        await expect(service.actualizarGeneral('no-existe', { description: 'x' }, ambito)).rejects.toThrow(/no encontrado/i);
+        expect(productRepo.update).not.toHaveBeenCalled();
+    });
+});
+
 describe('crear un producto con variantes', () => {
     it('crea el grupo y una variante por combinación, en la tienda, con SKU generados', async () => {
         const { service, productos, grupos } = construir();
