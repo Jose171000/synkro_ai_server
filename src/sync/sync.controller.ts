@@ -459,7 +459,21 @@ export class SyncController {
         description: 'Aplica las mismas reglas que el reenvío individual (modo revisión, pausadas, Ripley en piloto). Responde qué se envió, qué quedó en revisión y qué se omitió y por qué.',
     })
     resendStockMasivo(@Body() dto: ResendStockMasivoDto, @Req() req) {
-        return this.syncService.resendListingsStock(scopeOf(req), dto.listingIds);
+        return this.syncService.resendListingsStock(scopeOf(req), dto.listingIds, dto.campo ?? 'stock');
+    }
+
+    @Post('listings/:id/resend-price')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'Vuelve a mandar a UNA oferta de Ripley el precio normal de Synkro (solo el precio, sin rebaja)',
+        description: 'Con el modo revisión encendido no toca el canal: crea una solicitud pendiente y responde 202. Las ofertas con rebaja en Ripley no se tocan.',
+    })
+    async resendListingPrice(@Param('id') id: string, @Req() req, @Res({ passthrough: true }) res: Response) {
+        const result = await this.syncService.resendListingPrice(scopeOf(req), id);
+        if (result.pending) res.status(HttpStatus.ACCEPTED);
+        return result;
     }
 
     @Post('listings/:id/resend-stock')

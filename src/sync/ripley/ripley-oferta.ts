@@ -54,8 +54,9 @@ export function armarOfertaParaEnviar(actual: any, cambios: CambiosDeOferta): Re
     const tieneDescuento = hay(d?.discount_price) || hay(d?.price);
     // Con descuento, el precio de lista es el «origin_price» y el rebajado va aparte: mandar el rebajado como precio borraría la rebaja.
     const precioDeLista = Number(d?.origin_price ?? actual?.all_prices?.[0]?.unit_origin_price ?? actual?.price);
-    if (hay(cambios.price) && tieneDescuento && Number(cambios.price) !== Number(d?.discount_price ?? d?.price) && Number(cambios.price) !== precioDeLista) {
-        throw new Error('La oferta tiene un descuento en Ripley; el precio se cambia en una fase aparte para no borrar la rebaja.');
+    // Regla acordada: una oferta con rebaja en Ripley no se toca en precio (ni lista ni rebaja). Se cambia en Ripley o con una promoción.
+    if (hay(cambios.price) && tieneDescuento && Number(cambios.price) !== precioDeLista) {
+        throw new Error(`La oferta tiene una rebaja en Ripley (lista ${precioDeLista}, rebaja ${Number(d?.discount_price ?? d?.price)}); Synkro no cambia el precio de las ofertas con rebaja.`);
     }
     const precio = tieneDescuento ? precioDeLista : hay(cambios.price) ? Number(cambios.price) : Number(actual?.price);
     if (!Number.isFinite(precio) || precio <= 0) throw new Error(`Precio no válido para Ripley: ${hay(cambios.price) ? cambios.price : actual?.price}.`);

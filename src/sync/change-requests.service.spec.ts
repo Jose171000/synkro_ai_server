@@ -106,7 +106,19 @@ describe('aprobar y rechazar', () => {
         expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ price: 90 }));
         expect(cola.add).toHaveBeenCalledWith('inventory', {
             productId: 'p1', userId: 'u1', marketplace: 'falabella', connectionId: 'c1', changeRequestId: 'r1',
+            // Ripley manda un solo campo por vez: la solicitud dice cuál.
+            conPrecio: true, conStock: false,
         });
+    });
+
+    it('un reenvío de precio es una solicitud de precio que reemplaza a otra pendiente de lo mismo', async () => {
+        const { service, repo } = construir();
+        await service.createPriceResend(SCOPE, { id: 'p1', price: 60 } as any, { marketplace: 'ripley', connectionId: 'c1', channelPrice: 35 });
+        expect(repo.update).toHaveBeenCalledWith(
+            { product: { id: 'p1' }, connection: { id: 'c1' }, field: 'price', status: 'pending' },
+            expect.objectContaining({ status: 'rejected' }),
+        );
+        expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ field: 'price', previousValue: '35', newValue: '60', marketplace: 'ripley', status: 'pending' }));
     });
 
     it('una solicitud de otra tienda no se puede aprobar', async () => {

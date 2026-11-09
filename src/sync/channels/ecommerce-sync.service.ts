@@ -10,7 +10,8 @@ import { Product } from '../../products/entities/product.entity';
 import { SaleAlertsService } from '../sale-alerts.service';
 import { ventaAnteriorALaConexion } from '../venta-anterior-a-la-conexion';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { SyncScope, SyncService } from '../sync.service';
+import { OpcionesDeEnvio, SyncScope, SyncService } from '../sync.service';
+import { preciosParaCanal } from '../precios-por-canal';
 import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
 import { RipleyApiService } from '../ripley/ripley-api.service';
@@ -105,10 +106,10 @@ export class EcommerceSyncService implements OnModuleInit {
                 refresh: c => this.refresh(c),
                 history: (c, desde, hasta) => this.history(c, desde, hasta),
                 // Ripley todavía solo se lee: aunque un producto esté enlazado, su stock no se manda hasta activarlo.
-                pushInventory: (productId, connectionId) => (
+                pushInventory: (productId, connectionId, opciones) => (
                     canal === 'ripley' && !ripleyPuedeEscribir()
-                        ? Promise.resolve({ omitido: 'El envío de stock a Ripley está apagado: el cambio no se mandó a Ripley.' })
-                        : this.pushInventory(canal, productId, connectionId)
+                        ? Promise.resolve({ omitido: 'El envío a Ripley está apagado: el cambio no se mandó a Ripley.' })
+                        : this.pushInventory(canal, productId, connectionId, opciones)
                 ),
             });
         }
@@ -177,13 +178,16 @@ export class EcommerceSyncService implements OnModuleInit {
             ? await this.links.findOne({ where: { marketplace: 'ripley', product: { id: producto.id }, connection: { id: connection.id } } })
             : null;
         const actual = await (this.clientOf('ripley') as RipleyApiService).ofertaPorSku(this.authOf(connection), limpio);
-        const cambios = {
-            stock: producto ? producto.stock : null,
-            price: producto && ripleyEnviaPrecio() && producto.price != null ? Number(producto.price) : null,
-        };
+        // Ripley manda un campo por vez: aquí se ve lo que saldría de stock y, aparte, lo que saldría de precio.
+        const precioDeSynkro = producto && enlace ? Number(preciosParaCanal(producto as any, enlace as any).price) : null;
         let seEnviaria: Record<string, any> | null = null;
+        let seEnviariaPrecio: Record<string, any> | null = null;
         let problema: string | null = null;
-        try { seEnviaria = armarOfertaParaEnviar(actual, cambios); } catch (e: any) { problema = e?.message ?? 'No se puede armar la oferta.'; }
+        let problemaPrecio: string | null = null;
+        try { seEnviaria = armarOfertaParaEnviar(actual, { stock: producto ? producto.stock : null, price: null }); } catch (e: any) { problema = e?.message ?? 'No se puede armar la oferta.'; }
+        if (precioDeSynkro != null) {
+            try { seEnviariaPrecio = armarOfertaParaEnviar(actual, { stock: null, price: precioDeSynkro }); } catch (e: any) { problemaPrecio = e?.message ?? 'No se puede armar la oferta.'; }
+        }
         if (!producto) problema = problema ?? 'Ese SKU no existe como producto de esta tienda en Synkro.';
         else if (!enlace) problema = problema ?? 'El producto no está enlazado a esa oferta de Ripley.';
         else if (String(enlace.externalId) !== String(actual.offer_id)) problema = 'El enlace apunta a otra oferta de Ripley que la que tiene este SKU.';
@@ -197,6 +201,10 @@ export class EcommerceSyncService implements OnModuleInit {
             cambios: seEnviaria ? resumenDeCambios(actual, seEnviaria) : null,
             ofertaActualEnRipley: actual,
             seEnviaria,
+            // El envío de precio: solo cambia el precio (el stock de Ripley se conserva). Con rebaja en Ripley no se envía.
+            problemaPrecio,
+            cambiosPrecio: seEnviariaPrecio ? resumenDeCambios(actual, seEnviariaPrecio) : null,
+            seEnviariaPrecio,
         };
     }
 
@@ -447,8 +455,12 @@ export class EcommerceSyncService implements OnModuleInit {
     // Stock y precio hacia el canal
     // ─────────────────────────────────────────────────────────────
 
-    /** Ejecutado por la cola: envía al canal el stock y el precio actuales de un producto. */
-    async pushInventory(canal: EcommerceChannel, productId: string, connectionId?: string): Promise<void | { omitido: string }> {
+    /**
+     * Ejecutado por la cola: envía al canal el stock y el precio actuales de un producto.
+     * WooCommerce y Shopify mandan los dos siempre. Ripley manda un solo campo por vez: sin opciones va el stock; con `conPrecio`
+     * va el precio (y el stock solo si `conStock`). Lo que no se manda queda como lo tiene Ripley.
+     */
+    async pushInventory(canal: EcommerceChannel, productId: string, connectionId?: string, opciones?: OpcionesDeEnvio): Promise<void | { omitido: string }> {
         const product = await this.products.findOne({ where: { id: productId } });
         const link = await this.links.findOne({
             where: {
@@ -460,22 +472,36 @@ export class EcommerceSyncService implements OnModuleInit {
             relations: { connection: true },
         });
         if (!product || !link || !link.connection) return;
-        // Ripley: solo salen los SKU de la lista RIPLEY_PUSH_SKUS (el piloto); el precio solo si RIPLEY_PUSH_PRICE=true.
-        if (canal === 'ripley' && !skuPermitidoParaRipley(product.sku)) {
-            console.log(`[Sync] Ripley: el SKU ${product.sku} no está en RIPLEY_PUSH_SKUS; no se envió su stock.`);
-            return { omitido: `El SKU ${product.sku} todavía no está habilitado para enviar stock a Ripley (piloto): el cambio no se mandó a Ripley.` };
+        const esRipley = canal === 'ripley';
+        let conPrecio = esRipley ? !!opciones?.conPrecio : true;
+        const conStock = esRipley ? (opciones?.conStock ?? !conPrecio) : true;
+        if (esRipley) {
+            // Solo salen los SKU de la lista RIPLEY_PUSH_SKUS («*» = todos); el precio solo si RIPLEY_PUSH_PRICE=true.
+            if (!skuPermitidoParaRipley(product.sku)) {
+                console.log(`[Sync] Ripley: el SKU ${product.sku} no está en RIPLEY_PUSH_SKUS; no se envió nada.`);
+                return { omitido: `El SKU ${product.sku} todavía no está habilitado para enviar a Ripley (piloto): el cambio no se mandó a Ripley.` };
+            }
+            if (conPrecio && !ripleyEnviaPrecio()) {
+                if (!conStock) return { omitido: 'El envío de precios a Ripley está apagado: el cambio de precio no se mandó a Ripley.' };
+                conPrecio = false;
+            }
+            if (!conPrecio && !conStock) return;
         }
-        const enviaPrecio = canal !== 'ripley' || ripleyEnviaPrecio();
+        // El precio normal de este canal: el fijado para la cuenta o, si no hay, el del producto (la rebaja de Ripley no se toca).
+        const precio = esRipley ? Number(preciosParaCanal(product as any, link as any).price) : (product.price != null ? Number(product.price) : null);
 
         try {
             const connection = await this.sync.getValidConnectionById(link.connection.id);
             await this.clientOf(canal).setInventory(
                 this.authOf(connection),
-                { externalId: link.externalId, variationId: link.variationId ?? null, ...(canal === 'ripley' ? { sku: product.sku } : {}) },
-                { stock: product.stock, price: enviaPrecio && product.price != null ? Number(product.price) : null },
+                { externalId: link.externalId, variationId: link.variationId ?? null, ...(esRipley ? { sku: product.sku } : {}) },
+                { stock: conStock ? product.stock : null, price: conPrecio ? precio : null },
             );
-            link.lastStockSynced = product.stock;
-            if (enviaPrecio) link.lastPriceSynced = product.price;
+            if (conStock) link.lastStockSynced = product.stock;
+            if (conPrecio) {
+                link.lastPriceSynced = (esRipley ? precio : product.price) as any;
+                if (esRipley) link.regularPrice = precio;
+            }
             link.lastSyncedAt = new Date();
             link.lastError = null as any;
         } catch (error: any) {

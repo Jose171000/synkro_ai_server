@@ -703,6 +703,67 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
         });
     });
 
+    describe('reenvío de precio a Ripley', () => {
+        const antes = { ...process.env };
+        afterEach(() => { process.env = { ...antes }; });
+        const encender = () => { process.env.RIPLEY_PUSH_ENABLED = 'true'; process.env.RIPLEY_PUSH_SKUS = '*'; process.env.RIPLEY_PUSH_PRICE = 'true'; };
+        const armarPrecio = async (enlaceOver: any = {}, revision = true) => {
+            const changeRequests = { isReviewMode: jest.fn(async () => revision), createPriceResend: jest.fn(async () => ({ id: 'sol-1' })) };
+            const t = await construir({
+                producto: { id: 'p1', sku: '23010701', name: 'Auriculares', stock: 21, price: 60 },
+                enlaces: [enlace({ marketplace: 'ripley', regularPrice: 35, lastPriceSynced: 35, salePrice: null, ...enlaceOver })],
+                changeRequests,
+            });
+            return { ...t, changeRequests };
+        };
+        const scope = { userId: 'u1', storeId: 't1' };
+
+        it('crea una solicitud de precio en revisión con el precio de lista de Ripley como valor anterior', async () => {
+            encender();
+            const t = await armarPrecio();
+            const r = await t.service.resendListingPrice(scope, 'l1');
+            expect(r.pending).toBe(1);
+            expect(t.changeRequests.createPriceResend).toHaveBeenCalledWith(scope, expect.objectContaining({ price: 60 }), { marketplace: 'ripley', connectionId: 'c1', channelPrice: 35 });
+        });
+
+        it('con el modo revisión apagado manda solo el precio a ESA cuenta', async () => {
+            encender();
+            const t = await armarPrecio({}, false);
+            const r = await t.service.resendListingPrice(scope, 'l1');
+            expect(r.pending).toBeUndefined();
+            expect(t.trabajos).toEqual([{ n: 'inventory', d: { productId: 'p1', userId: 'u1', marketplace: 'ripley', connectionId: 'c1', conPrecio: true, conStock: false } }]);
+        });
+
+        it('no se reenvía si el envío o el precio no están habilitados, o el SKU no está permitido', async () => {
+            delete process.env.RIPLEY_PUSH_ENABLED;
+            await expect((await armarPrecio()).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/todavía no está habilitado/);
+            encender(); delete process.env.RIPLEY_PUSH_PRICE;
+            await expect((await armarPrecio()).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/precios a Ripley/);
+            encender(); process.env.RIPLEY_PUSH_SKUS = 'OTRO';
+            await expect((await armarPrecio()).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/todavía no está habilitado/);
+        });
+
+        it('una oferta con rebaja en Ripley, con precio propio fijado, ya al día, pausada por la persona o de otro canal no se toca', async () => {
+            encender();
+            await expect((await armarPrecio({ salePrice: 25 })).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/rebaja/);
+            await expect((await armarPrecio({ priceOverride: 50 })).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/precio propio/);
+            await expect((await armarPrecio({ regularPrice: 60, lastPriceSynced: 60 })).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/mismo precio/);
+            await expect((await armarPrecio({ pausedByUser: true })).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/La pausaste/);
+            await expect((await armarPrecio({ marketplace: 'falabella' })).service.resendListingPrice(scope, 'l1')).rejects.toThrow(/solo está disponible para Ripley/);
+        });
+
+        it('el reenvío masivo de precio aplica las mismas reglas y no se frena por una omitida', async () => {
+            encender();
+            const t = await armarPrecio();
+            t.repoEnlaces.findOne
+                .mockResolvedValueOnce(enlace({ id: 'a', marketplace: 'ripley', regularPrice: 35, lastPriceSynced: 35, salePrice: null }) as any)
+                .mockResolvedValueOnce(enlace({ id: 'b', marketplace: 'ripley', regularPrice: 35, lastPriceSynced: 35, salePrice: 20 }) as any);
+            const r = await t.service.resendListingsStock(scope, ['a', 'b'], 'price');
+            expect(r).toMatchObject({ enviados: 0, enRevision: 1 });
+            expect(r.omitidos).toEqual([{ listingId: 'b', motivo: expect.stringContaining('rebaja') }]);
+        });
+    });
+
     describe('Ripley en piloto', () => {
         const antes = { ...process.env };
         afterEach(() => { process.env = { ...antes }; });

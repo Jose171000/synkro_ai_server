@@ -241,8 +241,10 @@ export function fotosDeRespuestaP11(respuesta: any): Map<string, string> {
 export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null): ChannelListingRow | null {
     const sku = texto(oferta?.shop_sku);
     if (!sku) return null;
-    const precio = numero(oferta?.price);
+    // El «price» que lee Ripley ya es el precio que paga el cliente: con una rebaja vigente, el precio de lista es el «origin_price».
+    const precioDeVenta = numero(oferta?.price);
     const conDescuento = numero(oferta?.discount?.discount_price) ?? numero(oferta?.discount?.price);
+    const precio = numero(oferta?.discount?.origin_price) ?? precioDeVenta;
     const stock = Math.max(0, Math.trunc(numero(oferta?.quantity) ?? 0));
     return {
         sku,

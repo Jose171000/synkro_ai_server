@@ -46,6 +46,7 @@ const TABLA: Record<string, string> = {
     'Sync POST /sync/ripley/colores-ia': 'canales.conectar',
     'Sync POST /sync/listings/:id/resend-stock': 'inventario.editar',
     'Sync POST /sync/listings/resend-stock': 'inventario.editar',
+    'Sync POST /sync/listings/:id/resend-price': 'inventario.editar',
     'Sync POST /sync/orders/:id/restock': 'ventas.registrar',
     'Sync GET /sync/mercadolibre/auth-url': 'canales.conectar',
     'Sync POST /sync/yavendio/connect': 'canales.conectar',

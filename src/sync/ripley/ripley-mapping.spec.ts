@@ -180,6 +180,12 @@ describe('Ripley: ofertas como publicaciones', () => {
         expect(filaDeOfertaRipley(oferta({ quantity: -3 }))?.stock).toBe(0);
         expect(filaDeOfertaRipley(oferta({ quantity: 4.9 }))?.stock).toBe(4);
     });
+    it('con rebaja, el precio normal es el de lista (origin_price) y la rebaja va aparte, no el precio ya rebajado', () => {
+        const f = filaDeOfertaRipley(oferta({ price: 120, discount: { discount_price: 120, origin_price: 180 } }));
+        expect(f?.regularPrice).toBe(180);
+        expect(f?.salePrice).toBe(120);
+    });
+
     it('un descuento vigente menor al precio es el precio de oferta; uno mayor se ignora', () => {
         expect(filaDeOfertaRipley(oferta({ discount: { discount_price: 80 } }))?.salePrice).toBe(80);
         expect(filaDeOfertaRipley(oferta({ discount: { discount_price: 120 } }))?.salePrice).toBeNull();

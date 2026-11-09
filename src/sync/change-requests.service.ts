@@ -102,8 +102,24 @@ export class ChangeRequestsService {
      * solicitud más (el valor ya está en el producto: aprobarla solo lo manda). Reemplaza a una pendiente anterior de lo mismo.
      */
     async createStockResend(scope: ChangeScope, product: Product, target: { marketplace: string; connectionId: string; channelStock: number | null }): Promise<SyncChangeRequest> {
+        return this.createResend(scope, product, 'stock', target, target.channelStock, String(product.stock));
+    }
+
+    /** Lo mismo para el precio: el valor ya está en el producto, aprobarla solo lo manda a esa cuenta. */
+    async createPriceResend(scope: ChangeScope, product: Product, target: { marketplace: string; connectionId: string; channelPrice: number | null }): Promise<SyncChangeRequest> {
+        return this.createResend(scope, product, 'price', target, target.channelPrice, String(product.price));
+    }
+
+    private async createResend(
+        scope: ChangeScope,
+        product: Product,
+        field: 'stock' | 'price',
+        target: { marketplace: string; connectionId: string },
+        channelValue: number | null,
+        newValue: string,
+    ): Promise<SyncChangeRequest> {
         await this.repository.update(
-            { product: { id: product.id }, connection: { id: target.connectionId }, field: 'stock', status: 'pending' },
+            { product: { id: product.id }, connection: { id: target.connectionId }, field, status: 'pending' },
             { status: 'rejected', resultMessage: 'Reemplazada por un cambio más reciente.', resolvedAt: new Date() },
         );
         return this.repository.save(this.repository.create({
@@ -111,9 +127,9 @@ export class ChangeRequestsService {
             store: { id: scope.storeId } as Store,
             connection: { id: target.connectionId } as MarketplaceConnection,
             marketplace: target.marketplace,
-            field: 'stock',
-            previousValue: target.channelStock == null ? '' : String(target.channelStock),
-            newValue: String(product.stock),
+            field,
+            previousValue: channelValue == null ? '' : String(channelValue),
+            newValue,
             status: 'pending',
             requestedBy: { id: scope.userId } as User,
         }));
@@ -172,12 +188,15 @@ export class ChangeRequestsService {
         else product.stock = Number(request.newValue);
         await this.productRepository.save(product);
 
+        // Ripley manda un solo campo a la vez: la solicitud dice cuál (los demás canales mandan los dos como siempre).
         await this.syncQueue.add('inventory', {
             productId: product.id,
             userId: scope.userId,
             marketplace: request.marketplace,
             connectionId: request.connection?.id,
             changeRequestId: id,
+            conPrecio: request.field === 'price',
+            conStock: request.field === 'stock',
         });
 
         return { id, status: 'approved', message: `Aprobado. Enviando ${request.field} a ${request.marketplace}.` };

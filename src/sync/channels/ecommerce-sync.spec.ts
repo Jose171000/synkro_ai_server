@@ -634,13 +634,46 @@ describe('Ripley: por ahora solo se lee', () => {
             expect(enlaces[0].lastPriceSynced).toBeUndefined();
         });
 
-        it('con RIPLEY_PUSH_PRICE=true también manda el precio', async () => {
+        it('un cambio de precio manda SOLO el precio (el stock de Ripley se conserva) cuando RIPLEY_PUSH_PRICE=true', async () => {
             process.env.RIPLEY_PUSH_ENABLED = 'true';
             process.env.RIPLEY_PUSH_SKUS = '23090102';
             process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente, enlaces } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conPrecio: true, conStock: false });
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: null, price: 30 });
+            expect(enlaces[0]).toMatchObject({ lastPriceSynced: 30, regularPrice: 30 });
+            expect(enlaces[0].lastStockSynced).toBeUndefined();
+        });
+
+        it('un cambio de precio con RIPLEY_PUSH_PRICE apagado queda «omitido», no enviado', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            delete process.env.RIPLEY_PUSH_PRICE;
             const { service, sync, cliente } = armar();
             service.onModuleInit();
-            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            const r = await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conPrecio: true, conStock: false });
+            expect(cliente.setInventory).not.toHaveBeenCalled();
+            expect(r).toEqual({ omitido: expect.stringContaining('precios') });
+        });
+
+        it('un cambio de stock nunca lleva el precio, aunque RIPLEY_PUSH_PRICE esté encendido', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conPrecio: false, conStock: true });
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: 4, price: null });
+        });
+
+        it('una edición de stock y precio a la vez manda los dos', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conPrecio: true, conStock: true });
             expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: 4, price: 30 });
         });
     });

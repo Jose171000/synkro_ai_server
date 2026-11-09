@@ -69,15 +69,22 @@ describe('armarOfertaParaEnviar', () => {
             discount: { discount_price: 120, origin_price: 180, start_date: null, end_date: null, ranges: [{ price: 120, quantity_threshold: 1 }] },
         };
         expect(motivoParaNoTocarOferta(real)).toBeNull();
-        const o = armarOfertaParaEnviar(real, { stock: 7, price: 120 });
+        const o = armarOfertaParaEnviar(real, { stock: 7, price: null });
         expect(o).toMatchObject({ shop_sku: '23090102', quantity: 7, price: 180, discount: { price: 120 }, leadtime_to_ship: 1, logistic_class: 'MP' });
         expect(o).not.toHaveProperty('description'); // era null: no se manda
         expect(o).not.toHaveProperty('all_prices');
     });
 
-    it('con descuento en Ripley no cambia el precio a un valor distinto (fase aparte)', () => {
-        const conDescuento = { ...ofertaActual() };
-        expect(() => armarOfertaParaEnviar(conDescuento, { stock: 4, price: 50 })).toThrow(/descuento/);
+    it('con rebaja en Ripley no se cambia el precio, ni al de la rebaja ni a otro; solo el stock', () => {
+        const conDescuento = { ...ofertaActual() }; // lista 89.9, rebaja 79.9
+        expect(() => armarOfertaParaEnviar(conDescuento, { price: 50 })).toThrow(/rebaja/);
+        expect(() => armarOfertaParaEnviar(conDescuento, { price: 79.9 })).toThrow(/rebaja/);
+        expect(armarOfertaParaEnviar(conDescuento, { price: 89.9, stock: 4 })).toMatchObject({ price: 89.9, quantity: 4, discount: { price: 79.9 } });
+    });
+
+    it('solo precio: el stock de Ripley se conserva (no se manda el de Synkro)', () => {
+        const sinDescuento = { ...ofertaActual(), discount: undefined };
+        expect(armarOfertaParaEnviar(sinDescuento, { price: 95 })).toMatchObject({ price: 95, quantity: 5 });
     });
 
     it('resumen: solo stock y precio', () => {

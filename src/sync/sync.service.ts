@@ -97,8 +97,17 @@ export interface ChannelHandler {
     poll(connection: MarketplaceConnection): Promise<{ nuevos: number; revisados: number }>;
     refresh(connection: MarketplaceConnection): Promise<{ revisadas: number; actualizadas: number; ausentes: number }>;
     history(connection: MarketplaceConnection, desde: Date, hasta: Date): Promise<{ registradas: number; yaRegistradas: number; incompleto: boolean }>;
-    /** Devuelve {omitido} cuando el canal NO recibió el cambio a propósito (así no se anota como enviado). */
-    pushInventory(productId: string, connectionId?: string): Promise<void | { omitido: string }>;
+    /**
+     * Devuelve {omitido} cuando el canal NO recibió el cambio a propósito (así no se anota como enviado).
+     * `opciones` solo la usa Ripley, que manda un campo a la vez: sin opciones va el stock; con `conPrecio` va el precio
+     * (y el stock solo si `conStock` es true).
+     */
+    pushInventory(productId: string, connectionId?: string, opciones?: OpcionesDeEnvio): Promise<void | { omitido: string }>;
+}
+
+export interface OpcionesDeEnvio {
+    conPrecio?: boolean;
+    conStock?: boolean;
 }
 
 const sku0 = (f: { SellerSku?: string }) => String(f.SellerSku ?? '').trim();
@@ -121,10 +130,10 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Ejecutado por la cola: envía a un canal de tienda propia el stock y precio actuales. */
-    async pushInventoryToChannel(marketplace: string, productId: string, connectionId?: string): Promise<void | { omitido: string }> {
+    async pushInventoryToChannel(marketplace: string, productId: string, connectionId?: string, opciones?: OpcionesDeEnvio): Promise<void | { omitido: string }> {
         const handler = this.channelHandlers.get(marketplace);
         if (!handler) throw new Error(`Marketplace no soportado aún: ${marketplace}`);
-        return handler.pushInventory(productId, connectionId);
+        return handler.pushInventory(productId, connectionId, opciones);
     }
 
     /**
@@ -2532,6 +2541,9 @@ export class SyncService implements OnModuleInit {
                 userId: scope.userId,
                 marketplace: link.marketplace,
                 connectionId: link.connection!.id,
+                // Ripley manda solo lo que se editó (el precio no sale si solo se cambió el stock).
+                conPrecio: dto.price !== undefined,
+                conStock: dto.stock !== undefined,
             });
         }
 
@@ -2571,17 +2583,55 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
-     * Reenvío de stock a varias publicaciones a la vez. Cada una sigue las reglas del reenvío individual; una que se omite
-     * (pausada, ya al día, Ripley fuera del piloto…) no frena a las demás.
+     * El precio de una publicación de Ripley es distinto al de Synkro: vuelve a mandar el precio normal de Synkro a ESA cuenta
+     * (solo el precio: el stock de Ripley no se toca). Con el modo revisión encendido queda como solicitud pendiente.
+     * Solo Ripley, y solo en ofertas sin rebaja: las rebajas de Ripley no las toca Synkro.
      */
-    async resendListingsStock(scope: SyncScope, listingIds: string[]) {
+    async resendListingPrice(scope: SyncScope, linkId: string): Promise<{ pending?: number; message: string }> {
+        const link = await this.listingLinkRepository.findOne({
+            where: { id: linkId, connection: { store: { id: scope.storeId } } },
+            relations: { connection: true, product: true },
+        });
+        if (!link || !link.connection || !link.product) throw new NotFoundException('No se encontró esa publicación en esta tienda.');
+        if (link.marketplace !== 'ripley') throw new BadRequestException('El reenvío de precio solo está disponible para Ripley.');
+        if (!['published', 'paused'].includes(link.syncStatus)) throw new BadRequestException('Esa publicación no está activa en el canal.');
+        if (link.pausedByUser) throw new BadRequestException('La pausaste tú: reanúdala antes de reenviarle el precio.');
+        const product = await this.findScopedProduct(scope, link.product.id);
+        if (process.env.RIPLEY_PUSH_ENABLED !== 'true' || !skuPermitidoParaRipley(product.sku)) {
+            throw new BadRequestException('El envío a Ripley todavía no está habilitado para este SKU.');
+        }
+        if (process.env.RIPLEY_PUSH_PRICE !== 'true') throw new BadRequestException('El envío de precios a Ripley todavía no está habilitado.');
+        if (link.priceOverride != null && Number(link.priceOverride) > 0) {
+            throw new BadRequestException('Esa cuenta tiene un precio propio fijado: cámbialo desde la ficha del producto.');
+        }
+        if (link.salePrice != null) {
+            throw new BadRequestException(`Esa oferta tiene una rebaja en Ripley (${link.salePrice}); Synkro no cambia el precio de las ofertas con rebaja.`);
+        }
+        const precio = Number(product.price);
+        if (!(precio > 0)) throw new BadRequestException('El producto no tiene un precio válido.');
+        const delCanal = link.regularPrice ?? link.lastPriceSynced;
+        if (delCanal != null && Number(delCanal) === precio) throw new BadRequestException(`El canal ya tiene el mismo precio que Synkro (${precio}).`);
+
+        if (await this.changeRequests.isReviewMode(scope.storeId)) {
+            await this.changeRequests.createPriceResend(scope, product, { marketplace: link.marketplace, connectionId: link.connection.id, channelPrice: delCanal != null ? Number(delCanal) : null });
+            return { pending: 1, message: `Reenvío en revisión: apruébalo en la pestaña Revisión para mandar el precio ${precio} a Ripley.` };
+        }
+        await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: link.marketplace, connectionId: link.connection.id, conPrecio: true, conStock: false });
+        return { message: `Enviando el precio ${precio} a Ripley.` };
+    }
+
+    /**
+     * Reenvío a varias publicaciones a la vez: de stock (por defecto) o de precio (solo Ripley). Cada una sigue las reglas del
+     * reenvío individual; una que se omite (pausada, ya al día, con rebaja, Ripley no habilitado…) no frena a las demás.
+     */
+    async resendListingsStock(scope: SyncScope, listingIds: string[], campo: 'stock' | 'price' = 'stock') {
         const ids = [...new Set((listingIds ?? []).map((i) => String(i).trim()).filter(Boolean))];
         if (!ids.length) throw new BadRequestException('Elige al menos una publicación.');
         if (ids.length > 200) throw new BadRequestException('Son demasiadas a la vez: elige hasta 200.');
         const r = { enviados: 0, enRevision: 0, omitidos: [] as { listingId: string; motivo: string }[] };
         for (const id of ids) {
             try {
-                const res = await this.resendListingStock(scope, id);
+                const res = campo === 'price' ? await this.resendListingPrice(scope, id) : await this.resendListingStock(scope, id);
                 if (res.pending) r.enRevision++; else r.enviados++;
             } catch (error: any) {
                 r.omitidos.push({ listingId: id, motivo: String(error?.message ?? 'No se pudo reenviar.').slice(0, 200) });
