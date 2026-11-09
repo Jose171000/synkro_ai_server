@@ -592,6 +592,56 @@ describe('Ripley: por ahora solo se lee', () => {
         expect(cliente.setInventory).not.toHaveBeenCalled();
     });
 
+    describe('con el envío encendido (RIPLEY_PUSH_ENABLED)', () => {
+        const antes = { ...process.env };
+        afterEach(() => { process.env = { ...antes }; });
+        const armar = () => {
+            const producto = { id: 'p1', sku: '23090102', name: 'Bolso', stock: 4, price: 30 };
+            const enlace = { id: 'e1', marketplace: 'ripley', product: producto, connection: { id: 'rp1' }, syncStatus: 'published', externalId: '777', variationId: null };
+            return construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enlace] });
+        };
+
+        it('sin RIPLEY_PUSH_SKUS no sale nada aunque esté encendido', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            delete process.env.RIPLEY_PUSH_SKUS;
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            expect(cliente.setInventory).not.toHaveBeenCalled();
+        });
+
+        it('un SKU fuera de la lista del piloto no sale', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = 'OTRO-SKU';
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            expect(cliente.setInventory).not.toHaveBeenCalled();
+        });
+
+        it('el SKU del piloto sale con su SKU y solo el stock (el precio queda como está en Ripley)', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '23090102';
+            delete process.env.RIPLEY_PUSH_PRICE;
+            const { service, sync, cliente, enlaces } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), { externalId: '777', variationId: null, sku: '23090102' }, { stock: 4, price: null });
+            expect(enlaces[0].lastStockSynced).toBe(4);
+            expect(enlaces[0].lastPriceSynced).toBeUndefined();
+        });
+
+        it('con RIPLEY_PUSH_PRICE=true también manda el precio', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '23090102';
+            process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: 4, price: 30 });
+        });
+    });
+
     it('los demás canales siguen recibiendo su stock', async () => {
         const producto = { id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 5, price: 30 };
         const enlace = { id: 'e1', marketplace: 'woocommerce', product: producto, connection: { id: 'wc1' }, syncStatus: 'published', externalId: '10', variationId: null };

@@ -222,6 +222,20 @@ export class SyncController {
         return this.ecommerce.connect(scopeOf(req), 'ripley', { site: dto.site ?? '', token: dto.apiKey, label: dto.label });
     }
 
+    @Get('ripley/vista-previa-envio')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.conectar')
+    @ApiOperation({
+        summary: 'Vista previa (solo lectura) de lo que se enviaría a Ripley para un SKU',
+        description: 'Lee la oferta actual en Ripley y muestra la oferta completa que se mandaría con el stock de Synkro. No envía nada.',
+    })
+    @ApiQuery({ name: 'sku', required: true })
+    @ApiQuery({ name: 'connectionId', required: false })
+    ripleyVistaPreviaEnvio(@Req() req, @Query('sku') sku: string, @Query('connectionId') connectionId?: string) {
+        return this.ecommerce.vistaPreviaDeEnvioRipley(scopeOf(req), sku, connectionId);
+    }
+
     @Get('ripley/diagnostico')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

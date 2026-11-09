@@ -9,6 +9,7 @@ import {
     ChannelOrdersQuery,
     ChannelOrdersResult,
 } from '../channels/channel-types';
+import { armarOfertaParaEnviar } from './ripley-oferta';
 import { filaDeOfertaRipley, fotosDeRespuestaP11, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
 
 /** Ripley pagina de a 100 como máximo. */
@@ -36,9 +37,9 @@ export function describirErrorRipley(error: any): string {
 }
 
 /**
- * Cliente HTTP de Mercado Ripley (Mirakl). Solo habla con la API: lee la cuenta, las ofertas y los pedidos.
- * Por ahora NO escribe nada en Ripley: aceptar y despachar pedidos se hace en su portal, y el envío de stock y precio
- * (POST /api/offers, que reemplaza la oferta entera) se activará aparte, con pruebas en la tienda real.
+ * Cliente HTTP de Mercado Ripley (Mirakl). Lee la cuenta, las ofertas y los pedidos. Lo único que escribe es el stock y el precio de
+ * una oferta (POST /api/offers, que reemplaza la oferta entera: ver ripley-oferta.ts), y solo si EcommerceSyncService lo permite
+ * (RIPLEY_PUSH_ENABLED + RIPLEY_PUSH_SKUS). Aceptar y despachar pedidos se hace en su portal.
  *
  * Documentación: docs/ripley-integracion.md. La clave va tal cual en la cabecera Authorization (sin «Bearer»).
  */
@@ -243,12 +244,88 @@ export class RipleyApiService implements ChannelClient {
         return salida;
     }
 
+    private async post<T = any>(auth: ChannelAuth, ruta: string, cuerpo: unknown): Promise<T> {
+        const host = normalizarHostDeRipley(auth.site);
+        const clave = normalizarClaveDeRipley(auth.token);
+        try {
+            const { data } = await axios.post<T>(`https://${host}${ruta}`, cuerpo, {
+                headers: { Authorization: clave, Accept: 'application/json', 'Content-Type': 'application/json' },
+                timeout: TIMEOUT_MS,
+                maxRedirects: 0,
+                validateStatus: (s) => s >= 200 && s < 300,
+            });
+            return data;
+        } catch (error: any) {
+            throw new BadRequestException(describirErrorRipley(error));
+        }
+    }
+
+    /** La oferta tal como está hoy en Ripley (OF21 filtrando por SKU). Solo lectura. */
+    async ofertaPorSku(auth: ChannelAuth, sku: string): Promise<any> {
+        const r = await this.get<any>(auth, '/api/offers', { sku });
+        const ofertas: any[] = Array.isArray(r?.offers) ? r.offers : [];
+        const oferta = ofertas.find((o) => o?.shop_sku === sku);
+        if (!oferta) throw new BadRequestException(`Ripley no tiene una oferta con el SKU «${sku}» en esta cuenta.`);
+        return oferta;
+    }
+
+    /** Cómo va una importación de ofertas (OF02). */
+    async estadoDeImportacion(auth: ChannelAuth, importId: number | string): Promise<any> {
+        return this.get<any>(auth, `/api/offers/imports/${encodeURIComponent(String(importId))}`);
+    }
+
+    /** Las primeras líneas del reporte de errores de una importación (OF03; viene como archivo). Nunca lanza. */
+    private async erroresDeImportacion(auth: ChannelAuth, importId: number | string): Promise<string> {
+        try {
+            const host = normalizarHostDeRipley(auth.site);
+            const { data } = await axios.get(`https://${host}/api/offers/imports/${encodeURIComponent(String(importId))}/error_report`, {
+                headers: { Authorization: normalizarClaveDeRipley(auth.token) },
+                timeout: TIMEOUT_MS,
+                maxRedirects: 0,
+                responseType: 'text',
+                transformResponse: (d) => d,
+                validateStatus: (s) => s >= 200 && s < 300,
+            });
+            return String(data ?? '').split(/\r?\n/).slice(0, 4).join(' | ').slice(0, 400);
+        } catch {
+            return '';
+        }
+    }
+
     /**
-     * Mandar stock o precio a Ripley todavía no está activado: POST /api/offers reemplaza la oferta entera (lo que no se
-     * manda se borra), así que se activará después de probarlo con la tienda real. Nunca se llega aquí por las vías normales.
+     * Cambia el stock (y el precio, si se indica) de UNA oferta. Lee la oferta actual, la reescribe completa solo con esos
+     * cambios (OF24 reemplaza la oferta entera) y comprueba cómo terminó la importación. Si algo no cuadra, lanza y no envía.
+     * Quien llama (EcommerceSyncService) ya comprobó el interruptor y la lista de SKU permitidos.
      */
-    async setInventory(): Promise<void> {
-        this.logger.warn('Se intentó mandar stock a Ripley, que todavía no está activado.');
-        throw new BadRequestException('Synkro todavía no envía stock ni precio a Ripley: por ahora solo lee tus ofertas y tus pedidos.');
+    async setInventory(
+        auth: ChannelAuth,
+        target: { externalId: string; variationId: string | null; sku?: string },
+        values: { stock: number; price?: number | null },
+    ): Promise<void> {
+        const sku = target.sku;
+        if (!sku) throw new BadRequestException('Falta el SKU para mandar el stock a Ripley.');
+        const actual = await this.ofertaPorSku(auth, sku);
+        // Nunca se escribe sobre una oferta distinta a la que está enlazada.
+        if (target.externalId && String(actual.offer_id) !== String(target.externalId)) {
+            throw new BadRequestException(`El SKU «${sku}» ahora apunta a otra oferta de Ripley que la enlazada. No se envió nada.`);
+        }
+        let oferta: Record<string, any>;
+        try { oferta = armarOfertaParaEnviar(actual, { stock: values.stock, price: values.price }); }
+        catch (error: any) { throw new BadRequestException(error?.message ?? 'No se pudo preparar la oferta para Ripley.'); }
+
+        const r = await this.post<any>(auth, '/api/offers', { offers: [oferta] });
+        const importId = r?.import_id;
+        if (importId === undefined || importId === null) throw new BadRequestException('Ripley recibió el cambio pero no dio el número de importación.');
+        this.logger.log(`Ripley ${sku}: enviado stock ${oferta.quantity} y precio ${oferta.price} (importación ${importId}).`);
+
+        // Una sola comprobación a los pocos segundos (Mirakl pide no consultar más de una vez por minuto).
+        await new Promise((resolve) => setTimeout(resolve, 8000));
+        let estado: any;
+        try { estado = await this.estadoDeImportacion(auth, importId); } catch { return; }
+        if (estado?.status === 'FAILED' || Number(estado?.lines_in_error) > 0) {
+            const detalle = estado?.has_error_report ? await this.erroresDeImportacion(auth, importId) : '';
+            throw new BadRequestException(`Ripley rechazó el cambio de ${sku} (importación ${importId})${detalle ? `: ${detalle}` : estado?.reason_status ? `: ${estado.reason_status}` : ''}.`);
+        }
+        this.logger.log(`Ripley ${sku}: importación ${importId} en estado ${estado?.status ?? 'desconocido'}.`);
     }
 }

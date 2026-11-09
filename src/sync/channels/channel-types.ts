@@ -129,7 +129,7 @@ export interface ChannelClient {
     /** Cambia el stock (y el precio, si se indica) de un producto o variante. */
     setInventory(
         auth: ChannelAuth,
-        target: { externalId: string; variationId: string | null },
+        target: { externalId: string; variationId: string | null; /** SKU del producto en Synkro (Ripley identifica la oferta por SKU) */ sku?: string },
         values: { stock: number; price?: number | null },
     ): Promise<void>;
 

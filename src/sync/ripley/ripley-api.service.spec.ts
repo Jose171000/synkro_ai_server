@@ -93,8 +93,8 @@ describe('Ripley: llamadas a la API', () => {
         expect(r.incompleto).toBe(true);
     });
 
-    it('por ahora no escribe en Ripley: mandar stock da un error claro y no llama a nadie', async () => {
-        await expect(new RipleyApiService().setInventory()).rejects.toThrow(/todavía no envía stock/);
+    it('sin SKU no escribe en Ripley: da un error claro y no llama a nadie', async () => {
+        await expect(new RipleyApiService().setInventory(AUTH, { externalId: '1', variationId: null }, { stock: 1 })).rejects.toThrow(/Falta el SKU/);
         expect(mockedGet).not.toHaveBeenCalled();
         expect((axios as any).post).not.toHaveBeenCalled();
     });
