@@ -22,12 +22,19 @@ function sinVacios<T extends Record<string, any>>(o: T): Partial<T> {
     return salida as Partial<T>;
 }
 
-/** Una oferta con precios por canal o por volumen no se toca: no hay forma segura de reescribirla completa. */
+/**
+ * Mirakl siempre devuelve un tramo «desde 1 unidad» que repite el precio normal. Eso no es un precio por volumen: se regenera solo
+ * a partir del precio y del descuento. Un tramo real es el que empieza en más de 1 unidad o el que hay más de uno.
+ */
+const esSoloElTramoNormal = (tramos: any): boolean =>
+    !Array.isArray(tramos) || tramos.length === 0 || (tramos.length === 1 && Number(tramos[0]?.quantity_threshold) === 1);
+
+/** Una oferta con precios por canal o por volumen reales no se toca: no hay forma segura de reescribirla completa. */
 export function motivoParaNoTocarOferta(actual: any): string | null {
     const precios: any[] = Array.isArray(actual?.all_prices) ? actual.all_prices : [];
     if (precios.some((p) => hay(p?.channel_code))) return 'La oferta tiene precios por canal en Ripley; Synkro no la modifica para no borrarlos.';
-    if (precios.some((p) => Array.isArray(p?.volume_prices) && p.volume_prices.length)) return 'La oferta tiene precios por volumen en Ripley; Synkro no la modifica para no borrarlos.';
-    if (Array.isArray(actual?.discount?.ranges) && actual.discount.ranges.length) return 'La oferta tiene descuentos por cantidad en Ripley; Synkro no la modifica para no borrarlos.';
+    if (precios.some((p) => !esSoloElTramoNormal(p?.volume_prices))) return 'La oferta tiene precios por volumen en Ripley; Synkro no la modifica para no borrarlos.';
+    if (!esSoloElTramoNormal(actual?.discount?.ranges)) return 'La oferta tiene descuentos por cantidad en Ripley; Synkro no la modifica para no borrarlos.';
     if (!hay(actual?.state_code)) return 'Ripley no dijo el estado (state_code) de la oferta; sin él no se puede reescribir completa.';
     return null;
 }
@@ -43,10 +50,16 @@ export function armarOfertaParaEnviar(actual: any, cambios: CambiosDeOferta): Re
 
     const stock = hay(cambios.stock) ? Number(cambios.stock) : Number(actual?.quantity ?? 0);
     if (!Number.isInteger(stock) || stock < 0) throw new Error(`Stock no válido para Ripley: ${cambios.stock}.`);
-    const precio = hay(cambios.price) ? Number(cambios.price) : Number(actual?.price);
+    const d = actual?.discount;
+    const tieneDescuento = hay(d?.discount_price) || hay(d?.price);
+    // Con descuento, el precio de lista es el «origin_price» y el rebajado va aparte: mandar el rebajado como precio borraría la rebaja.
+    const precioDeLista = Number(d?.origin_price ?? actual?.all_prices?.[0]?.unit_origin_price ?? actual?.price);
+    if (hay(cambios.price) && tieneDescuento && Number(cambios.price) !== Number(d?.discount_price ?? d?.price) && Number(cambios.price) !== precioDeLista) {
+        throw new Error('La oferta tiene un descuento en Ripley; el precio se cambia en una fase aparte para no borrar la rebaja.');
+    }
+    const precio = tieneDescuento ? precioDeLista : hay(cambios.price) ? Number(cambios.price) : Number(actual?.price);
     if (!Number.isFinite(precio) || precio <= 0) throw new Error(`Precio no válido para Ripley: ${hay(cambios.price) ? cambios.price : actual?.price}.`);
 
-    const d = actual?.discount;
     const descuento = hay(d?.discount_price) || hay(d?.price)
         ? sinVacios({ price: Number(d.discount_price ?? d.price), start_date: d.start_date, end_date: d.end_date })
         : undefined;

@@ -42,14 +42,15 @@ describe('armarOfertaParaEnviar', () => {
     });
 
     it('sin precio nuevo conserva el de Ripley; con precio nuevo lo cambia', () => {
-        expect(armarOfertaParaEnviar(ofertaActual(), { stock: 4, price: null }).price).toBe(89.9);
-        expect(armarOfertaParaEnviar(ofertaActual(), { stock: 4, price: 95 }).price).toBe(95);
+        const sinDescuento = { ...ofertaActual(), discount: undefined };
+        expect(armarOfertaParaEnviar(sinDescuento, { stock: 4, price: null }).price).toBe(89.9);
+        expect(armarOfertaParaEnviar(sinDescuento, { stock: 4, price: 95 }).price).toBe(95);
     });
 
     it('rechaza stock o precio no válidos', () => {
         expect(() => armarOfertaParaEnviar(ofertaActual(), { stock: -1 })).toThrow(/Stock no válido/);
         expect(() => armarOfertaParaEnviar(ofertaActual(), { stock: 1.5 })).toThrow(/Stock no válido/);
-        expect(() => armarOfertaParaEnviar(ofertaActual(), { stock: 1, price: 0 })).toThrow(/Precio no válido/);
+        expect(() => armarOfertaParaEnviar({ ...ofertaActual(), discount: undefined }, { stock: 1, price: 0 })).toThrow(/Precio no válido/);
     });
 
     it('no toca ofertas con precios por canal, por volumen o descuentos por cantidad', () => {
@@ -57,6 +58,26 @@ describe('armarOfertaParaEnviar', () => {
         expect(motivoParaNoTocarOferta({ ...ofertaActual(), all_prices: [{ channel_code: null, volume_prices: [{ quantity_threshold: 2 }] }] })).toMatch(/por volumen/);
         expect(motivoParaNoTocarOferta({ ...ofertaActual(), discount: { discount_price: 1, ranges: [{ quantity_threshold: 2, price: 1 }] } })).toMatch(/por cantidad/);
         expect(() => armarOfertaParaEnviar({ ...ofertaActual(), state_code: undefined }, { stock: 1 })).toThrow(/state_code/);
+    });
+
+    it('oferta real de Nodo Shop: el tramo «desde 1 unidad» no es un precio por volumen; se conserva el precio de lista y la rebaja', () => {
+        const tramo = { price: 120, quantity_threshold: 1, unit_discount_price: 120, unit_origin_price: 180 };
+        const real = {
+            offer_id: 6318489, shop_sku: '23090102', state_code: '11', price: 120, quantity: 10, description: null, leadtime_to_ship: 1,
+            logistic_class: { code: 'MP', label: 'Muy pequeño' }, offer_additional_fields: [], allow_quote_requests: false,
+            all_prices: [{ channel_code: null, price: 120, unit_origin_price: 180, unit_discount_price: 120, volume_prices: [tramo] }],
+            discount: { discount_price: 120, origin_price: 180, start_date: null, end_date: null, ranges: [{ price: 120, quantity_threshold: 1 }] },
+        };
+        expect(motivoParaNoTocarOferta(real)).toBeNull();
+        const o = armarOfertaParaEnviar(real, { stock: 7, price: 120 });
+        expect(o).toMatchObject({ shop_sku: '23090102', quantity: 7, price: 180, discount: { price: 120 }, leadtime_to_ship: 1, logistic_class: 'MP' });
+        expect(o).not.toHaveProperty('description'); // era null: no se manda
+        expect(o).not.toHaveProperty('all_prices');
+    });
+
+    it('con descuento en Ripley no cambia el precio a un valor distinto (fase aparte)', () => {
+        const conDescuento = { ...ofertaActual() };
+        expect(() => armarOfertaParaEnviar(conDescuento, { stock: 4, price: 50 })).toThrow(/descuento/);
     });
 
     it('resumen: solo stock y precio', () => {
