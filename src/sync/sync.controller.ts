@@ -379,6 +379,18 @@ export class SyncController {
         return this.sheets.saveSheet(scopeOf(req), id, dto);
     }
 
+    @Patch('groups/:groupId/sheet')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @ApiOperation({
+        summary: 'Guarda lo común de un grupo de variantes en todas a la vez',
+        description: 'Aplica título, descripciones, HTML, marca, medidas y atributos de los canales a todas las variantes del grupo. No toca lo propio de cada una (nombre interno, precios, color, talla…). Cada variante publicada se actualiza en sus canales, escalonado.',
+    })
+    saveGroupSheet(@Param('groupId') groupId: string, @Body() dto: SaveSheetDto, @Req() req) {
+        return this.sheets.saveGroupSheet(scopeOf(req), groupId, dto);
+    }
+
     @Post('products/:id/sheet/sync')
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()

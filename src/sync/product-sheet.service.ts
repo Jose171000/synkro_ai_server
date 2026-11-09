@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { descripcionDeTexto } from './meli/descripcion-meli';
@@ -216,8 +216,52 @@ export class ProductSheetService {
         };
     }
 
+    /**
+     * Guarda lo COMÚN de un grupo de variantes en todas a la vez: título, descripciones, HTML, marca, medidas y los atributos de los
+     * canales. Lo que es propio de cada variante no se toca: el nombre interno, los precios y los atributos que dependen de sus ejes
+     * (color, color básico, talla…). Solo se aplica lo que viene en el cambio, así una variante conserva lo que esta vez no se tocó.
+     * El envío a los canales se programa por variante, escalonado para respetar los límites de Falabella.
+     */
+    async saveGroupSheet(scope: SyncScope, groupId: string, dto: SaveSheetDto) {
+        const variantes = await this.products.find({
+            where: { group: { id: groupId }, store: { id: scope.storeId } },
+            relations: { group: true },
+            order: { createdAt: 'ASC' },
+        });
+        if (!variantes.length) throw new NotFoundException('No se encontró ese grupo de variantes en esta tienda.');
+        const grupo = variantes[0].group!;
+
+        const propios = new Set(['color', 'colorbasico', 'maincolor', 'talla', 'size', ...(grupo.axes ?? []).map((e) => claveDeAtributo(e.name))]);
+        const esPropio = (clave: string) => propios.has(claveDeAtributo(clave));
+        const comunes = (m?: Record<string, string>) => (m ? Object.fromEntries(Object.entries(m).filter(([k]) => !esPropio(k))) : undefined);
+
+        const comun: SaveSheetDto = {
+            ...dto,
+            name: undefined, // el nombre interno lleva la variante («… - Beige · 36»)
+            prices: undefined, // el precio sigue siendo de cada variante
+            attributes: comunes(dto.attributes),
+            mercadolibreAttributes: comunes(dto.mercadolibreAttributes),
+        };
+        const hayAlgo = Object.entries(comun).some(([, v]) => v !== undefined && !(typeof v === 'object' && Object.keys(v as object).length === 0));
+        if (!hayAlgo) throw new BadRequestException('No hay nada común que guardar: lo que cambia entre variantes (color, talla, precio, nombre) se edita en cada una.');
+
+        const destinos = new Set<string>();
+        let i = 0;
+        for (const v of variantes) {
+            await this.saveSheet(scope, v.id, comun, { programar: false });
+            const canales = await this.sync.scheduleContentSync(v.id, 45_000 + i * 4_000);
+            canales.forEach((c) => destinos.add(c.marketplace));
+            i++;
+        }
+        // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
+        if (comun.aiTitle !== undefined && comun.aiTitle.trim()) {
+            await this.products.manager.update('product_groups', { id: groupId }, { name: comun.aiTitle.trim().slice(0, 250) });
+        }
+        return { saved: true, variantes: variantes.length, willUpdate: [...destinos] };
+    }
+
     /** Guarda los cambios y programa el envío automático a los canales donde está publicado. */
-    async saveSheet(scope: SyncScope, productId: string, dto: SaveSheetDto) {
+    async saveSheet(scope: SyncScope, productId: string, dto: SaveSheetDto, opciones: { programar?: boolean } = {}) {
         const product = await this.sync.findScopedProduct(scope, productId);
         let attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
 
@@ -273,7 +317,7 @@ export class ProductSheetService {
         const preciosEnviados = dto.prices ? await this.guardarPrecios(scope, product, dto.prices) : [];
         // Guardar solo precios no toca el contenido de los canales.
         const soloPrecios = !!dto.prices && Object.keys(dto).every((k) => k === 'prices');
-        const canales = soloPrecios ? [] : await this.sync.scheduleContentSync(productId);
+        const canales = soloPrecios || opciones.programar === false ? [] : await this.sync.scheduleContentSync(productId);
         return { saved: true, willUpdate: canales.map((c) => c.marketplace), pricesSent: preciosEnviados };
     }
 

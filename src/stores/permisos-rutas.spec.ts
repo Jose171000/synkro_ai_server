@@ -67,6 +67,7 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/falabella/categories/:categoryId/variants': 'canales.publicar',
     'Sync GET /sync/products/:id/sheet': 'productos.ver',
     'Sync PATCH /sync/products/:id/sheet': 'productos.editar',
+    'Sync PATCH /sync/groups/:groupId/sheet': 'productos.editar',
     'Sync POST /sync/products/:id/sheet/sync': 'canales.publicar',
     'Sync GET /sync/falabella/brands': 'canales.publicar',
     'Sync POST /sync/mercadolibre/products/:id/link': 'canales.publicar',

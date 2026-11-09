@@ -32,6 +32,75 @@ function construir(producto: any, enlaces: any[] = []) {
 }
 
 const SCOPE = { userId: 'u1', storeId: 't1' };
+
+/** Guardar lo común de un grupo de variantes en todas a la vez. */
+describe('ficha de un grupo de variantes', () => {
+    const grupo = { id: 'g1', name: 'Sandalias de cuero', parentSku: 'SAN', axes: [{ name: 'Color', values: ['Negro', 'Beige'] }, { name: 'Talla', values: ['35', '36'] }] };
+    const variante = (id: string, color: string, talla: string) => ({
+        id, sku: `SAN-${id}`, name: `Sandalias de cuero - ${color} · ${talla}`, description: 'texto', aiTitle: `Sandalias de cuero - ${color} · ${talla}`, aiDescription: 'vieja', price: 200, stock: 3, images: [],
+        group: grupo, variantValues: { Color: color, Talla: talla },
+        aiAttributes: { brand: 'GENERICO', Color: color, color: color, color_basico: color, talla, material_principal: 'Cuero', garantia: '1 mes' },
+    });
+    const armar = (variantes: any[]) => {
+        const guardados: any[] = [];
+        const sync: any = {
+            findScopedProduct: jest.fn(async (_s: any, id: string) => variantes.find((v) => v.id === id)),
+            scheduleContentSync: jest.fn(async () => [{ marketplace: 'falabella', connectionId: 'c1' }]),
+        };
+        const products: any = {
+            find: jest.fn(async () => variantes),
+            save: jest.fn(async (p: any) => { guardados.push(JSON.parse(JSON.stringify(p))); return p; }),
+            manager: { update: jest.fn(async () => undefined) },
+        };
+        const service = new ProductSheetService(sync, {} as any, {} as any, products);
+        return { service, sync, products, guardados };
+    };
+
+    it('aplica lo común a todas las variantes y deja lo propio de cada una (nombre interno, color, talla, precio)', async () => {
+        const { service, guardados } = armar([variante('a', 'Negro', '35'), variante('b', 'Beige', '36')]);
+        const r = await service.saveGroupSheet(SCOPE, 'g1', {
+            name: 'No debe pasar', aiDescription: 'Nueva descripción', descriptionHtml: '<p>HTML común</p>', brand: 'JOLI JOLI',
+            attributes: { garantia: '3 meses', color: 'Rojo', color_basico: 'Rojo', talla: '40', Color: 'Rojo' },
+            prices: [{ connectionId: 'c1', price: 1 }] as any,
+        });
+        expect(r).toMatchObject({ saved: true, variantes: 2, willUpdate: ['falabella'] });
+        expect(guardados).toHaveLength(2);
+        for (const g of guardados) {
+            expect(g.aiDescription).toBe('Nueva descripción');
+            expect(g.aiAttributes.descriptionHtml).toBe('<p>HTML común</p>');
+            expect(g.aiAttributes.brand).toBe('JOLI JOLI');
+            expect(g.aiAttributes.garantia).toBe('3 meses');
+            expect(g.name).toMatch(/ - (Negro|Beige) · /); // el nombre interno no cambia
+            expect(g.price).toBe(200);
+        }
+        // Lo propio de cada variante se conserva.
+        expect(guardados[0].aiAttributes).toMatchObject({ color: 'Negro', color_basico: 'Negro', talla: '35', Color: 'Negro' });
+        expect(guardados[1].aiAttributes).toMatchObject({ color: 'Beige', color_basico: 'Beige', talla: '36', Color: 'Beige' });
+    });
+
+    it('el título común es también el nombre del grupo, y el envío se programa una vez por variante, escalonado', async () => {
+        const { service, sync, products } = armar([variante('a', 'Negro', '35'), variante('b', 'Beige', '36'), variante('c', 'Negro', '36')]);
+        await service.saveGroupSheet(SCOPE, 'g1', { aiTitle: '  Sandalias floater JOLI JOLI  ' });
+        expect(products.manager.update).toHaveBeenCalledWith('product_groups', { id: 'g1' }, { name: 'Sandalias floater JOLI JOLI' });
+        expect(sync.scheduleContentSync.mock.calls.map((c: any[]) => [c[0], c[1]])).toEqual([['a', 45000], ['b', 49000], ['c', 53000]]);
+    });
+
+    it('solo se guarda lo que viene: lo que no se tocó se conserva en cada variante', async () => {
+        const v = variante('a', 'Negro', '35');
+        v.aiAttributes.material_principal = 'Gamuza'; // personalizada
+        const { service, guardados } = armar([v, variante('b', 'Beige', '36')]);
+        await service.saveGroupSheet(SCOPE, 'g1', { brand: 'JOLI JOLI' });
+        expect(guardados[0].aiAttributes.material_principal).toBe('Gamuza');
+        expect(guardados[0].aiDescription).toBe('vieja');
+    });
+
+    it('sin nada común que guardar (solo color, talla, precio o nombre) lo rechaza; un grupo que no es de la tienda no existe', async () => {
+        const { service } = armar([variante('a', 'Negro', '35')]);
+        await expect(service.saveGroupSheet(SCOPE, 'g1', { name: 'x', attributes: { color: 'Rojo', talla: '40' }, prices: [] as any })).rejects.toThrow(/nada común/);
+        const vacio = armar([]);
+        await expect(vacio.service.saveGroupSheet(SCOPE, 'g-ajeno', { brand: 'X' })).rejects.toThrow(/No se encontró/);
+    });
+});
 const producto = () => ({
     id: 'p1', sku: 'MK-1', name: 'Torre', description: 'texto', aiTitle: 'Torre Montessori 4 en 1', aiDescription: 'desc', price: 480, stock: 5,
     packageWidth: 45, packageLength: 40, packageHeight: 90, packageWeight: 9, images: [{ url: 'https://i/1.jpg' }],
