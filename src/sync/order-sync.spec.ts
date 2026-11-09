@@ -97,7 +97,7 @@ async function construir(opts: { conexiones?: any[]; producto?: any; enlaces?: a
         ],
     }).compile();
 
-    return { service: modulo.get(SyncService), alertas, ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones, repoVentas };
+    return { service: modulo.get(SyncService), alertas, ventas, trabajos, avisos, producto, falabella, meli, repoEnlaces, repoConexiones, repoVentas, redis };
 }
 
 const pedidoFalabella = { OrderId: 100, OrderNumber: 9001, Price: '50.00', ItemsCount: 1, CreatedAt: '2026-10-09T12:00:00Z', Statuses: { Status: 'pending' } };
@@ -641,6 +641,93 @@ describe('stock al cancelarse o devolverse una venta de Falabella', () => {
         await cambiarA(t, 'canceled');
 
         expect(t.producto.stock).toBe(4);
+    });
+});
+
+describe('conciliación de inventario', () => {
+    const antes = { ...process.env };
+    afterEach(() => { process.env = { ...antes }; });
+
+    const enlace = (over: any = {}) => ({
+        id: 'l1', marketplace: 'ripley', syncStatus: 'published', pausedByUser: false, lastStockSynced: 14,
+        regularPrice: null, lastPriceSynced: null, salePrice: null, priceOverride: null,
+        product: { id: 'p1', sku: '23011009', name: 'Audífonos', stock: 0, price: 65 },
+        connection: { id: 'c1', externalNickname: 'NodoShop', status: 'active', store: { id: 't1', owner: { id: 'dueno' } } },
+        ...over,
+    });
+    const armar = async (enlaces: any[], enCamino: Set<string> = new Set()) => {
+        const t = await construir({ changeRequests: { enCamino: jest.fn(async () => enCamino) } });
+        const memoria = new Map<string, string>();
+        t.redis.get.mockImplementation(async (k: string) => memoria.get(k) ?? null);
+        (t.redis.set as any).mockImplementation(async (k: string, v: string) => { memoria.set(k, v); return 'OK'; });
+        t.redis.del.mockImplementation(async (k: string) => { memoria.delete(k); return 1; });
+        t.repoEnlaces.find.mockResolvedValue(enlaces);
+        return { ...t, memoria };
+    };
+
+    it('avisa a la segunda revisión seguida, al dueño de la tienda y con advertencia; no repite el mismo aviso', async () => {
+        const t = await armar([enlace()]);
+        expect(await t.service.conciliarInventario()).toEqual({ tiendas: 1, avisos: 0 });
+        expect(t.avisos).toHaveLength(0);
+
+        expect(await t.service.conciliarInventario()).toEqual({ tiendas: 1, avisos: 1 });
+        expect(t.avisos).toHaveLength(1);
+        expect(t.avisos[0]).toMatchObject({
+            u: 'dueno', type: 'reconciliation', severity: 'warning', storeId: 't1', marketplace: 'ripley',
+            meta: { total: 1, items: [{ sku: '23011009', campo: 'stock', canal: 14, synkro: 0 }] },
+        });
+        expect(t.avisos[0].meta).not.toHaveProperty('productId'); // el clic va al Tablero, no a un producto
+
+        await t.service.conciliarInventario();
+        expect(t.avisos).toHaveLength(1);
+    });
+
+    it('no avisa de lo que ya está en Revisión o en camino, de publicaciones pausadas por la persona ni de stock igual', async () => {
+        const enCamino = new Set(['p1|c1|stock']);
+        const a = await armar([enlace()], enCamino);
+        await a.service.conciliarInventario(); await a.service.conciliarInventario();
+        expect(a.avisos).toHaveLength(0);
+
+        const b = await armar([enlace({ lastStockSynced: 0 })]);
+        await b.service.conciliarInventario(); await b.service.conciliarInventario();
+        expect(b.avisos).toHaveLength(0);
+    });
+
+    it('si la diferencia se resuelve y vuelve, avisa de nuevo; si el aviso está apagado no hace nada', async () => {
+        const t = await armar([enlace()]);
+        await t.service.conciliarInventario(); await t.service.conciliarInventario();
+        expect(t.avisos).toHaveLength(1);
+
+        t.repoEnlaces.find.mockResolvedValue([enlace({ lastStockSynced: 0 })]); // se corrigió
+        await t.service.conciliarInventario();
+        t.repoEnlaces.find.mockResolvedValue([enlace()]); // vuelve a diferir
+        await t.service.conciliarInventario(); await t.service.conciliarInventario();
+        expect(t.avisos).toHaveLength(2);
+
+        process.env.CONCILIACION_AVISOS = 'false';
+        const apagado = await armar([enlace()]);
+        expect(await apagado.service.conciliarInventario()).toEqual({ tiendas: 0, avisos: 0 });
+        expect(apagado.repoEnlaces.find).not.toHaveBeenCalled();
+    });
+
+    it('el precio de Ripley entra solo con el envío de precios habilitado', async () => {
+        const conPrecio = enlace({ lastStockSynced: 0, regularPrice: 35, product: { id: 'p1', sku: 'X', name: 'N', stock: 0, price: 60 } });
+        const sin = await armar([conPrecio]);
+        await sin.service.conciliarInventario(); await sin.service.conciliarInventario();
+        expect(sin.avisos).toHaveLength(0);
+
+        process.env.RIPLEY_PUSH_ENABLED = 'true'; process.env.RIPLEY_PUSH_PRICE = 'true';
+        const con = await armar([conPrecio]);
+        await con.service.conciliarInventario(); await con.service.conciliarInventario();
+        expect(con.avisos[0]).toMatchObject({ type: 'reconciliation', meta: { items: [{ campo: 'price', canal: 35, synkro: 60 }] } });
+    });
+
+    it('un fallo al conciliar no tumba la revisión periódica', async () => {
+        const t = await armar([]);
+        t.repoConexiones.find.mockResolvedValue([]);
+        t.repoEnlaces.find.mockRejectedValue(new Error('base caída'));
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await expect(t.service.refreshAllListings()).resolves.toBeDefined();
     });
 });
 

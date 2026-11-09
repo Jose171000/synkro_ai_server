@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
 import { skuPermitidoParaRipley } from './ripley/ripley-oferta';
+import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
@@ -4411,7 +4412,89 @@ export class SyncService implements OnModuleInit {
         });
         const resultado = await this.refreshConnections(cuentas);
         await this.conciliarCalidadFalabella(cuentas);
+        // Con los datos recién leídos de los canales: avisar de lo que quedó distinto al de Synkro (nunca tumba la revisión).
+        await this.conciliarInventario().catch((error: any) => console.warn(`[Sync] No se pudo conciliar el inventario: ${error?.message}`));
         return resultado;
+    }
+
+    /**
+     * Conciliación: compara, con lo que la última revisión leyó de cada canal, el stock (y el precio de Ripley) contra Synkro y avisa
+     * en la campana de la tienda. No corrige nada. Una diferencia se avisa si se ve en dos revisiones seguidas y no hay ya una
+     * solicitud en Revisión para ella; el mismo aviso no se repite hasta que cambie la lista o pasen 24 h. Apagable con
+     * CONCILIACION_AVISOS=false. Ver `conciliacion.ts`.
+     */
+    async conciliarInventario(): Promise<{ tiendas: number; avisos: number }> {
+        if (process.env.CONCILIACION_AVISOS === 'false') return { tiendas: 0, avisos: 0 };
+        const enlaces = await this.listingLinkRepository.find({
+            where: { syncStatus: 'published', pausedByUser: false, connection: { status: 'active' } },
+            relations: { product: true, connection: { store: { owner: true } } },
+        });
+        const enCamino = await this.changeRequests.enCamino();
+        const precioRipley = process.env.RIPLEY_PUSH_ENABLED === 'true' && process.env.RIPLEY_PUSH_PRICE === 'true';
+
+        const porTienda = new Map<string, { tienda: { id: string; owner?: { id: string } }; difs: Diferencia[] }>();
+        for (const l of enlaces) {
+            const conexion = l.connection;
+            const tienda = conexion?.store;
+            if (!conexion || !tienda || !l.product) continue;
+            const difs = diferenciasDe(
+                {
+                    linkId: l.id,
+                    productId: l.product.id,
+                    sku: l.product.sku,
+                    nombre: l.product.name,
+                    marketplace: l.marketplace,
+                    connectionId: conexion.id,
+                    cuenta: conexion.externalNickname ?? null,
+                    stockSynkro: l.product.stock,
+                    stockCanal: l.lastStockSynced ?? null,
+                    precioSynkro: l.product.price != null ? Number(l.product.price) : null,
+                    precioCanal: l.regularPrice != null ? Number(l.regularPrice) : l.lastPriceSynced != null ? Number(l.lastPriceSynced) : null,
+                    rebajaCanal: l.salePrice != null ? Number(l.salePrice) : null,
+                    precioPropio: l.priceOverride != null ? Number(l.priceOverride) : null,
+                },
+                { precioRipley },
+            ).filter((d) => !enCamino.has(`${d.productId}|${conexion.id}|${d.campo}`));
+            const grupo = porTienda.get(tienda.id) ?? { tienda, difs: [] };
+            grupo.difs.push(...difs);
+            porTienda.set(tienda.id, grupo);
+        }
+
+        let avisos = 0;
+        for (const [storeId, { tienda, difs }] of porTienda) {
+            const clave = `conciliacion:${storeId}`;
+            let guardado: { pasadas?: Record<string, number>; firmaAvisada?: string; avisadoEn?: number } = {};
+            try { guardado = JSON.parse((await this.redis.get(clave)) ?? '{}') ?? {}; } catch { guardado = {}; }
+
+            const { estado, persistentes } = contarPasadas(guardado.pasadas, difs);
+            const firma = firmaDe(persistentes);
+            const ahora = Date.now();
+            let { firmaAvisada, avisadoEn } = guardado;
+            if (debeAvisar({ firma, firmaAvisada, avisadoEn, ahora }) && tienda.owner?.id) {
+                const r = resumenDeAviso(persistentes, nombreCanal);
+                const canales = [...new Set(persistentes.map((d) => d.marketplace))];
+                await this.notifications.notify(tienda.owner.id, {
+                    type: 'reconciliation',
+                    severity: r.severity,
+                    title: r.title,
+                    body: r.body,
+                    storeId,
+                    marketplace: canales.length === 1 ? canales[0] : undefined,
+                    meta: { total: persistentes.length, items: r.items },
+                });
+                firmaAvisada = firma;
+                avisadoEn = ahora;
+                avisos++;
+            }
+            if (!Object.keys(estado).length && !firmaAvisada) {
+                await this.redis.del(clave);
+            } else {
+                // Si ya no hay diferencias persistentes se olvida el último aviso: si vuelven, se avisa de nuevo.
+                const guardar = { pasadas: estado, firmaAvisada: firma ? firmaAvisada : '', avisadoEn: firma ? avisadoEn : 0 };
+                await this.redis.set(clave, JSON.stringify(guardar), 'EX', 7 * 24 * 3600);
+            }
+        }
+        return { tiendas: porTienda.size, avisos };
     }
 
     /**

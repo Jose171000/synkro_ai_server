@@ -10,6 +10,7 @@ export type NotificationType =
     | 'connection'        // una cuenta de marketplace se cayó o se reconectó
     | 'low-stock'         // un producto publicado se está agotando
     | 'import'            // una importación o carga masiva terminó
+    | 'reconciliation'    // un canal quedó con un stock o precio distinto al de Synkro
     | 'system';           // avisos de la plataforma
 
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';

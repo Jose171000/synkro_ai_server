@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, MoreThan, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
@@ -133,6 +133,19 @@ export class ChangeRequestsService {
             status: 'pending',
             requestedBy: { id: scope.userId } as User,
         }));
+    }
+
+    /**
+     * Las solicitudes que ya están en camino: pendientes de aprobar o aprobadas hace poco y todavía sin resultado. La conciliación
+     * no avisa de una diferencia que alguien ya está resolviendo. Clave: «productoId|cuentaId|campo».
+     */
+    async enCamino(): Promise<Set<string>> {
+        const haceSeisHoras = new Date(Date.now() - 6 * 3600_000);
+        const lista = await this.repository.find({
+            where: [{ status: 'pending' }, { status: 'approved', createdAt: MoreThan(haceSeisHoras) }],
+            relations: { product: true, connection: true },
+        });
+        return new Set(lista.filter((r) => r.product?.id && r.connection?.id).map((r) => `${r.product.id}|${r.connection!.id}|${r.field}`));
     }
 
     /**
