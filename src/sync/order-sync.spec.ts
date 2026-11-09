@@ -678,6 +678,53 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
         expect(t.trabajos).toHaveLength(0);
     });
 
+    describe('reenvío masivo', () => {
+        it('cuenta lo enviado, lo que queda en revisión y omite lo que no se puede sin frenar al resto', async () => {
+            const t = await armar();
+            t.repoEnlaces.findOne
+                .mockResolvedValueOnce(enlace({ id: 'a' }) as any)
+                .mockResolvedValueOnce(enlace({ id: 'b', pausedByUser: true }) as any)
+                .mockResolvedValueOnce(null as any);
+            const r = await t.service.resendListingsStock({ userId: 'u1', storeId: 't1' }, ['a', 'b', 'c', 'a']);
+            expect(r.enRevision).toBe(1);
+            expect(r.enviados).toBe(0);
+            expect(r.omitidos).toEqual([
+                { listingId: 'b', motivo: expect.stringContaining('La pausaste') },
+                { listingId: 'c', motivo: expect.stringContaining('No se encontró') },
+            ]);
+        });
+
+        it('con el modo revisión apagado cuenta los envíos; rechaza listas vacías o de más de 200', async () => {
+            const t = await armar({}, false);
+            const r = await t.service.resendListingsStock({ userId: 'u1', storeId: 't1' }, ['l1']);
+            expect(r).toMatchObject({ enviados: 1, enRevision: 0, omitidos: [] });
+            await expect(t.service.resendListingsStock({ userId: 'u1', storeId: 't1' }, [])).rejects.toThrow('al menos una');
+            await expect(t.service.resendListingsStock({ userId: 'u1', storeId: 't1' }, Array.from({ length: 201 }, (_, i) => `x${i}`))).rejects.toThrow('demasiadas');
+        });
+    });
+
+    describe('Ripley en piloto', () => {
+        const antes = { ...process.env };
+        afterEach(() => { process.env = { ...antes }; });
+
+        it('con el envío apagado o el SKU fuera de la lista no se reenvía', async () => {
+            delete process.env.RIPLEY_PUSH_ENABLED;
+            await expect((await armar({ marketplace: 'ripley' })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow(/piloto/);
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = 'OTRO';
+            await expect((await armar({ marketplace: 'ripley' })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow(/piloto/);
+        });
+
+        it('con el envío encendido y el SKU en la lista pasa por Revisión como cualquier canal', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '107-001-116';
+            const t = await armar({ marketplace: 'ripley' });
+            const r = await t.service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1');
+            expect(r.pending).toBe(1);
+            expect(t.changeRequests.createStockResend).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ marketplace: 'ripley' }));
+        });
+    });
+
     it('una publicación pausada por la persona, de Ripley o que no es de la tienda no se toca', async () => {
         await expect((await armar({ pausedByUser: true })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('La pausaste');
         await expect((await armar({ marketplace: 'ripley' })).service.resendListingStock({ userId: 'u1', storeId: 't1' }, 'l1')).rejects.toThrow('Ripley');

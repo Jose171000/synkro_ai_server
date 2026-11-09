@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
+import { skuPermitidoParaRipley } from './ripley/ripley-oferta';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
@@ -2552,8 +2553,11 @@ export class SyncService implements OnModuleInit {
         if (!link || !link.connection || !link.product) throw new NotFoundException('No se encontró esa publicación en esta tienda.');
         if (!['published', 'paused'].includes(link.syncStatus)) throw new BadRequestException('Esa publicación no está activa en el canal.');
         if (link.pausedByUser) throw new BadRequestException('La pausaste tú: reanúdala antes de reenviarle el stock.');
-        if (link.marketplace === 'ripley') throw new BadRequestException('Ripley todavía no recibe stock desde Synkro.');
         const product = await this.findScopedProduct(scope, link.product.id);
+        // Ripley está en piloto: solo recibe stock si el envío está encendido y el SKU está en la lista permitida.
+        if (link.marketplace === 'ripley' && (process.env.RIPLEY_PUSH_ENABLED !== 'true' || !skuPermitidoParaRipley(product.sku))) {
+            throw new BadRequestException('El envío de stock a Ripley sigue en piloto y todavía no está habilitado para este SKU.');
+        }
         if (link.lastStockSynced === product.stock) throw new BadRequestException(`El canal ya tiene el mismo stock que Synkro (${product.stock}).`);
 
         const canal = nombreCanal(link.marketplace);
@@ -2563,6 +2567,26 @@ export class SyncService implements OnModuleInit {
         }
         await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: link.marketplace, connectionId: link.connection.id });
         return { message: `Enviando ${product.stock} u. a ${canal}.` };
+    }
+
+    /**
+     * Reenvío de stock a varias publicaciones a la vez. Cada una sigue las reglas del reenvío individual; una que se omite
+     * (pausada, ya al día, Ripley fuera del piloto…) no frena a las demás.
+     */
+    async resendListingsStock(scope: SyncScope, listingIds: string[]) {
+        const ids = [...new Set((listingIds ?? []).map((i) => String(i).trim()).filter(Boolean))];
+        if (!ids.length) throw new BadRequestException('Elige al menos una publicación.');
+        if (ids.length > 200) throw new BadRequestException('Son demasiadas a la vez: elige hasta 200.');
+        const r = { enviados: 0, enRevision: 0, omitidos: [] as { listingId: string; motivo: string }[] };
+        for (const id of ids) {
+            try {
+                const res = await this.resendListingStock(scope, id);
+                if (res.pending) r.enRevision++; else r.enviados++;
+            } catch (error: any) {
+                r.omitidos.push({ listingId: id, motivo: String(error?.message ?? 'No se pudo reenviar.').slice(0, 200) });
+            }
+        }
+        return r;
     }
 
     /** Programa el envío de stock y precio (con su descuento) de un producto a una cuenta de un canal. */

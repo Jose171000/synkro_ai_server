@@ -82,7 +82,7 @@ describe('armarOfertaParaEnviar', () => {
 
     it('resumen: solo stock y precio', () => {
         const act = ofertaActual();
-        expect(resumenDeCambios(act, armarOfertaParaEnviar(act, { stock: 4 }))).toEqual({ stock: { antes: 5, despues: 4 }, precio: { antes: 89.9, despues: 89.9 } });
+        expect(resumenDeCambios(act, armarOfertaParaEnviar(act, { stock: 4 }))).toEqual({ stock: { antes: 5, despues: 4 }, precio: { antes: 89.9, despues: 89.9 }, descuento: { antes: 79.9, despues: 79.9 } });
     });
 });
 

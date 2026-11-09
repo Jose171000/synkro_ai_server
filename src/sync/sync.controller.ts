@@ -31,6 +31,7 @@ import { FalabellaVariantImportService } from './falabella-variant-import.servic
 import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ImportFalabellaDto } from './dto/import-falabella.dto';
 import { SugerirColoresDto } from './dto/sugerir-colores.dto';
+import { ResendStockMasivoDto } from './dto/resend-stock-masivo.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
@@ -446,6 +447,19 @@ export class SyncController {
     })
     publishFalabella(@Body() dto: PublishFalabellaDto, @Req() req) {
         return this.syncService.publishBatchToFalabella(scopeOf(req), dto.connectionId, dto.productIds);
+    }
+
+    @Post('listings/resend-stock')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'Vuelve a mandar el stock de Synkro a varias publicaciones a la vez (hasta 200)',
+        description: 'Aplica las mismas reglas que el reenvío individual (modo revisión, pausadas, Ripley en piloto). Responde qué se envió, qué quedó en revisión y qué se omitió y por qué.',
+    })
+    resendStockMasivo(@Body() dto: ResendStockMasivoDto, @Req() req) {
+        return this.syncService.resendListingsStock(scopeOf(req), dto.listingIds);
     }
 
     @Post('listings/:id/resend-stock')

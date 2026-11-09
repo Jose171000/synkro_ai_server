@@ -100,7 +100,9 @@ export function armarOfertaParaEnviar(actual: any, cambios: CambiosDeOferta): Re
 export function resumenDeCambios(actual: any, enviar: Record<string, any>) {
     return {
         stock: { antes: actual?.quantity ?? null, despues: enviar.quantity },
-        precio: { antes: actual?.price ?? null, despues: enviar.price },
+        // Con descuento, el precio de lista de hoy es el origin_price (el «price» que lee Ripley ya es el rebajado).
+        precio: { antes: actual?.discount?.origin_price ?? actual?.price ?? null, despues: enviar.price },
+        descuento: { antes: actual?.discount?.discount_price ?? null, despues: enviar.discount?.price ?? null },
     };
 }
 
