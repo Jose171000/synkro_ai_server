@@ -180,6 +180,14 @@ describe('Ripley: ofertas como publicaciones', () => {
         expect(filaDeOfertaRipley(oferta({ quantity: -3 }))?.stock).toBe(0);
         expect(filaDeOfertaRipley(oferta({ quantity: 4.9 }))?.stock).toBe(4);
     });
+    it('arma el enlace público de la ficha con el código del producto (base de la familia, en minúscula); sin código o fuera de Perú, no hay enlace', () => {
+        expect(filaDeOfertaRipley(oferta({ product_sku: 'PMP20000960762-3' }))?.permalink).toBe('https://simple.ripley.com.pe/producto-pmp20000960762');
+        expect(filaDeOfertaRipley(oferta({ product_sku: 'PMP20000960762' }))?.permalink).toBe('https://simple.ripley.com.pe/producto-pmp20000960762');
+        expect(filaDeOfertaRipley(oferta())?.permalink).toBeNull();
+        expect(filaDeOfertaRipley(oferta({ product_sku: 'PMP20000960762-3', currency_iso_code: 'CLP' }))?.permalink).toBeNull();
+        expect(filaDeOfertaRipley(oferta({ product_sku: 'XYZ-1' }))?.permalink).toBeNull();
+    });
+
     it('con rebaja, el precio normal es el de lista (origin_price) y la rebaja va aparte, no el precio ya rebajado', () => {
         const f = filaDeOfertaRipley(oferta({ price: 120, discount: { discount_price: 120, origin_price: 180 } }));
         expect(f?.regularPrice).toBe(180);

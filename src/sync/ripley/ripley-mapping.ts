@@ -237,6 +237,19 @@ export function fotosDeRespuestaP11(respuesta: any): Map<string, string> {
     return fotos;
 }
 
+/**
+ * Ripley no da la dirección pública de la publicación en su API. Su tienda (Perú) abre la ficha con cualquier texto seguido del
+ * código del producto en minúscula, y la redirige sola a su dirección completa: «…/x-pmp20000960762» → «…/auriculares-…-pmp20000960762».
+ * El código es la base de «PMP20000960762-1» (la familia); el color/variante concreto no se puede elegir desde aquí.
+ * Solo Perú (moneda PEN): otros países tienen otra tienda.
+ */
+export function enlaceDeRipley(productSku: unknown, moneda: string | null): string | null {
+    if (moneda !== 'PEN') return null;
+    const entero = typeof productSku === 'string' ? productSku.trim() : '';
+    const codigo = (familiaDeProducto(entero)?.base ?? entero).toLowerCase();
+    return /^pmp\d+$/.test(codigo) ? `https://simple.ripley.com.pe/producto-${codigo}` : null;
+}
+
 /** Una oferta de Ripley (GET /api/offers) como fila por SKU. Sin SKU de la tienda no se puede enlazar: devuelve null. */
 export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null): ChannelListingRow | null {
     const sku = texto(oferta?.shop_sku);
@@ -256,7 +269,7 @@ export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null
         salePrice: conDescuento != null && precio != null && conDescuento < precio ? conDescuento : null,
         stock,
         status: oferta?.active === false ? 'paused' : 'published',
-        permalink: null,
+        permalink: enlaceDeRipley(oferta?.product_sku, texto(oferta?.currency_iso_code) ?? monedaDeLaCuenta ?? null),
         imageUrl: null,
         images: [],
         currency: texto(oferta?.currency_iso_code) ?? monedaDeLaCuenta ?? null,
