@@ -97,7 +97,8 @@ export interface ChannelHandler {
     poll(connection: MarketplaceConnection): Promise<{ nuevos: number; revisados: number }>;
     refresh(connection: MarketplaceConnection): Promise<{ revisadas: number; actualizadas: number; ausentes: number }>;
     history(connection: MarketplaceConnection, desde: Date, hasta: Date): Promise<{ registradas: number; yaRegistradas: number; incompleto: boolean }>;
-    pushInventory(productId: string, connectionId?: string): Promise<void>;
+    /** Devuelve {omitido} cuando el canal NO recibió el cambio a propósito (así no se anota como enviado). */
+    pushInventory(productId: string, connectionId?: string): Promise<void | { omitido: string }>;
 }
 
 const sku0 = (f: { SellerSku?: string }) => String(f.SellerSku ?? '').trim();
@@ -120,10 +121,10 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Ejecutado por la cola: envía a un canal de tienda propia el stock y precio actuales. */
-    async pushInventoryToChannel(marketplace: string, productId: string, connectionId?: string): Promise<void> {
+    async pushInventoryToChannel(marketplace: string, productId: string, connectionId?: string): Promise<void | { omitido: string }> {
         const handler = this.channelHandlers.get(marketplace);
         if (!handler) throw new Error(`Marketplace no soportado aún: ${marketplace}`);
-        await handler.pushInventory(productId, connectionId);
+        return handler.pushInventory(productId, connectionId);
     }
 
     /**

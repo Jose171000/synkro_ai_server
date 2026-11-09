@@ -587,9 +587,11 @@ describe('Ripley: por ahora solo se lee', () => {
         const { service, sync, cliente } = construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enlace] });
         service.onModuleInit();
 
-        await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+        const r = await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
 
         expect(cliente.setInventory).not.toHaveBeenCalled();
+        // Y se avisa que se omitió, para que el historial no diga «Enviado».
+        expect(r).toEqual({ omitido: expect.stringContaining('apagado') });
     });
 
     describe('con el envío encendido (RIPLEY_PUSH_ENABLED)', () => {
@@ -606,8 +608,9 @@ describe('Ripley: por ahora solo se lee', () => {
             delete process.env.RIPLEY_PUSH_SKUS;
             const { service, sync, cliente } = armar();
             service.onModuleInit();
-            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
+            const r = await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1');
             expect(cliente.setInventory).not.toHaveBeenCalled();
+            expect(r).toEqual({ omitido: expect.stringContaining('piloto') });
         });
 
         it('un SKU fuera de la lista del piloto no sale', async () => {

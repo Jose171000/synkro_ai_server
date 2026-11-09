@@ -598,7 +598,7 @@ export class SyncController {
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
     @RequirePermission('canales.ver')
     @ApiOperation({ summary: 'Solicitudes de cambio de precio/stock de la tienda' })
-    @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error'] })
+    @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'] })
     listChangeRequests(@Req() req, @Query('status') status?: string) {
         return this.changeRequests.list(scopeOf(req), status);
     }

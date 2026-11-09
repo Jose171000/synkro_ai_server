@@ -5,7 +5,8 @@ import { Store } from '../../stores/entities/store.entity';
 import { MarketplaceConnection } from './marketplace-connection.entity';
 
 export type ChangeRequestField = 'price' | 'stock';
-export type ChangeRequestStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'error';
+/** «skipped»: se aprobó pero el canal no lo recibió a propósito (p. ej. el envío a Ripley está apagado). */
+export type ChangeRequestStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'error' | 'skipped';
 
 /**
  * Un cambio de precio o stock que espera aprobación antes de llegar a un canal.

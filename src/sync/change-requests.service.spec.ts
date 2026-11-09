@@ -132,6 +132,12 @@ describe('aprobar y rechazar', () => {
         expect(cola.add).not.toHaveBeenCalled();
     });
 
+    it('una solicitud que el canal omitió a propósito queda «skipped» con su motivo, no «sent»', async () => {
+        const { service, repo } = construir();
+        await service.markSkipped('r1', 'El envío a Ripley está apagado');
+        expect(repo.update).toHaveBeenLastCalledWith({ id: 'r1' }, expect.objectContaining({ status: 'skipped', resultMessage: 'El envío a Ripley está apagado' }));
+    });
+
     it('el worker cierra la solicitud como enviada o con error', async () => {
         const { service, repo } = construir();
         await service.markResult('r1', true);

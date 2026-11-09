@@ -105,7 +105,11 @@ export class EcommerceSyncService implements OnModuleInit {
                 refresh: c => this.refresh(c),
                 history: (c, desde, hasta) => this.history(c, desde, hasta),
                 // Ripley todavía solo se lee: aunque un producto esté enlazado, su stock no se manda hasta activarlo.
-                pushInventory: (productId, connectionId) => (canal === 'ripley' && !ripleyPuedeEscribir() ? Promise.resolve() : this.pushInventory(canal, productId, connectionId)),
+                pushInventory: (productId, connectionId) => (
+                    canal === 'ripley' && !ripleyPuedeEscribir()
+                        ? Promise.resolve({ omitido: 'El envío de stock a Ripley está apagado: el cambio no se mandó a Ripley.' })
+                        : this.pushInventory(canal, productId, connectionId)
+                ),
             });
         }
     }
@@ -444,7 +448,7 @@ export class EcommerceSyncService implements OnModuleInit {
     // ─────────────────────────────────────────────────────────────
 
     /** Ejecutado por la cola: envía al canal el stock y el precio actuales de un producto. */
-    async pushInventory(canal: EcommerceChannel, productId: string, connectionId?: string): Promise<void> {
+    async pushInventory(canal: EcommerceChannel, productId: string, connectionId?: string): Promise<void | { omitido: string }> {
         const product = await this.products.findOne({ where: { id: productId } });
         const link = await this.links.findOne({
             where: {
@@ -459,7 +463,7 @@ export class EcommerceSyncService implements OnModuleInit {
         // Ripley: solo salen los SKU de la lista RIPLEY_PUSH_SKUS (el piloto); el precio solo si RIPLEY_PUSH_PRICE=true.
         if (canal === 'ripley' && !skuPermitidoParaRipley(product.sku)) {
             console.log(`[Sync] Ripley: el SKU ${product.sku} no está en RIPLEY_PUSH_SKUS; no se envió su stock.`);
-            return;
+            return { omitido: `El SKU ${product.sku} todavía no está habilitado para enviar stock a Ripley (piloto): el cambio no se mandó a Ripley.` };
         }
         const enviaPrecio = canal !== 'ripley' || ripleyEnviaPrecio();
 

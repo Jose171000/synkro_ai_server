@@ -9,7 +9,7 @@ import { Store } from '../stores/entities/store.entity';
 import { ChangeRequestStatus, SyncChangeRequest } from './entities/sync-change-request.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 
-const ESTADOS: ChangeRequestStatus[] = ['pending', 'approved', 'rejected', 'sent', 'error'];
+const ESTADOS: ChangeRequestStatus[] = ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'];
 
 /** Quién actúa y en qué tienda. */
 export interface ChangeScope {
@@ -198,7 +198,12 @@ export class ChangeRequestsService {
         await this.finish(id, ok ? 'sent' : 'error', ok ? null : message ?? 'Error desconocido');
     }
 
-    private async finish(id: string, status: 'sent' | 'error', message: string | null) {
+    /** El canal no recibió el cambio a propósito: la solicitud queda como «No enviado» con el motivo, nunca como «Enviado». */
+    async markSkipped(id: string, message: string) {
+        await this.finish(id, 'skipped', message);
+    }
+
+    private async finish(id: string, status: 'sent' | 'error' | 'skipped', message: string | null) {
         await this.repository.update({ id }, { status, resultMessage: message, resolvedAt: new Date() });
     }
 }

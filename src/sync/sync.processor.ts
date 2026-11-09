@@ -85,13 +85,16 @@ export class SyncProcessor extends WorkerHost {
                         await this.yavendio.pushInventory(productId, connectionId);
                         result = { status: 'synced' };
                     } else if (this.syncService.hasChannel(marketplace)) {
-                        await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId);
-                        result = { status: 'synced' };
+                        const r = await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId);
+                        result = r && 'omitido' in r ? { status: 'omitido', message: r.omitido } : { status: 'synced' };
                     } else {
                         throw new Error(`Marketplace no soportado aún: ${marketplace}`);
                     }
-                    // Si el envío nació de una aprobación, se cierra la solicitud.
-                    if (changeRequestId) await this.changeRequests.markResult(changeRequestId, true);
+                    // Si el envío nació de una aprobación, se cierra la solicitud: «Enviado» solo si de verdad salió.
+                    if (changeRequestId) {
+                        if (result?.status === 'omitido') await this.changeRequests.markSkipped(changeRequestId, result.message);
+                        else await this.changeRequests.markResult(changeRequestId, true);
+                    }
                     return result;
                 } catch (error: any) {
                     if (changeRequestId) await this.changeRequests.markResult(changeRequestId, false, error?.message);
