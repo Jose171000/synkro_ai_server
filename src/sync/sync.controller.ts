@@ -33,6 +33,8 @@ import { ImportFalabellaDto } from './dto/import-falabella.dto';
 import { SugerirColoresDto } from './dto/sugerir-colores.dto';
 import { ResendStockMasivoDto } from './dto/resend-stock-masivo.dto';
 import { ListingPromoDto } from './dto/listing-promo.dto';
+import { ChangeRequestIdsDto } from './dto/change-request-ids.dto';
+import { GroupPriceDto } from './dto/group-price.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
@@ -379,6 +381,41 @@ export class SyncController {
         return this.sheets.saveSheet(scopeOf(req), id, dto);
     }
 
+    @Get('groups/:groupId/prices')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('productos.ver')
+    @ApiOperation({ summary: 'Precios de un grupo de variantes: el del producto y el propio de cada canal (solo lectura)' })
+    getGroupPrices(@Param('groupId') groupId: string, @Req() req) {
+        return this.sheets.getGroupPrices(scopeOf(req), groupId);
+    }
+
+    @Patch('groups/:groupId/channel-prices')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @ApiOperation({
+        summary: 'Precio y descuento propios de cada canal, para todas las variantes de un grupo',
+        description: 'Se aplican a las variantes publicadas en esa cuenta y salen a su canal, como al editarlos en la ficha de una variante.',
+    })
+    saveGroupChannelPrices(@Param('groupId') groupId: string, @Body() dto: SaveSheetDto, @Req() req) {
+        return this.sheets.saveGroupPrices(scopeOf(req), groupId, dto.prices ?? []);
+    }
+
+    @Patch('groups/:groupId/inventory')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'El precio del producto para todas las variantes de un grupo',
+        description: 'Con el modo revisión de la tienda encendido no toca los canales: deja una solicitud por variante y canal y responde 202.',
+    })
+    async updateGroupInventory(@Param('groupId') groupId: string, @Body() dto: GroupPriceDto, @Req() req, @Res({ passthrough: true }) res: Response) {
+        const result = await this.syncService.updateGroupInventory(scopeOf(req), groupId, dto);
+        if (result.pending) res.status(HttpStatus.ACCEPTED);
+        return result;
+    }
+
     @Patch('groups/:groupId/sheet')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
@@ -642,6 +679,26 @@ export class SyncController {
     @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'] })
     listChangeRequests(@Req() req, @Query('status') status?: string) {
         return this.changeRequests.list(scopeOf(req), status);
+    }
+
+    @Post('change-requests/approve-many')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('cambios.aprobar')
+    @ApiOperation({ summary: 'Aprueba varias solicitudes a la vez (un grupo de variantes o todas las pendientes), hasta 200' })
+    approveManyChangeRequests(@Body() dto: ChangeRequestIdsDto, @Req() req) {
+        return this.changeRequests.approveMany(dto.ids, scopeOf(req));
+    }
+
+    @Post('change-requests/reject-many')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('cambios.aprobar')
+    @ApiOperation({ summary: 'Rechaza varias solicitudes a la vez, hasta 200' })
+    rejectManyChangeRequests(@Body() dto: ChangeRequestIdsDto, @Req() req) {
+        return this.changeRequests.rejectMany(dto.ids, scopeOf(req), dto.reason);
     }
 
     @Post('change-requests/:id/approve')

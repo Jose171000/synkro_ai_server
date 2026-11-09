@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { descripcionDeTexto } from './meli/descripcion-meli';
 import { Product } from '../products/entities/product.entity';
 import { ListingLink } from './entities/listing-link.entity';
@@ -214,6 +214,88 @@ export class ProductSheetService {
             },
             listo: true,
         };
+    }
+
+    /**
+     * Los precios de un grupo de variantes, para editarlos todos a la vez: el precio del producto (y cuántos distintos hay) y, por
+     * cuenta de canal, el precio y descuento propios (el más repetido, avisando si las variantes difieren). Solo lee la base de datos.
+     */
+    async getGroupPrices(scope: SyncScope, groupId: string) {
+        const variantes = await this.products.find({ where: { group: { id: groupId }, store: { id: scope.storeId } }, order: { createdAt: 'ASC' } });
+        if (!variantes.length) throw new NotFoundException('No se encontró ese grupo de variantes en esta tienda.');
+        const enlaces = await this.links.find({
+            where: { product: { id: In(variantes.map((v) => v.id)) } },
+            relations: { connection: { store: true }, product: true },
+        });
+
+        const precios = variantes.map((v) => (v.price === null || v.price === undefined ? null : Number(v.price))).filter((p): p is number => p !== null);
+        const distintos = [...new Set(precios)];
+        const masRepetido = <T,>(valores: T[], clave: (v: T) => string): { valor: T; distintos: number } | null => {
+            if (!valores.length) return null;
+            const cuenta = new Map<string, { valor: T; n: number }>();
+            for (const v of valores) { const k = clave(v); const e = cuenta.get(k); if (e) e.n++; else cuenta.set(k, { valor: v, n: 1 }); }
+            const mejor = [...cuenta.values()].sort((a, b) => b.n - a.n)[0];
+            return { valor: mejor.valor, distintos: cuenta.size };
+        };
+
+        const porCuenta = new Map<string, ListingLink[]>();
+        for (const e of enlaces) {
+            const cuenta = e.connection;
+            if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(e.marketplace)) continue;
+            porCuenta.set(cuenta.id, [...(porCuenta.get(cuenta.id) ?? []), e]);
+        }
+        const dia = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v).slice(0, 10));
+        const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+        const canales = [...porCuenta.entries()].map(([connectionId, lista]) => {
+            const cuenta = lista[0].connection!;
+            const propios = lista.map((e) => ({ price: num(e.priceOverride), salePrice: num(e.salePriceOverride), saleStart: dia(e.saleStartOverride), saleEnd: dia(e.saleEndOverride) }));
+            const comun = masRepetido(propios, (p) => JSON.stringify(p));
+            return {
+                connectionId,
+                marketplace: lista[0].marketplace,
+                account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
+                canSetSale: lista[0].marketplace === 'falabella',
+                variantes: lista.length,
+                own: comun!.valor,
+                differs: comun!.distintos > 1,
+            };
+        });
+
+        return {
+            groupId,
+            variantes: variantes.length,
+            price: { min: precios.length ? Math.min(...precios) : null, max: precios.length ? Math.max(...precios) : null, distintos: distintos.length, comun: distintos.length === 1 ? distintos[0] : null },
+            canales,
+        };
+    }
+
+    /**
+     * El precio y descuento propios de cada cuenta, aplicados a TODAS las variantes del grupo donde esa cuenta las tiene publicadas.
+     * Cada variante valida su propio descuento (menor que su precio); las que no cumplen se informan y no frenan a las demás.
+     */
+    async saveGroupPrices(scope: SyncScope, groupId: string, prices: NonNullable<SaveSheetDto['prices']>) {
+        const variantes = await this.products.find({ where: { group: { id: groupId }, store: { id: scope.storeId } }, order: { createdAt: 'ASC' } });
+        if (!variantes.length) throw new NotFoundException('No se encontró ese grupo de variantes en esta tienda.');
+        if (!prices?.length) throw new BadRequestException('No hay precios que guardar.');
+
+        const destinos = new Set<string>();
+        const errores: { sku: string; mensaje: string }[] = [];
+        let aplicadas = 0;
+        let sinPublicar = 0;
+        for (const v of variantes) {
+            const enlaces = await this.links.find({ where: { product: { id: v.id } }, relations: { connection: true } });
+            const cuentas = new Set(enlaces.map((e) => e.connection?.id));
+            const suyos = prices.filter((p) => cuentas.has(p.connectionId));
+            if (!suyos.length) { sinPublicar++; continue; }
+            try {
+                (await this.guardarPrecios(scope, v, suyos)).forEach((m) => destinos.add(m));
+                aplicadas++;
+            } catch (error: any) {
+                errores.push({ sku: v.sku, mensaje: String(error?.message ?? 'No se pudo guardar.').slice(0, 200) });
+            }
+        }
+        if (!aplicadas && errores.length) throw new BadRequestException(errores[0].mensaje);
+        return { saved: true, variantes: aplicadas, sinPublicar, errores, pricesSent: [...destinos] };
     }
 
     /**

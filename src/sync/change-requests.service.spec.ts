@@ -155,6 +155,26 @@ describe('aprobar y rechazar', () => {
         expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ field: 'promo', previousValue: '120', newValue: '100||', status: 'pending' }));
     });
 
+    it('aprobar varias a la vez: cada una sigue sus reglas y una ya resuelta o que falla no frena a las demás', async () => {
+        const { service, repo, cola } = construir({ solicitud, producto: { ...producto } });
+        repo.update
+            .mockResolvedValueOnce({ affected: 1 }) // r1: se aprueba
+            .mockResolvedValueOnce({ affected: 0 }); // r2: ya estaba resuelta
+        const r = await service.approveMany(['r1', 'r2', 'r1'], SCOPE); // el repetido cuenta una vez
+        expect(r.aprobadas).toBe(1);
+        expect(r.omitidas).toEqual([{ id: 'r2', motivo: expect.stringContaining('ya fue resuelta') }]);
+        expect(cola.add).toHaveBeenCalledTimes(1);
+    });
+
+    it('rechazar varias a la vez con el mismo motivo', async () => {
+        const { service, repo } = construir({ solicitud, producto: { ...producto } });
+        repo.update.mockResolvedValueOnce({ affected: 1 }).mockResolvedValueOnce({ affected: 1 }).mockResolvedValueOnce({ affected: 0 });
+        const r = await service.rejectMany(['a', 'b', 'c'], SCOPE, 'precio mal escrito');
+        expect(r.rechazadas).toBe(2);
+        expect(r.omitidas).toEqual([{ id: 'c', motivo: expect.stringContaining('ya fue resuelta') }]);
+        expect(repo.update).toHaveBeenCalledWith({ id: 'a', status: 'pending' }, expect.objectContaining({ status: 'rejected', resultMessage: 'precio mal escrito' }));
+    });
+
     it('una solicitud de otra tienda no se puede aprobar', async () => {
         const { service, cola } = construir({ solicitud: null });
         await expect(service.approve('r-ajena', SCOPE)).rejects.toThrow(/no encontrada/i);

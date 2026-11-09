@@ -185,10 +185,43 @@ export class ChangeRequestsService {
                 { store: { id: scope.storeId }, ...estado },
                 { store: IsNull(), requestedBy: { id: scope.userId }, ...estado },
             ],
-            relations: { product: true, connection: true },
+            // El grupo del producto permite mostrar «Sandalias… · 20 variantes» en vez de 20 filas sueltas.
+            relations: { product: { group: true }, connection: true },
             order: { createdAt: 'DESC' },
             take: 200,
         });
+    }
+
+    /**
+     * Aprueba varias solicitudes de una vez (un grupo de variantes, o todas las pendientes). Cada una sigue las reglas de siempre;
+     * una que ya estaba resuelta o falla no frena a las demás.
+     */
+    async approveMany(ids: string[], scope: ChangeScope) {
+        const unicos = [...new Set(ids)];
+        const r = { aprobadas: 0, omitidas: [] as { id: string; motivo: string }[] };
+        for (const id of unicos) {
+            try {
+                await this.approve(id, scope);
+                r.aprobadas++;
+            } catch (error: any) {
+                r.omitidas.push({ id, motivo: String(error?.message ?? 'No se pudo aprobar.').slice(0, 200) });
+            }
+        }
+        return r;
+    }
+
+    async rejectMany(ids: string[], scope: ChangeScope, reason?: string) {
+        const unicos = [...new Set(ids)];
+        const r = { rechazadas: 0, omitidas: [] as { id: string; motivo: string }[] };
+        for (const id of unicos) {
+            try {
+                await this.reject(id, scope, reason);
+                r.rechazadas++;
+            } catch (error: any) {
+                r.omitidas.push({ id, motivo: String(error?.message ?? 'No se pudo rechazar.').slice(0, 200) });
+            }
+        }
+        return r;
     }
 
     private async findInStore(id: string, scope: ChangeScope): Promise<SyncChangeRequest> {

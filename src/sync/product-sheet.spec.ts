@@ -78,6 +78,61 @@ describe('ficha de un grupo de variantes', () => {
         expect(guardados[1].aiAttributes).toMatchObject({ color: 'Beige', color_basico: 'Beige', talla: '36', Color: 'Beige' });
     });
 
+    describe('precios de todas las variantes', () => {
+        const cuenta = { id: 'c1', label: 'Joli Joli', status: 'active', store: { id: 't1' } };
+        const enlace = (productId: string, over: any = {}) => ({
+            id: `l-${productId}`, marketplace: 'falabella', syncStatus: 'published', product: { id: productId }, connection: cuenta,
+            priceOverride: null, salePriceOverride: null, saleStartOverride: null, saleEndOverride: null, ...over,
+        });
+        const armarPrecios = (variantes: any[], enlaces: any[]) => {
+            const guardados: any[] = [];
+            const sync: any = { programarEnvioDeInventario: jest.fn(async () => undefined) };
+            const products: any = { find: jest.fn(async () => variantes) };
+            const links: any = {
+                find: jest.fn(async ({ where }: any) => {
+                    const ids = where.product.id?._value ?? [where.product.id];
+                    return enlaces.filter((e) => ids.includes(e.product.id));
+                }),
+                findOne: jest.fn(async ({ where }: any) => enlaces.find((e) => e.product.id === where.product.id && e.connection.id === where.connection.id) ?? null),
+                save: jest.fn(async (e: any) => { guardados.push({ ...e }); return e; }),
+            };
+            return { service: new ProductSheetService(sync, {} as any, links, products), sync, guardados };
+        };
+        const v = (id: string, price: number) => ({ id, sku: `SAN-${id}`, price, group: { id: 'g1' } });
+
+        it('muestra el precio del producto (y cuántos distintos hay) y el propio de cada canal, avisando si difiere', async () => {
+            const { service } = armarPrecios(
+                [v('a', 200), v('b', 200), v('c', 190)],
+                [enlace('a', { priceOverride: 210 }), enlace('b', { priceOverride: 210 }), enlace('c')],
+            );
+            const r = await service.getGroupPrices(SCOPE, 'g1');
+            expect(r.price).toMatchObject({ min: 190, max: 200, distintos: 2, comun: null });
+            expect(r.canales).toHaveLength(1);
+            expect(r.canales[0]).toMatchObject({ connectionId: 'c1', marketplace: 'falabella', canSetSale: true, variantes: 3, differs: true, own: { price: 210 } });
+            const iguales = await armarPrecios([v('a', 200), v('b', 200)], [enlace('a'), enlace('b')]).service.getGroupPrices(SCOPE, 'g1');
+            expect(iguales.price).toMatchObject({ distintos: 1, comun: 200 });
+            expect(iguales.canales[0].differs).toBe(false);
+        });
+
+        it('aplica el precio y descuento propios a las variantes publicadas en esa cuenta y programa su envío; las que no están publicadas se cuentan', async () => {
+            const { service, sync, guardados } = armarPrecios([v('a', 200), v('b', 200), v('sin', 200)], [enlace('a'), enlace('b')]);
+            const r = await service.saveGroupPrices(SCOPE, 'g1', [{ connectionId: 'c1', price: 230, salePrice: 180, saleStart: '2026-11-10', saleEnd: '2026-12-10' }]);
+            expect(r).toMatchObject({ saved: true, variantes: 2, sinPublicar: 1, errores: [], pricesSent: ['falabella'] });
+            expect(guardados.map((g) => g.priceOverride)).toEqual([230, 230]);
+            expect(sync.programarEnvioDeInventario).toHaveBeenCalledTimes(2);
+        });
+
+        it('un descuento que no cabe en el precio de una variante se informa sin frenar a las demás; si falla en todas, se rechaza', async () => {
+            const { service } = armarPrecios([v('a', 200), v('b', 100)], [enlace('a'), enlace('b')]);
+            const r = await service.saveGroupPrices(SCOPE, 'g1', [{ connectionId: 'c1', salePrice: 150 }]);
+            expect(r.variantes).toBe(1);
+            expect(r.errores).toEqual([{ sku: 'SAN-b', mensaje: expect.stringContaining('debe ser menor') }]);
+            const todas = armarPrecios([v('a', 100), v('b', 100)], [enlace('a'), enlace('b')]);
+            await expect(todas.service.saveGroupPrices(SCOPE, 'g1', [{ connectionId: 'c1', salePrice: 150 }])).rejects.toThrow(/debe ser menor/);
+            await expect(todas.service.saveGroupPrices(SCOPE, 'g1', [])).rejects.toThrow(/No hay precios/);
+        });
+    });
+
     it('el título común es también el nombre del grupo, y el envío se programa una vez por variante, escalonado', async () => {
         const { service, sync, products } = armar([variante('a', 'Negro', '35'), variante('b', 'Beige', '36'), variante('c', 'Negro', '36')]);
         await service.saveGroupSheet(SCOPE, 'g1', { aiTitle: '  Sandalias floater JOLI JOLI  ' });

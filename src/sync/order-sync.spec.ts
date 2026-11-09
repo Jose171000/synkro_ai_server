@@ -851,6 +851,31 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
         });
     });
 
+    describe('precio de todas las variantes de un grupo', () => {
+        const scope = { userId: 'u1', storeId: 't1' };
+        const armarGrupo = async (variantes: any[], respuestas: any[]) => {
+            const t = await construir();
+            (t.service as any).productRepository.find = jest.fn(async () => variantes);
+            (t.service as any).updateInventory = jest.fn(async () => respuestas.shift());
+            return t;
+        };
+
+        it('aplica el precio a cada variante y, con el modo revisión, suma las solicitudes pendientes de todas', async () => {
+            const t = await armarGrupo([{ id: 'a' }, { id: 'b' }, { id: 'c' }], [{ pending: 1, message: 'x' }, { pending: 2, message: 'x' }, { pending: 1, message: 'x' }]);
+            const r = await t.service.updateGroupInventory(scope, 'g1', { price: 220 });
+            expect(r).toMatchObject({ variantes: 3, pending: 4, message: expect.stringContaining('4 solicitud(es) de 3 variantes') });
+            expect((t.service as any).updateInventory).toHaveBeenCalledTimes(3);
+            expect((t.service as any).updateInventory).toHaveBeenCalledWith(scope, 'a', { price: 220 });
+        });
+
+        it('sin modo revisión cambia el precio al instante; un grupo que no es de la tienda no existe', async () => {
+            const t = await armarGrupo([{ id: 'a' }, { id: 'b' }], [{ message: 'Inventario actualizado.' }, { message: 'Inventario actualizado.' }]);
+            expect(await t.service.updateGroupInventory(scope, 'g1', { price: 220 })).toMatchObject({ variantes: 2, pending: 0, message: 'Precio actualizado en las 2 variantes.' });
+            const vacio = await armarGrupo([], []);
+            await expect(vacio.service.updateGroupInventory(scope, 'g-ajeno', { price: 1 })).rejects.toThrow(/No se encontró/);
+        });
+    });
+
     describe('descuento por cuenta', () => {
         const antes = { ...process.env };
         afterEach(() => { process.env = { ...antes }; });

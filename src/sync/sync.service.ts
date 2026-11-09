@@ -2577,6 +2577,31 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
+     * El precio del producto para TODAS las variantes de un grupo. Cada variante sigue las reglas de siempre: con el modo revisión
+     * encendido cada una deja sus solicitudes (una por canal) esperando aprobación, que la pestaña Revisión agrupa bajo el grupo.
+     */
+    async updateGroupInventory(scope: SyncScope, groupId: string, dto: { price: number }) {
+        const variantes = await this.productRepository.find({
+            where: { group: { id: groupId }, store: { id: scope.storeId } },
+            select: { id: true },
+            order: { createdAt: 'ASC' },
+        });
+        if (!variantes.length) throw new NotFoundException('No se encontró ese grupo de variantes en esta tienda.');
+        let pendientes = 0;
+        for (const v of variantes) {
+            const r: any = await this.updateInventory(scope, v.id, { price: dto.price });
+            if (r && 'pending' in r) pendientes += Number(r.pending) || 0;
+        }
+        return {
+            variantes: variantes.length,
+            pending: pendientes,
+            message: pendientes
+                ? `Cambio en revisión: ${pendientes} solicitud(es) de ${variantes.length} variantes esperan aprobación. Apruébalas juntas en la pestaña Revisión.`
+                : `Precio actualizado en las ${variantes.length} variantes.`,
+        };
+    }
+
+    /**
      * El canal de una publicación tiene un stock distinto al de Synkro (alguien lo cambió allí, o un envío no llegó): vuelve a mandar
      * el de Synkro a ESA cuenta. Con el modo revisión encendido queda como solicitud pendiente, igual que cualquier cambio de stock.
      */
