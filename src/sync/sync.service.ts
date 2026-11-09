@@ -1931,13 +1931,23 @@ export class SyncService implements OnModuleInit {
             return { reason: `le faltan datos que pide su categoria en Falabella: ${faltantes.join(', ')}` };
         }
 
+        // ¿Se agrupa por talla y color (categoría sin campos «…Variant»)? Entonces todas las variantes comparten el nombre del grupo, como
+        // los grupos de calzado que ya existen en las cuentas: lo que las distingue es su talla y su color, no el título.
+        const grupoDelProducto = (product as any).group;
+        const agrupaPorTallaYColor = !!grupoDelProducto && !noAplican.has('parentsku')
+            && !categoriaAdmiteVariantes(categoryAttributes) && variacionPorTallaYColor(categoryAttributes);
+        const nombreComun = agrupaPorTallaYColor
+            ? nombreDeFamilia(grupoDelProducto.name || product.aiTitle || product.name, (grupoDelProducto.axes ?? []).flatMap((e: any) => e.values), 100)
+            : undefined;
+
         return {
             input: {
                 sellerSku: product.sku,
                 // Una variante sin ParentSku (categoría sin variantes) sale como ficha suelta: el color va en el nombre, y se arma desde el
                 // nombre del grupo con hasta 100 caracteres, sin depender de un título guardado que pudo quedar cortado.
                 name: this.nombreParaFalabella(
-                    (product.group && product.variantValues
+                    nombreComun
+                    || (product.group && product.variantValues
                         ? tituloDeVariante(product.group.name, etiquetaDe(product.variantValues, product.group.axes ?? []), (product.group.axes ?? []).flatMap((e) => e.values), 100)
                         : undefined) || product.aiTitle || product.name,
                 ),

@@ -87,6 +87,19 @@ describe('calzado en Falabella: variantes por talla y color agrupadas por Parent
         expect(b.input.extraAttributes).toMatchObject({ color: 'Beige', talla: '35' });
     });
 
+    it('todas las variantes agrupadas comparten el nombre del grupo, sin color ni talla; una ficha suelta conserva su título', () => {
+        const a: any = servicio.toFalabellaInput(variante('SAN-DEM-NEG-38', 'Negro', '38'), 'active', categoria);
+        const b: any = servicio.toFalabellaInput(variante('SAN-DEM-BEI-35', 'Beige', '35'), 'active', categoria);
+        expect(a.input.name).toBe('Sandalias de cuero');
+        expect(b.input.name).toBe(a.input.name);
+        const completos = { brand: 'G', genero: 'Mujer', color: 'Negro', color_basico: 'Negro', talla: '38' };
+        const suelta: any = servicio.toFalabellaInput(variante('X-1', 'Negro', '38', { group: null, variantValues: null, aiAttributes: completos }), 'active', categoria);
+        expect(suelta.input.name).toBe('Sandalias de cuero floater');
+        // Con campos «…Variant» el nombre se arma como siempre.
+        const conVariant: any = servicio.toFalabellaInput(variante('X-4', 'Negro', '38'), 'active', [campo('ColorVariant', { isMandatory: false, options: [] })]);
+        expect(conVariant.input.name).toContain('Negro');
+    });
+
     it('«Vino» no se rechaza: se manda como Burdeo (color básico) y Burdeos (color)', () => {
         const r: any = servicio.toFalabellaInput(variante('SAN-DEM-VIN-36', 'Vino', '36'), 'active', categoria);
         expect('input' in r).toBe(true);
