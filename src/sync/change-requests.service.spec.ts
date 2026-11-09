@@ -121,6 +121,40 @@ describe('aprobar y rechazar', () => {
         expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ field: 'price', previousValue: '35', newValue: '60', marketplace: 'ripley', status: 'pending' }));
     });
 
+    it('un descuento por canal no toca el producto: aprobarlo solo lo manda a esa cuenta, con su valor', async () => {
+        const promo = { id: 'r9', field: 'promo', newValue: '120|2026-11-09|2027-09-30', marketplace: 'ripley', status: 'pending', product: { id: 'p1' }, connection: { id: 'c1' } };
+        const { service, productos, cola } = construir({ solicitud: promo, producto: { ...producto } });
+        await service.approve('r9', SCOPE);
+        expect(productos.save).not.toHaveBeenCalled();
+        expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({
+            marketplace: 'ripley', connectionId: 'c1', changeRequestId: 'r9', conPrecio: false, conStock: false,
+            conDescuento: true, descuento: { precio: 120, desde: '2026-11-09', hasta: '2027-09-30' },
+        }));
+    });
+
+    it('quitar un descuento viaja como «quitar»; un valor dañado no se envía y la solicitud queda con error', async () => {
+        const quitar = { id: 'r8', field: 'promo', newValue: 'quitar', marketplace: 'ripley', status: 'pending', product: { id: 'p1' }, connection: { id: 'c1' } };
+        const a = construir({ solicitud: quitar, producto: { ...producto } });
+        await a.service.approve('r8', SCOPE);
+        expect(a.cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ conDescuento: true, descuento: { precio: null } }));
+
+        const mala = { ...quitar, id: 'r7', newValue: 'abc' };
+        const b = construir({ solicitud: mala, producto: { ...producto } });
+        await expect(b.service.approve('r7', SCOPE)).rejects.toThrow(/no es válido/);
+        expect(b.cola.add).not.toHaveBeenCalled();
+        expect(b.repo.update).toHaveBeenLastCalledWith({ id: 'r7' }, expect.objectContaining({ status: 'error' }));
+    });
+
+    it('crear una solicitud de descuento reemplaza a otra pendiente de lo mismo', async () => {
+        const { service, repo } = construir();
+        await service.createPromoRequest(SCOPE, { id: 'p1' } as any, { marketplace: 'ripley', connectionId: 'c1', previous: '120', next: '100||' });
+        expect(repo.update).toHaveBeenCalledWith(
+            { product: { id: 'p1' }, connection: { id: 'c1' }, field: 'promo', status: 'pending' },
+            expect.objectContaining({ status: 'rejected' }),
+        );
+        expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ field: 'promo', previousValue: '120', newValue: '100||', status: 'pending' }));
+    });
+
     it('una solicitud de otra tienda no se puede aprobar', async () => {
         const { service, cola } = construir({ solicitud: null });
         await expect(service.approve('r-ajena', SCOPE)).rejects.toThrow(/no encontrada/i);

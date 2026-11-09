@@ -2,6 +2,47 @@ const normalizar = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacriti
 const palabras = (t: string) => normalizar(t).split(/[^a-z0-9ñ]+/).filter((p) => p.length > 2);
 
 /**
+ * Nombres de color de uso común que los canales casi nunca tienen como opción, y con qué otros nombres se suelen listar (en orden de
+ * preferencia). Solo se usan cuando ninguna opción se parece al valor: «Vino» no existe en la lista de Falabella, pero «Burdeos» sí.
+ * Las claves van sin tildes y en minúscula.
+ */
+const EQUIVALENCIAS_DE_COLOR: Record<string, string[]> = {
+    vino: ['burdeos', 'burdeo', 'borgona caoba', 'bordo', 'granate'],
+    guinda: ['burdeos', 'burdeo', 'borgona caoba', 'granate', 'bordo'],
+    granate: ['granate', 'burdeos', 'burdeo', 'borgona caoba'],
+    bordo: ['burdeos', 'burdeo', 'borgona caoba', 'granate'],
+    burgundy: ['burdeos', 'burdeo', 'borgona caoba'],
+    rosado: ['rosado', 'rosa', 'rosa fuerte'],
+    rosa: ['rosado', 'rosa'],
+    marron: ['marron', 'cafe', 'chocolate'],
+    cafe: ['cafe', 'marron', 'chocolate'],
+    chocolate: ['chocolate', 'cafe', 'marron'],
+    crema: ['crema', 'beige'],
+    hueso: ['hueso', 'crema', 'beige', 'blanco'],
+    marfil: ['marfil', 'crema', 'beige', 'blanco'],
+    nude: ['nude', 'beige', 'crema'],
+    plomo: ['plomo', 'gris'],
+    celeste: ['celeste', 'azul'],
+    plateado: ['plateado', 'plata'],
+    dorado: ['dorado', 'oro'],
+    mostaza: ['mostaza', 'amarillo'],
+    lila: ['lila', 'violeta', 'morado'],
+    turquesa: ['turquesa', 'celeste', 'azul'],
+};
+
+function equivalenciaDeColor(valor: string, opciones: string[]): string | undefined {
+    const buscado = normalizar(valor);
+    const claves = [buscado, ...palabras(valor).filter((p) => p.length >= 4)].filter((k) => EQUIVALENCIAS_DE_COLOR[k]);
+    for (const clave of claves) {
+        for (const candidato of EQUIVALENCIAS_DE_COLOR[clave]) {
+            const opcion = opciones.find((o) => normalizar(o) === candidato);
+            if (opcion) return opcion;
+        }
+    }
+    return undefined;
+}
+
+/**
  * La opción de una lista cerrada que mejor corresponde a un valor escrito libremente
  * («madera de pino» → «Madera»). Devuelve la opción tal como la escribe el canal, o undefined si ninguna se parece.
  */
@@ -31,5 +72,6 @@ export function opcionCercana(valor: string, opciones: string[]): string | undef
         const puntaje = comunes / Math.min(mias.size, suyas.size);
         if (puntaje >= 0.5 && (!mejor || puntaje > mejor.puntaje)) mejor = { original: o.original, puntaje };
     }
-    return mejor?.original;
+    // Último recurso: un nombre de color de uso común («Vino») que la lista escribe de otra forma («Burdeos»).
+    return mejor?.original ?? equivalenciaDeColor(valor, opciones);
 }

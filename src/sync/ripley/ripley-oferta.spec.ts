@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { armarOfertaParaEnviar, motivoParaNoTocarOferta, resumenDeCambios, skuPermitidoParaRipley } from './ripley-oferta';
+import { armarOfertaParaEnviar, descuentoDeValor, motivoParaNoTocarOferta, resumenDeCambios, skuPermitidoParaRipley, valorDeDescuento } from './ripley-oferta';
 import { RipleyApiService } from './ripley-api.service';
 
 const ofertaActual = () => ({
@@ -90,6 +90,46 @@ describe('armarOfertaParaEnviar', () => {
     it('resumen: solo stock y precio', () => {
         const act = ofertaActual();
         expect(resumenDeCambios(act, armarOfertaParaEnviar(act, { stock: 4 }))).toEqual({ stock: { antes: 5, despues: 4 }, precio: { antes: 89.9, despues: 89.9 }, descuento: { antes: 79.9, despues: 79.9 } });
+    });
+});
+
+describe('descuento de una oferta de Ripley', () => {
+    const conRebaja = () => ({ ...ofertaActual() }); // lista 89.9, rebaja 79.9
+    const sinRebaja = () => ({ ...ofertaActual(), discount: undefined });
+
+    it('cambia solo el descuento: lista, stock y el resto quedan igual; las fechas AAAA-MM-DD viajan como medianoche de Lima', () => {
+        const o = armarOfertaParaEnviar(conRebaja(), { descuento: { precio: 70, desde: '2026-11-09', hasta: '2027-09-30' } });
+        expect(o).toMatchObject({ price: 89.9, quantity: 5, description: 'Bolso de cuero', discount: { price: 70, start_date: '2026-11-09T05:00:00Z', end_date: '2027-09-30T05:00:00Z' } });
+    });
+
+    it('pone un descuento a una oferta que no tenía, y lo quita con precio null', () => {
+        expect(armarOfertaParaEnviar(sinRebaja(), { descuento: { precio: 80 } })).toMatchObject({ price: 89.9, discount: { price: 80 } });
+        const quitado = armarOfertaParaEnviar(conRebaja(), { descuento: { precio: null } });
+        expect(quitado).not.toHaveProperty('discount');
+        expect(quitado).toMatchObject({ price: 89.9, quantity: 5 }); // el cliente pasa a pagar la lista
+    });
+
+    it('rechaza un descuento que no sea menor que la lista, con fechas al revés o junto a un cambio de precio', () => {
+        expect(() => armarOfertaParaEnviar(conRebaja(), { descuento: { precio: 89.9 } })).toThrow(/menor que el precio de lista/);
+        expect(() => armarOfertaParaEnviar(conRebaja(), { descuento: { precio: 0 } })).toThrow(/mayor que 0/);
+        expect(() => armarOfertaParaEnviar(conRebaja(), { descuento: { precio: 70, desde: '2027-01-02', hasta: '2027-01-01' } })).toThrow(/final/);
+        expect(() => armarOfertaParaEnviar(conRebaja(), { descuento: { precio: 70, desde: 'mañana' } })).toThrow(/Fecha no válida/);
+        expect(() => armarOfertaParaEnviar(sinRebaja(), { price: 95, descuento: { precio: 70 } })).toThrow(/junto con un cambio de precio/);
+    });
+
+    it('sin pedir descuento se conserva el que tiene la oferta (y sus fechas)', () => {
+        const con = { ...conRebaja(), discount: { discount_price: 79.9, origin_price: 89.9, start_date: '2026-11-01T05:00:00Z', end_date: '2026-12-01T05:00:00Z' } };
+        expect(armarOfertaParaEnviar(con, { stock: 3 }).discount).toEqual({ price: 79.9, start_date: '2026-11-01T05:00:00Z', end_date: '2026-12-01T05:00:00Z' });
+    });
+
+    it('el valor de una solicitud de descuento va y viene sin perder datos', () => {
+        expect(valorDeDescuento({ precio: 120, desde: '2026-11-09', hasta: null })).toBe('120|2026-11-09|');
+        expect(descuentoDeValor('120|2026-11-09|')).toEqual({ precio: 120, desde: '2026-11-09', hasta: null });
+        expect(descuentoDeValor('quitar')).toEqual({ precio: null });
+        expect(valorDeDescuento({ precio: null })).toBe('quitar');
+        expect(descuentoDeValor('')).toBeNull();
+        expect(descuentoDeValor('abc|x|y')).toBeNull();
+        expect(descuentoDeValor('0||')).toBeNull();
     });
 });
 

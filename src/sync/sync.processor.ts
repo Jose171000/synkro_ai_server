@@ -73,7 +73,7 @@ export class SyncProcessor extends WorkerHost {
             }
 
             case 'inventory': {
-                const { productId, marketplace, connectionId, changeRequestId, conPrecio, conStock } = job.data;
+                const { productId, marketplace, connectionId, changeRequestId, conPrecio, conStock, conDescuento, descuento } = job.data;
                 try {
                     let result: any;
                     if (marketplace === 'mercadolibre') {
@@ -85,7 +85,7 @@ export class SyncProcessor extends WorkerHost {
                         await this.yavendio.pushInventory(productId, connectionId);
                         result = { status: 'synced' };
                     } else if (this.syncService.hasChannel(marketplace)) {
-                        const r = await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId, { conPrecio, conStock });
+                        const r = await this.syncService.pushInventoryToChannel(marketplace, productId, connectionId, { conPrecio, conStock, conDescuento, descuento });
                         result = r && 'omitido' in r ? { status: 'omitido', message: r.omitido } : { status: 'synced' };
                     } else {
                         throw new Error(`Marketplace no soportado aún: ${marketplace}`);

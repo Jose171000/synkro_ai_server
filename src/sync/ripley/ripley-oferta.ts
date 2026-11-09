@@ -6,14 +6,47 @@
  * el stock y/o el precio y se manda COMPLETA. Los nombres de lectura y de escritura de Mirakl no coinciden; aquí se traducen.
  */
 
+/** El descuento que se quiere en una oferta: precio rebajado y fechas (AAAA-MM-DD, opcionales). `precio: null` lo quita. */
+export interface DescuentoPedido {
+    precio: number | null;
+    desde?: string | null;
+    hasta?: string | null;
+}
+
 export interface CambiosDeOferta {
     /** Stock nuevo. Si no se indica, se conserva el que tiene Ripley. */
     stock?: number | null;
     /** Precio nuevo. Si no se indica, se conserva el que tiene Ripley. */
     price?: number | null;
+    /** Descuento nuevo (o quitarlo con precio null). Sin indicar, se conserva el que tiene Ripley. No va junto con un cambio de precio. */
+    descuento?: DescuentoPedido | null;
 }
 
 const hay = (v: unknown) => v !== undefined && v !== null && v !== '';
+
+/**
+ * Las fechas se escriben AAAA-MM-DD. Mirakl las guarda como instante; las de Ripley Perú vienen a medianoche de Lima («…T05:00:00Z»),
+ * y así se mandan. Una fecha ya completa (con hora) se respeta.
+ */
+export function fechaParaMirakl(fecha: unknown): string | undefined {
+    if (!hay(fecha)) return undefined;
+    const t = String(fecha).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return `${t}T05:00:00Z`;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(t) && !Number.isNaN(Date.parse(t))) return t;
+    throw new Error(`Fecha no válida para Ripley: «${t}» (usa AAAA-MM-DD).`);
+}
+
+/** Cómo viaja un descuento pedido en una solicitud de Revisión (el valor se guarda como texto). «quitar» lo borra. */
+export const valorDeDescuento = (d: DescuentoPedido): string => (d.precio === null ? 'quitar' : `${d.precio}|${d.desde ?? ''}|${d.hasta ?? ''}`);
+
+export function descuentoDeValor(valor: unknown): DescuentoPedido | null {
+    const t = String(valor ?? '').trim();
+    if (t === 'quitar') return { precio: null };
+    const [precio, desde, hasta] = t.split('|');
+    const p = Number(precio);
+    if (!precio || !Number.isFinite(p) || p <= 0) return null;
+    return { precio: p, desde: desde || null, hasta: hasta || null };
+}
 
 /** Quita los campos vacíos: Mirakl trata «no mandado» como «borrar», pero un null explícito puede rechazarse. */
 function sinVacios<T extends Record<string, any>>(o: T): Partial<T> {
@@ -61,9 +94,25 @@ export function armarOfertaParaEnviar(actual: any, cambios: CambiosDeOferta): Re
     const precio = tieneDescuento ? precioDeLista : hay(cambios.price) ? Number(cambios.price) : Number(actual?.price);
     if (!Number.isFinite(precio) || precio <= 0) throw new Error(`Precio no válido para Ripley: ${hay(cambios.price) ? cambios.price : actual?.price}.`);
 
-    const descuento = hay(d?.discount_price) || hay(d?.price)
+    let descuento = tieneDescuento
         ? sinVacios({ price: Number(d.discount_price ?? d.price), start_date: d.start_date, end_date: d.end_date })
         : undefined;
+
+    // Un descuento pedido reemplaza al que tiene la oferta; con precio null se quita. El precio de lista no cambia en este flujo.
+    if (cambios.descuento !== undefined && cambios.descuento !== null) {
+        if (hay(cambios.price)) throw new Error('Un cambio de descuento no puede ir junto con un cambio de precio.');
+        const pedido = cambios.descuento;
+        if (pedido.precio === null) {
+            descuento = undefined;
+        } else {
+            const p = Number(pedido.precio);
+            if (!Number.isFinite(p) || p <= 0 || p >= precio) throw new Error(`El descuento (${pedido.precio}) debe ser mayor que 0 y menor que el precio de lista (${precio}).`);
+            const desde = fechaParaMirakl(pedido.desde);
+            const hasta = fechaParaMirakl(pedido.hasta);
+            if (desde && hasta && Date.parse(hasta) < Date.parse(desde)) throw new Error('La fecha final del descuento no puede ser anterior a la inicial.');
+            descuento = sinVacios({ price: p, start_date: desde, end_date: hasta });
+        }
+    }
 
     const adicionales: any[] = Array.isArray(actual?.offer_additional_fields)
         ? actual.offer_additional_fields.filter((c: any) => hay(c?.code) && hay(c?.value)).map((c: any) => sinVacios({ code: c.code, type: c.type, value: c.value }))

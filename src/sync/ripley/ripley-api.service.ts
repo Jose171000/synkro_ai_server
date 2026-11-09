@@ -300,7 +300,7 @@ export class RipleyApiService implements ChannelClient {
     async setInventory(
         auth: ChannelAuth,
         target: { externalId: string; variationId: string | null; sku?: string },
-        values: { stock: number; price?: number | null },
+        values: { stock: number | null; price?: number | null; descuento?: { precio: number | null; desde?: string | null; hasta?: string | null } },
     ): Promise<void> {
         const sku = target.sku;
         if (!sku) throw new BadRequestException('Falta el SKU para mandar el stock a Ripley.');
@@ -310,13 +310,13 @@ export class RipleyApiService implements ChannelClient {
             throw new BadRequestException(`El SKU «${sku}» ahora apunta a otra oferta de Ripley que la enlazada. No se envió nada.`);
         }
         let oferta: Record<string, any>;
-        try { oferta = armarOfertaParaEnviar(actual, { stock: values.stock, price: values.price }); }
+        try { oferta = armarOfertaParaEnviar(actual, { stock: values.stock, price: values.price, descuento: values.descuento }); }
         catch (error: any) { throw new BadRequestException(error?.message ?? 'No se pudo preparar la oferta para Ripley.'); }
 
         const r = await this.post<any>(auth, '/api/offers', { offers: [oferta] });
         const importId = r?.import_id;
         if (importId === undefined || importId === null) throw new BadRequestException('Ripley recibió el cambio pero no dio el número de importación.');
-        this.logger.log(`Ripley ${sku}: enviado stock ${oferta.quantity} y precio ${oferta.price} (importación ${importId}).`);
+        this.logger.log(`Ripley ${sku}: enviado stock ${oferta.quantity}, precio ${oferta.price}${oferta.discount ? ` y descuento ${oferta.discount.price}` : ' sin descuento'} (importación ${importId}).`);
 
         // Una sola comprobación a los pocos segundos (Mirakl pide no consultar más de una vez por minuto).
         await new Promise((resolve) => setTimeout(resolve, 8000));

@@ -131,7 +131,7 @@ export interface ChannelClient {
         auth: ChannelAuth,
         target: { externalId: string; variationId: string | null; /** SKU del producto en Synkro (Ripley identifica la oferta por SKU) */ sku?: string },
         /** Ripley manda un solo campo a la vez: un stock nulo conserva el que tiene el canal. */
-        values: { stock: number | null; price?: number | null },
+        values: { stock: number | null; price?: number | null; /** Ripley: descuento nuevo (precio null lo quita), con fechas AAAA-MM-DD */ descuento?: { precio: number | null; desde?: string | null; hasta?: string | null } },
     ): Promise<void>;
 
     /** Ventas según el filtro, de la más reciente a la más antigua. */

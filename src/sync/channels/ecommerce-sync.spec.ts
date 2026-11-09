@@ -667,6 +667,42 @@ describe('Ripley: por ahora solo se lee', () => {
             expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: 4, price: null });
         });
 
+        it('un descuento manda SOLO el descuento (ni stock ni precio de lista) y lo anota en la cuenta', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente, enlaces } = armar();
+            service.onModuleInit();
+            const descuento = { precio: 20, desde: '2026-11-09', hasta: null };
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conDescuento: true, descuento });
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: null, price: null, descuento });
+            expect(enlaces[0]).toMatchObject({ salePrice: 20, salePriceOverride: 20, saleStartOverride: '2026-11-09', saleEndOverride: null });
+            expect(enlaces[0].lastStockSynced).toBeUndefined();
+            expect(enlaces[0].lastPriceSynced).toBeUndefined();
+        });
+
+        it('quitar el descuento lo borra de la cuenta', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            process.env.RIPLEY_PUSH_PRICE = 'true';
+            const { service, sync, cliente, enlaces } = armar();
+            service.onModuleInit();
+            await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conDescuento: true, descuento: { precio: null } });
+            expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), expect.anything(), { stock: null, price: null, descuento: { precio: null } });
+            expect(enlaces[0]).toMatchObject({ salePrice: null, salePriceOverride: null, saleStartOverride: null, saleEndOverride: null });
+        });
+
+        it('un descuento con RIPLEY_PUSH_PRICE apagado queda «omitido» y no se manda', async () => {
+            process.env.RIPLEY_PUSH_ENABLED = 'true';
+            process.env.RIPLEY_PUSH_SKUS = '*';
+            delete process.env.RIPLEY_PUSH_PRICE;
+            const { service, sync, cliente } = armar();
+            service.onModuleInit();
+            const r = await handlerDe(sync, 'ripley').pushInventory('p1', 'rp1', { conDescuento: true, descuento: { precio: 20 } });
+            expect(cliente.setInventory).not.toHaveBeenCalled();
+            expect(r).toEqual({ omitido: expect.stringContaining('precios') });
+        });
+
         it('una edición de stock y precio a la vez manda los dos', async () => {
             process.env.RIPLEY_PUSH_ENABLED = 'true';
             process.env.RIPLEY_PUSH_SKUS = '*';

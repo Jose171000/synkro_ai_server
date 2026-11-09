@@ -851,6 +851,82 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
         });
     });
 
+    describe('descuento por cuenta', () => {
+        const antes = { ...process.env };
+        afterEach(() => { process.env = { ...antes }; });
+        const encender = () => { process.env.RIPLEY_PUSH_ENABLED = 'true'; process.env.RIPLEY_PUSH_SKUS = '*'; process.env.RIPLEY_PUSH_PRICE = 'true'; };
+        const scope = { userId: 'u1', storeId: 't1' };
+        const armarPromo = async (enlaceOver: any = {}, revision = true) => {
+            const changeRequests = { isReviewMode: jest.fn(async () => revision), createPromoRequest: jest.fn(async () => ({ id: 'sol-1' })) };
+            const t = await construir({
+                producto: { id: 'p1', sku: '23090102', name: 'Micrófono', stock: 7, price: 120 },
+                enlaces: [enlace({ marketplace: 'ripley', regularPrice: 180, lastPriceSynced: 180, salePrice: 120, priceOverride: null, ...enlaceOver })],
+                changeRequests,
+            });
+            return { ...t, changeRequests };
+        };
+
+        it('Ripley: un descuento nuevo queda en revisión con el descuento actual como valor anterior', async () => {
+            encender();
+            const t = await armarPromo();
+            const r = await t.service.setListingPromo(scope, 'l1', { salePrice: 100, saleStart: '2026-11-09', saleEnd: '2027-01-31' });
+            expect(r.pending).toBe(1);
+            expect(t.changeRequests.createPromoRequest).toHaveBeenCalledWith(scope, expect.objectContaining({ id: 'p1' }), { marketplace: 'ripley', connectionId: 'c1', previous: '120', next: '100|2026-11-09|2027-01-31' });
+            expect(t.trabajos).toHaveLength(0);
+        });
+
+        it('Ripley: quitar el descuento pide revisión («quitar») y solo si la oferta tiene uno', async () => {
+            encender();
+            const t = await armarPromo();
+            await t.service.setListingPromo(scope, 'l1', { salePrice: null });
+            expect(t.changeRequests.createPromoRequest).toHaveBeenCalledWith(scope, expect.anything(), expect.objectContaining({ previous: '120', next: 'quitar' }));
+            await expect((await armarPromo({ salePrice: null })).service.setListingPromo(scope, 'l1', { salePrice: null })).rejects.toThrow(/no tiene un descuento/);
+        });
+
+        it('Ripley: con el modo revisión apagado manda solo el descuento a esa cuenta', async () => {
+            encender();
+            const t = await armarPromo({}, false);
+            await t.service.setListingPromo(scope, 'l1', { salePrice: 100 });
+            expect(t.trabajos).toEqual([{ n: 'inventory', d: { productId: 'p1', userId: 'u1', marketplace: 'ripley', connectionId: 'c1', conDescuento: true, descuento: { precio: 100, desde: null, hasta: null } } }]);
+        });
+
+        it('Ripley: rechaza un descuento que no es menor que la lista, uno repetido, o si el envío no está habilitado', async () => {
+            encender();
+            await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 180 })).rejects.toThrow(/menor que el precio de lista/);
+            await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 120 })).rejects.toThrow(/ya tiene ese descuento/);
+            await expect((await armarPromo({ regularPrice: null, lastPriceSynced: null })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/Actualizar ahora/);
+            await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 100, saleStart: '2027-02-01', saleEnd: '2027-01-01' })).rejects.toThrow(/fecha de fin/);
+            delete process.env.RIPLEY_PUSH_PRICE;
+            await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/precios y descuentos/);
+            delete process.env.RIPLEY_PUSH_ENABLED;
+            await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/todavía no está habilitado/);
+        });
+
+        it('Falabella: guarda el descuento propio de la cuenta y lo manda al instante; quitarlo solo lo quita de Synkro', async () => {
+            const t = await armarPromo({ marketplace: 'falabella', regularPrice: 120, salePrice: 79 });
+            const guardados: any[] = [];
+            (t.repoEnlaces as any).save = jest.fn(async (l: any) => { guardados.push({ ...l }); return l; });
+            const r = await t.service.setListingPromo(scope, 'l1', { salePrice: 79, saleStart: '2026-11-09', saleEnd: '2027-09-30' });
+            expect(r.pending).toBeUndefined();
+            expect(guardados[0]).toMatchObject({ salePriceOverride: 79 });
+            expect(t.trabajos).toEqual([{ n: 'inventory', d: { productId: 'p1', userId: 'u1', marketplace: 'falabella', connectionId: 'c1' } }]);
+            await expect(t.service.setListingPromo(scope, 'l1', { salePrice: 120 })).rejects.toThrow(/menor que el precio regular/);
+
+            const q = await t.service.setListingPromo(scope, 'l1', { salePrice: null });
+            expect(q.message).toMatch(/Seller Center/);
+            expect(t.trabajos).toHaveLength(1); // quitar no manda nada a Falabella
+        });
+
+        it('otros canales, publicaciones pausadas por la persona o de otra tienda no admiten descuento por cuenta', async () => {
+            encender();
+            await expect((await armarPromo({ marketplace: 'mercadolibre' })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/solo está disponible para Falabella y Ripley/);
+            await expect((await armarPromo({ pausedByUser: true })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/La pausaste/);
+            const t = await armarPromo();
+            t.repoEnlaces.findOne.mockResolvedValue(null as any);
+            await expect(t.service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/No se encontró/);
+        });
+    });
+
     describe('Ripley en piloto', () => {
         const antes = { ...process.env };
         afterEach(() => { process.env = { ...antes }; });

@@ -59,6 +59,70 @@ describe('nombre de una variante en Falabella cuando sale como ficha suelta', ()
     });
 });
 
+describe('calzado en Falabella: variantes por talla y color agrupadas por ParentSku', () => {
+    const servicio: any = Object.create(SyncService.prototype);
+    const campo = (name: string, over: any = {}) => ({ name, feedName: name, label: name, isMandatory: true, inputType: 'dropdown', options: [], ...over });
+    const categoria = [
+        campo('genero', { options: ['Mujer', 'Hombre'] }),
+        campo('color_basico', { options: ['Beige', 'Burdeo', 'Fucsia', 'Negro', 'Multicolor'] }),
+        campo('color', { options: ['Beige', 'Burdeos', 'Fucsia', 'Negro'] }),
+        campo('talla', { options: ['35', '36', '37', '38', '39'] }),
+    ];
+    const sandalias = { name: 'Sandalias de cuero', parentSku: 'SAN-DEM', axes: [{ name: 'Color', values: ['Beige', 'Vino', 'Negro', 'Fucsia'] }, { name: 'Talla', values: ['35', '36', '37', '38', '39'] }] };
+    const variante = (sku: string, color: string, talla: string, extra: any = {}) => ({
+        sku, name: 'Sandalias de cuero floater', aiTitle: 'Sandalias de cuero floater', price: 200, stock: 4, images: [{ url: 'https://i/1.jpg' }],
+        description: 'Sandalias de cuero vacuno floater con plantilla EVA', packageWidth: 13, packageLength: 32, packageHeight: 12, packageWeight: 0.85,
+        marketplaceIds: { falabella_category_id: '3223' },
+        aiAttributes: { brand: 'GENERICO', genero: 'Mujer', color: 'Multicolor', color_basico: 'Multicolor', talla: '38' },
+        group: sandalias, variantValues: { Color: color, Talla: talla }, ...extra,
+    });
+
+    it('las variantes de un grupo salen con el mismo ParentSku aunque la categoría no tenga campos «…Variant»', () => {
+        const a: any = servicio.toFalabellaInput(variante('SAN-DEM-NEG-38', 'Negro', '38'), 'active', categoria);
+        const b: any = servicio.toFalabellaInput(variante('SAN-DEM-BEI-35', 'Beige', '35'), 'active', categoria);
+        expect(a.input.parentSku).toBe('SAN-DEM');
+        expect(b.input.parentSku).toBe('SAN-DEM');
+        expect(a.input.sellerSku).toBe('SAN-DEM-NEG-38');
+        expect(a.input.extraAttributes).toMatchObject({ color: 'Negro', color_basico: 'Negro', talla: '38' });
+        expect(b.input.extraAttributes).toMatchObject({ color: 'Beige', talla: '35' });
+    });
+
+    it('«Vino» no se rechaza: se manda como Burdeo (color básico) y Burdeos (color)', () => {
+        const r: any = servicio.toFalabellaInput(variante('SAN-DEM-VIN-36', 'Vino', '36'), 'active', categoria);
+        expect('input' in r).toBe(true);
+        expect(r.input.extraAttributes).toMatchObject({ color_basico: 'Burdeo', color: 'Burdeos', talla: '36' });
+    });
+
+    it('una ficha suelta de calzado, una categoría sin talla y color, o una que ya dijo que ParentSku no aplica, salen como antes', () => {
+        const completos = { brand: 'G', genero: 'Mujer', color: 'Negro', color_basico: 'Negro', talla: '38' };
+        const suelta: any = servicio.toFalabellaInput(variante('X-1', 'Negro', '38', { group: null, variantValues: null, aiAttributes: completos }), 'active', categoria);
+        expect(suelta.input.sellerSku).toBe('X-1');
+        expect(suelta.input.parentSku).toBeUndefined();
+        const sinVariacion: any = servicio.toFalabellaInput(variante('X-2', 'Negro', '38'), 'active', [campo('genero', { options: ['Mujer'] })]);
+        expect(sinVariacion.input.parentSku).toBeUndefined();
+        const noAplica: any = servicio.toFalabellaInput(variante('X-3', 'Negro', '38', { aiAttributes: { ...completos, _noAplica: ['ParentSku'] } }), 'active', categoria);
+        expect(noAplica.input.sellerSku).toBe('X-3');
+        expect(noAplica.input.parentSku).toBeUndefined();
+    });
+
+    it('la consulta de categoría dice que el calzado admite variantes (por talla y color); una sin variación, no', async () => {
+        const s: any = Object.create(SyncService.prototype);
+        s.resolveConnection = jest.fn(async () => ({ id: 'c1' }));
+        s.credentialsOf = jest.fn(() => ({}));
+        s.falabellaApi = { getCategoryAttributes: jest.fn(async (_c: any, id: string) => (id === '3223' ? categoria : id === '9' ? [campo('ColorVariant')] : [campo('genero')])) };
+        const scope: any = { storeId: 's' };
+        expect(await s.falabellaCategoryVariants(scope, '3223')).toMatchObject({ admiteVariantes: true, porTallaYColor: true, publicacion: expect.stringContaining('talla y color') });
+        expect(await s.falabellaCategoryVariants(scope, '9')).toMatchObject({ admiteVariantes: true, porTallaYColor: false });
+        expect(await s.falabellaCategoryVariants(scope, '1')).toMatchObject({ admiteVariantes: false, publicacion: expect.stringContaining('no admite variantes') });
+    });
+
+    it('una categoría con campos «…Variant» sigue agrupando como siempre, con o sin talla y color', () => {
+        const conVariant = [campo('ColorVariant', { isMandatory: false, options: [] })];
+        const r: any = servicio.toFalabellaInput(variante('X-4', 'Negro', '38'), 'active', conVariant);
+        expect(r.input.parentSku).toBe('SAN-DEM');
+    });
+});
+
 describe('publicar un grupo de variantes sin IA', () => {
     const construir = (familia: any[], enqueue: jest.Mock) => {
         const s: any = Object.create(SyncService.prototype);

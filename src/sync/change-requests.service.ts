@@ -8,6 +8,7 @@ import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
 import { ChangeRequestStatus, SyncChangeRequest } from './entities/sync-change-request.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
+import { descuentoDeValor } from './ripley/ripley-oferta';
 
 const ESTADOS: ChangeRequestStatus[] = ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'];
 
@@ -110,6 +111,28 @@ export class ChangeRequestsService {
         return this.createResend(scope, product, 'price', target, target.channelPrice, String(product.price));
     }
 
+    /**
+     * Un descuento para UNA cuenta (hoy, Ripley). Espera aprobación como cualquier cambio de precio. Aprobarla no toca el producto:
+     * solo manda el descuento a esa cuenta. Reemplaza a otra pendiente de lo mismo.
+     */
+    async createPromoRequest(scope: ChangeScope, product: Product, target: { marketplace: string; connectionId: string; previous: string; next: string }): Promise<SyncChangeRequest> {
+        await this.repository.update(
+            { product: { id: product.id }, connection: { id: target.connectionId }, field: 'promo', status: 'pending' },
+            { status: 'rejected', resultMessage: 'Reemplazada por un cambio más reciente.', resolvedAt: new Date() },
+        );
+        return this.repository.save(this.repository.create({
+            product: { id: product.id } as Product,
+            store: { id: scope.storeId } as Store,
+            connection: { id: target.connectionId } as MarketplaceConnection,
+            marketplace: target.marketplace,
+            field: 'promo',
+            previousValue: target.previous,
+            newValue: target.next,
+            status: 'pending',
+            requestedBy: { id: scope.userId } as User,
+        }));
+    }
+
     private async createResend(
         scope: ChangeScope,
         product: Product,
@@ -197,9 +220,19 @@ export class ChangeRequestsService {
             throw new NotFoundException('Producto no encontrado');
         }
 
-        if (request.field === 'price') product.price = Number(request.newValue) as any;
-        else product.stock = Number(request.newValue);
-        await this.productRepository.save(product);
+        // Un descuento por canal no cambia el producto: solo se manda a esa cuenta.
+        const descuento = request.field === 'promo' ? descuentoDeValor(request.newValue) : null;
+        if (request.field === 'promo' && !descuento) {
+            await this.finish(id, 'error', 'El descuento de la solicitud no es válido.');
+            throw new BadRequestException('El descuento de la solicitud no es válido.');
+        }
+        if (request.field === 'price') {
+            product.price = Number(request.newValue) as any;
+            await this.productRepository.save(product);
+        } else if (request.field === 'stock') {
+            product.stock = Number(request.newValue);
+            await this.productRepository.save(product);
+        }
 
         // Ripley manda un solo campo a la vez: la solicitud dice cuál (los demás canales mandan los dos como siempre).
         await this.syncQueue.add('inventory', {
@@ -210,6 +243,7 @@ export class ChangeRequestsService {
             changeRequestId: id,
             conPrecio: request.field === 'price',
             conStock: request.field === 'stock',
+            ...(descuento ? { conDescuento: true, descuento } : {}),
         });
 
         return { id, status: 'approved', message: `Aprobado. Enviando ${request.field} a ${request.marketplace}.` };

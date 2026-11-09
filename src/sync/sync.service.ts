@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
-import { skuPermitidoParaRipley } from './ripley/ripley-oferta';
+import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './ripley/ripley-oferta';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
@@ -109,6 +109,9 @@ export interface ChannelHandler {
 export interface OpcionesDeEnvio {
     conPrecio?: boolean;
     conStock?: boolean;
+    /** Ripley: mandar solo un descuento (o quitarlo con `precio: null`); el stock y el precio de lista no se tocan. */
+    conDescuento?: boolean;
+    descuento?: { precio: number | null; desde?: string | null; hasta?: string | null } | null;
 }
 
 const sku0 = (f: { SellerSku?: string }) => String(f.SellerSku ?? '').trim();
@@ -1520,13 +1523,17 @@ export class SyncService implements OnModuleInit {
         const porTallaYColor = campos.length === 0 && variacionPorTallaYColor(attributes);
         return {
             categoryId,
-            admiteVariantes: campos.length > 0,
-            // Ropa y calzado: varían por talla y color sin campos «…Variant». Probable, sin comprobar: hoy se publican como productos sueltos.
+            // Ropa y calzado: varían por talla y color sin campos «…Variant». Falabella los agrupa por ParentSku igual (verificado con los
+            // grupos de calzado que ya existen en las cuentas), así que cuentan como categorías que admiten variantes.
+            admiteVariantes: campos.length > 0 || porTallaYColor,
+            porTallaYColor,
             probablePorTallaYColor: porTallaYColor,
             camposDeVariacion: campos.map(c => ({ name: c.name, label: c.label || c.name, required: c.isMandatory, options: c.options })),
             publicacion: campos.length > 0
                 ? 'Las variantes de un grupo se publican juntas bajo un mismo ParentSku.'
-                : 'Esta categoría no admite variantes: cada variante se publica como producto suelto.',
+                : porTallaYColor
+                    ? 'Las variantes de un grupo se publican juntas bajo un mismo ParentSku, por talla y color.'
+                    : 'Esta categoría no admite variantes: cada variante se publica como producto suelto.',
         };
     }
 
@@ -1957,7 +1964,11 @@ export class SyncService implements OnModuleInit {
                 // haya dicho que ParentSku no aplica a su categoría.
                 // Una variante de un producto con variantes lleva el código de su grupo (así Falabella las junta); una ficha suelta, su propio SKU.
                 // Solo si la categoría admite variantes (trae campos «…Variant»): si no, cada variante se publica como producto suelto.
-                parentSku: noAplican.has('parentsku') || !categoriaAdmiteVariantes(categoryAttributes) ? undefined
+                // Calzado y ropa no traen campos «…Variant» pero varían por talla y color: Falabella agrupa ahí por ParentSku (los grupos de
+                // calzado que ya existen en las cuentas lo demuestran). Se manda solo si el producto es parte de un grupo; una ficha suelta
+                // de esas categorías sale como antes. Si Falabella responde que ParentSku no aplica, `noAplican` lo apaga solo.
+                parentSku: noAplican.has('parentsku')
+                    || !(categoriaAdmiteVariantes(categoryAttributes) || (!!(product as any).group && variacionPorTallaYColor(categoryAttributes))) ? undefined
                     : (product as any).group?.parentSku ?? product.sku,
                 extraAttributes: propios,
             },
@@ -2619,6 +2630,88 @@ export class SyncService implements OnModuleInit {
         }
         await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: link.marketplace, connectionId: link.connection.id, conPrecio: true, conStock: false });
         return { message: `Enviando el precio ${precio} a Ripley.` };
+    }
+
+    /**
+     * El descuento de UNA cuenta (Falabella o Ripley). Cada canal guarda sus precios a su manera, así que el descuento es por cuenta:
+     * lo que se pone aquí sustituye, solo para esa cuenta, al descuento general del producto.
+     *  - Falabella: se guarda y se manda al instante, como el descuento general. Quitarlo se hace en el Seller Center.
+     *  - Ripley: espera aprobación en Revisión (o sale al instante con el modo revisión apagado). Solo cambia el descuento: el stock y
+     *    el precio de lista no se tocan, y el descuento debe ser menor que la lista. Sin precio, lo quita.
+     */
+    async setListingPromo(
+        scope: SyncScope,
+        linkId: string,
+        dto: { salePrice?: number | null; saleStart?: string | null; saleEnd?: string | null },
+    ): Promise<{ pending?: number; message: string }> {
+        const link = await this.listingLinkRepository.findOne({
+            where: { id: linkId, connection: { store: { id: scope.storeId } } },
+            relations: { connection: true, product: true },
+        });
+        if (!link || !link.connection || !link.product) throw new NotFoundException('No se encontró esa publicación en esta tienda.');
+        if (!['ripley', 'falabella'].includes(link.marketplace)) throw new BadRequestException('El descuento por canal solo está disponible para Falabella y Ripley.');
+        if (!['published', 'paused'].includes(link.syncStatus)) throw new BadRequestException('Esa publicación no está activa en el canal.');
+        if (link.pausedByUser) throw new BadRequestException('La pausaste tú: reanúdala antes de cambiar su descuento.');
+        const product = await this.findScopedProduct(scope, link.product.id);
+
+        const quitar = dto.salePrice === null || dto.salePrice === undefined;
+        const inicio = quitar ? null : fechaDeFalabella(dto.saleStart);
+        const fin = quitar ? null : fechaDeFalabella(dto.saleEnd);
+        if (!quitar && dto.saleStart && !inicio) throw new BadRequestException('La fecha de inicio no es válida (usa AAAA-MM-DD).');
+        if (!quitar && dto.saleEnd && !fin) throw new BadRequestException('La fecha de fin no es válida (usa AAAA-MM-DD).');
+        if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
+        const precio = quitar ? null : Number(dto.salePrice);
+
+        if (link.marketplace === 'falabella') {
+            const base = link.priceOverride != null && Number(link.priceOverride) > 0 ? Number(link.priceOverride) : Number(product.price);
+            if (precio !== null && !(precio > 0 && precio < base)) {
+                throw new BadRequestException(`El descuento debe ser mayor que 0 y menor que el precio regular en Falabella (${base.toFixed(2)}).`);
+            }
+            link.salePriceOverride = precio as any;
+            link.saleStartOverride = inicio as any;
+            link.saleEndOverride = fin as any;
+            await this.listingLinkRepository.save(link);
+            if (precio === null) return { message: 'Descuento propio quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
+            await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'falabella', connectionId: link.connection.id });
+            return { message: 'Descuento guardado y enviado a Falabella. Puede tardar unos minutos en verse.' };
+        }
+
+        // Ripley
+        if (process.env.RIPLEY_PUSH_ENABLED !== 'true' || !skuPermitidoParaRipley(product.sku)) {
+            throw new BadRequestException('El envío a Ripley todavía no está habilitado para este SKU.');
+        }
+        if (process.env.RIPLEY_PUSH_PRICE !== 'true') throw new BadRequestException('El envío de precios y descuentos a Ripley todavía no está habilitado.');
+        const lista = link.regularPrice ?? link.lastPriceSynced;
+        const actual = link.salePrice != null ? Number(link.salePrice) : null;
+        let pedido: DescuentoPedido;
+        if (precio === null) {
+            if (actual === null) throw new BadRequestException('Esa oferta no tiene un descuento en Ripley.');
+            pedido = { precio: null };
+        } else {
+            if (lista == null) throw new BadRequestException('Todavía no se leyó el precio de esa oferta: pulsa «Actualizar ahora» y vuelve a intentarlo.');
+            if (!(precio > 0 && precio < Number(lista))) {
+                throw new BadRequestException(`El descuento debe ser mayor que 0 y menor que el precio de lista en Ripley (${Number(lista).toFixed(2)}).`);
+            }
+            if (actual !== null && actual === precio && !inicio && !fin) throw new BadRequestException(`Esa oferta ya tiene ese descuento (${precio}).`);
+            pedido = { precio, desde: inicio, hasta: fin };
+        }
+
+        if (await this.changeRequests.isReviewMode(scope.storeId)) {
+            await this.changeRequests.createPromoRequest(scope, product, {
+                marketplace: link.marketplace,
+                connectionId: link.connection.id,
+                previous: actual !== null ? String(actual) : '',
+                next: valorDeDescuento(pedido),
+            });
+            return {
+                pending: 1,
+                message: pedido.precio === null
+                    ? 'Quitar el descuento en revisión: apruébalo en la pestaña Revisión para quitarlo en Ripley.'
+                    : `Descuento en revisión: apruébalo en la pestaña Revisión para mandar ${pedido.precio} a Ripley.`,
+            };
+        }
+        await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'ripley', connectionId: link.connection.id, conDescuento: true, descuento: pedido });
+        return { message: pedido.precio === null ? 'Quitando el descuento en Ripley.' : `Enviando el descuento ${pedido.precio} a Ripley.` };
     }
 
     /**

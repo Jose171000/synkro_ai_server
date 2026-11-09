@@ -32,6 +32,7 @@ import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ImportFalabellaDto } from './dto/import-falabella.dto';
 import { SugerirColoresDto } from './dto/sugerir-colores.dto';
 import { ResendStockMasivoDto } from './dto/resend-stock-masivo.dto';
+import { ListingPromoDto } from './dto/listing-promo.dto';
 import { ChangeRequestsService } from './change-requests.service';
 import { OrdersQueryService } from './orders-query.service';
 import { ManualSalesService } from './manual-sales.service';
@@ -460,6 +461,20 @@ export class SyncController {
     })
     resendStockMasivo(@Body() dto: ResendStockMasivoDto, @Req() req) {
         return this.syncService.resendListingsStock(scopeOf(req), dto.listingIds, dto.campo ?? 'stock');
+    }
+
+    @Post('listings/:id/promo')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'Fija (o quita) el descuento de UNA cuenta de Falabella o Ripley',
+        description: 'Falabella: se guarda y se envía al instante. Ripley: con el modo revisión encendido crea una solicitud pendiente y responde 202; solo cambia el descuento.',
+    })
+    async setListingPromo(@Param('id') id: string, @Body() dto: ListingPromoDto, @Req() req, @Res({ passthrough: true }) res: Response) {
+        const result = await this.syncService.setListingPromo(scopeOf(req), id, dto);
+        if (result.pending) res.status(HttpStatus.ACCEPTED);
+        return result;
     }
 
     @Post('listings/:id/resend-price')

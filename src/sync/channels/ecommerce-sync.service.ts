@@ -473,20 +473,24 @@ export class EcommerceSyncService implements OnModuleInit {
         });
         if (!product || !link || !link.connection) return;
         const esRipley = canal === 'ripley';
-        let conPrecio = esRipley ? !!opciones?.conPrecio : true;
-        const conStock = esRipley ? (opciones?.conStock ?? !conPrecio) : true;
+        // Un cambio de descuento manda solo el descuento: ni el stock ni el precio de lista se tocan.
+        let conDescuento = esRipley && !!opciones?.conDescuento && !!opciones?.descuento;
+        let conPrecio = esRipley ? !!opciones?.conPrecio && !conDescuento : true;
+        const conStock = esRipley ? (opciones?.conStock ?? (!conPrecio && !conDescuento)) : true;
         if (esRipley) {
             // Solo salen los SKU de la lista RIPLEY_PUSH_SKUS («*» = todos); el precio solo si RIPLEY_PUSH_PRICE=true.
             if (!skuPermitidoParaRipley(product.sku)) {
                 console.log(`[Sync] Ripley: el SKU ${product.sku} no está en RIPLEY_PUSH_SKUS; no se envió nada.`);
                 return { omitido: `El SKU ${product.sku} todavía no está habilitado para enviar a Ripley (piloto): el cambio no se mandó a Ripley.` };
             }
-            if (conPrecio && !ripleyEnviaPrecio()) {
-                if (!conStock) return { omitido: 'El envío de precios a Ripley está apagado: el cambio de precio no se mandó a Ripley.' };
+            if ((conPrecio || conDescuento) && !ripleyEnviaPrecio()) {
+                if (!conStock) return { omitido: 'El envío de precios a Ripley está apagado: el cambio de precio o descuento no se mandó a Ripley.' };
                 conPrecio = false;
+                conDescuento = false;
             }
-            if (!conPrecio && !conStock) return;
+            if (!conPrecio && !conDescuento && !conStock) return;
         }
+        const descuento = conDescuento ? opciones!.descuento! : null;
         // El precio normal de este canal: el fijado para la cuenta o, si no hay, el del producto (la rebaja de Ripley no se toca).
         const precio = esRipley ? Number(preciosParaCanal(product as any, link as any).price) : (product.price != null ? Number(product.price) : null);
 
@@ -495,12 +499,19 @@ export class EcommerceSyncService implements OnModuleInit {
             await this.clientOf(canal).setInventory(
                 this.authOf(connection),
                 { externalId: link.externalId, variationId: link.variationId ?? null, ...(esRipley ? { sku: product.sku } : {}) },
-                { stock: conStock ? product.stock : null, price: conPrecio ? precio : null },
+                { stock: conStock ? product.stock : null, price: conPrecio ? precio : null, ...(descuento ? { descuento } : {}) },
             );
             if (conStock) link.lastStockSynced = product.stock;
             if (conPrecio) {
                 link.lastPriceSynced = (esRipley ? precio : product.price) as any;
                 if (esRipley) link.regularPrice = precio;
+            }
+            if (descuento) {
+                // Lo que quedó en Ripley y lo que se pidió para esta cuenta (la próxima revisión lo confirma con lo que lea del canal).
+                link.salePrice = descuento.precio as any;
+                link.salePriceOverride = descuento.precio as any;
+                link.saleStartOverride = (descuento.precio === null ? null : descuento.desde ?? null) as any;
+                link.saleEndOverride = (descuento.precio === null ? null : descuento.hasta ?? null) as any;
             }
             link.lastSyncedAt = new Date();
             link.lastError = null as any;
