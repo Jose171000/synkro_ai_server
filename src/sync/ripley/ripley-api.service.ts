@@ -244,6 +244,52 @@ export class RipleyApiService implements ChannelClient {
         return salida;
     }
 
+    /**
+     * SOLO LECTURA. Para publicar productos: busca categorías de Ripley por nombre (o toma un código) y trae los atributos de cada una
+     * (cuáles son obligatorios, cuáles definen la variante, su tipo) con los valores permitidos de las listas (VL11) que usan.
+     * Nada se escribe y la clave no sale en la respuesta.
+     */
+    async catalogoDeCategoria(auth: ChannelAuth, filtro: { buscar?: string; codigo?: string; conValores?: boolean }): Promise<Record<string, any>> {
+        const r = await this.get<any>(auth, '/api/hierarchies');
+        const todas: any[] = Array.isArray(r?.hierarchies) ? r.hierarchies : [];
+        const quitarTildes = (t: unknown) => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+        const q = quitarTildes(filtro.buscar);
+        const elegidas = filtro.codigo
+            ? todas.filter((h) => h?.code === filtro.codigo)
+            : q ? todas.filter((h) => quitarTildes(h?.label).includes(q) || quitarTildes(h?.code).includes(q)) : [];
+        const salida: Record<string, any> = {
+            totalCategorias: todas.length,
+            camposDeCategoria: Object.keys(todas[0] ?? {}),
+            coinciden: elegidas.length,
+            categorias: elegidas.slice(0, 40).map((h) => ({ codigo: h.code, nombre: h.label, nivel: h.level, padre: h.parent_code ?? null })),
+        };
+        // Los atributos solo se piden cuando la búsqueda se acotó a pocas categorías.
+        if (elegidas.length && elegidas.length <= 3) {
+            const a = await this.get<any>(auth, '/api/products/attributes');
+            const todos: any[] = Array.isArray(a?.attributes) ? a.attributes : [];
+            const codigos = new Set(elegidas.map((h) => h.code));
+            const deLaCategoria = todos.filter((x) => codigos.has(x?.hierarchy_code));
+            const listas = new Set(deLaCategoria.map((x) => x?.type_parameter).filter((v) => typeof v === 'string' && v));
+            const valores: Record<string, any> = {};
+            if (filtro.conValores) {
+                for (const lista of [...listas].slice(0, 25)) {
+                    try {
+                        const v = await this.get<any>(auth, '/api/values_lists', { code: String(lista) });
+                        const filas: any[] = (Array.isArray(v?.values_lists) ? v.values_lists : [])[0]?.values ?? [];
+                        valores[String(lista)] = { total: filas.length, muestra: filas.slice(0, 30).map((f) => ({ codigo: f.code, nombre: f.label })) };
+                    } catch (error: any) { valores[String(lista)] = { error: error?.message }; }
+                }
+            }
+            salida.camposDeUnAtributo = Object.keys(deLaCategoria[0] ?? {});
+            salida.atributos = deLaCategoria.map((x) => ({
+                categoria: x.hierarchy_code, codigo: x.code, etiqueta: x.label, tipo: x.type, lista: x.type_parameter ?? null,
+                obligatorio: x.required === true, nivel: x.requirement_level ?? null, variante: x.variant === true, descripcion: String(x.description ?? '').slice(0, 160),
+            }));
+            if (filtro.conValores) salida.valoresDeListas = valores;
+        }
+        return salida;
+    }
+
     private async post<T = any>(auth: ChannelAuth, ruta: string, cuerpo: unknown): Promise<T> {
         const host = normalizarHostDeRipley(auth.site);
         const clave = normalizarClaveDeRipley(auth.token);

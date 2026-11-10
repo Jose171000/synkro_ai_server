@@ -165,6 +165,12 @@ export class EcommerceSyncService implements OnModuleInit {
         return (this.clientOf('ripley') as RipleyApiService).diagnostico(this.authOf(connection));
     }
 
+    /** SOLO LECTURA: categorías de Ripley y los atributos que cada una exige (reconocimiento previo a publicar productos). */
+    async categoriasDeRipley(scope: SyncScope, filtro: { buscar?: string; codigo?: string; conValores?: boolean }, connectionId?: string) {
+        const connection = await this.sync.resolveConnection(scope.storeId, 'ripley', connectionId);
+        return (this.clientOf('ripley') as RipleyApiService).catalogoDeCategoria(this.authOf(connection), filtro);
+    }
+
     /**
      * SOLO LECTURA. Muestra, para un SKU, la oferta que Ripley tiene hoy y exactamente qué se enviaría con el stock (y el precio,
      * si está permitido) de Synkro. No envía nada. Sirve para revisar el piloto antes de encender el envío.

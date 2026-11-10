@@ -226,6 +226,22 @@ export class SyncController {
         return this.ecommerce.connect(scopeOf(req), 'ripley', { site: dto.site ?? '', token: dto.apiKey, label: dto.label });
     }
 
+    @Get('ripley/categorias')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.conectar')
+    @ApiOperation({
+        summary: 'Categorías de Ripley y los atributos que exige cada una (solo lectura)',
+        description: 'Busca por nombre o por código. Con pocas coincidencias trae sus atributos (obligatorios, de variante) y, si se pide, los valores permitidos de sus listas. No escribe nada.',
+    })
+    @ApiQuery({ name: 'buscar', required: false })
+    @ApiQuery({ name: 'codigo', required: false })
+    @ApiQuery({ name: 'valores', required: false })
+    @ApiQuery({ name: 'connectionId', required: false })
+    ripleyCategorias(@Req() req, @Query('buscar') buscar?: string, @Query('codigo') codigo?: string, @Query('valores') valores?: string, @Query('connectionId') connectionId?: string) {
+        return this.ecommerce.categoriasDeRipley(scopeOf(req), { buscar, codigo, conValores: valores === '1' || valores === 'true' }, connectionId);
+    }
+
     @Get('ripley/vista-previa-envio')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
