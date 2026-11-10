@@ -47,6 +47,6 @@ import { Product } from '../products/entities/product.entity';
     ],
     controllers: [SyncController],
     providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, ShopifyApiService, RipleyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService],
+    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, EcommerceSyncService],
 })
 export class SyncModule { }

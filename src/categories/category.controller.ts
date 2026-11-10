@@ -17,6 +17,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { FalabellaCategoryImportService } from './falabella-category-import.service';
+import { RipleyCategoryImportService } from './ripley-category-import.service';
 import { CategorySeederService } from './category-seeder.service';
 import { AddCategoryDto } from './dto/add-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -31,6 +32,7 @@ import { Repository } from 'typeorm';
 export class CategoryController {
     constructor(
         private readonly falabellaImport: FalabellaCategoryImportService,
+        private readonly ripleyImport: RipleyCategoryImportService,
         private readonly categorySeederService: CategorySeederService,
         @InjectRepository(MarketplaceCategory)
         private readonly categoryRepository: Repository<MarketplaceCategory>,
@@ -48,6 +50,19 @@ export class CategoryController {
     })
     importFalabellaCategories(@Req() req) {
         return this.falabellaImport.importCategories(req.user.id);
+    }
+
+    @Post('ripley/import')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'Trae las categorías y atributos de Ripley para que la IA pueda elegirlos',
+        description:
+            'Solo lectura contra Ripley. Guarda cada categoría donde se puede publicar con su ruta, su vector semántico y sus atributos ' +
+            '(obligatorios, recomendados, de variante), y las listas cerradas de valores (colores, tipos de producto) una sola vez. ' +
+            'Se puede repetir: lo que ya existe se actualiza.',
+    })
+    importRipleyCategories(@Req() req) {
+        return this.ripleyImport.importar(req.user.id);
     }
 
     @Post()

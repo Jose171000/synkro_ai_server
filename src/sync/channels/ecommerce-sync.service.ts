@@ -166,7 +166,7 @@ export class EcommerceSyncService implements OnModuleInit {
     }
 
     /** SOLO LECTURA: categorías de Ripley y los atributos que cada una exige (reconocimiento previo a publicar productos). */
-    async categoriasDeRipley(scope: SyncScope, filtro: { buscar?: string; codigo?: string; conValores?: boolean }, connectionId?: string) {
+    async categoriasDeRipley(scope: SyncScope, filtro: { buscar?: string; codigo?: string; conValores?: boolean; buscarValor?: string; lista?: string }, connectionId?: string) {
         const connection = await this.sync.resolveConnection(scope.storeId, 'ripley', connectionId);
         return (this.clientOf('ripley') as RipleyApiService).catalogoDeCategoria(this.authOf(connection), filtro);
     }

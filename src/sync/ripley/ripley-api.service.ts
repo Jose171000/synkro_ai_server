@@ -10,6 +10,7 @@ import {
     ChannelOrdersResult,
 } from '../channels/channel-types';
 import { armarOfertaParaEnviar } from './ripley-oferta';
+import type { AtributoRipley, JerarquiaRipley, ListaRipley } from './ripley-categorias';
 import { filaDeOfertaRipley, fotosDeRespuestaP11, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
 
 /** Ripley pagina de a 100 como máximo. */
@@ -249,7 +250,7 @@ export class RipleyApiService implements ChannelClient {
      * (cuáles son obligatorios, cuáles definen la variante, su tipo) con los valores permitidos de las listas (VL11) que usan.
      * Nada se escribe y la clave no sale en la respuesta.
      */
-    async catalogoDeCategoria(auth: ChannelAuth, filtro: { buscar?: string; codigo?: string; conValores?: boolean }): Promise<Record<string, any>> {
+    async catalogoDeCategoria(auth: ChannelAuth, filtro: { buscar?: string; codigo?: string; conValores?: boolean; buscarValor?: string; lista?: string }): Promise<Record<string, any>> {
         const r = await this.get<any>(auth, '/api/hierarchies');
         const todas: any[] = Array.isArray(r?.hierarchies) ? r.hierarchies : [];
         const quitarTildes = (t: unknown) => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -272,11 +273,15 @@ export class RipleyApiService implements ChannelClient {
             const listas = new Set(deLaCategoria.map((x) => x?.type_parameter).filter((v) => typeof v === 'string' && v));
             const valores: Record<string, any> = {};
             if (filtro.conValores) {
-                for (const lista of [...listas].slice(0, 25)) {
+                const texto = quitarTildes(filtro.buscarValor);
+                for (const lista of [...listas].filter((l) => !filtro.lista || l === filtro.lista).slice(0, 25)) {
                     try {
                         const v = await this.get<any>(auth, '/api/values_lists', { code: String(lista) });
                         const filas: any[] = (Array.isArray(v?.values_lists) ? v.values_lists : [])[0]?.values ?? [];
-                        valores[String(lista)] = { total: filas.length, muestra: filas.slice(0, 30).map((f) => ({ codigo: f.code, nombre: f.label })) };
+                        // Con un texto de búsqueda se devuelven SOLO los valores que lo contienen (hasta 40): sirve para comprobar si
+                        // «Loncheras» o «Marrón» existen de verdad en la lista cerrada de Ripley.
+                        const elegidos = texto ? filas.filter((f) => quitarTildes(f.label).includes(texto) || quitarTildes(f.code).includes(texto)).slice(0, 40) : filas.slice(0, 30);
+                        valores[String(lista)] = { total: filas.length, coinciden: texto ? elegidos.length : undefined, muestra: elegidos.map((f) => ({ codigo: f.code, nombre: f.label })) };
                     } catch (error: any) { valores[String(lista)] = { error: error?.message }; }
                 }
             }
@@ -288,6 +293,32 @@ export class RipleyApiService implements ChannelClient {
             if (filtro.conValores) salida.valoresDeListas = valores;
         }
         return salida;
+    }
+
+    /**
+     * SOLO LECTURA. Todo el catálogo de Ripley que hace falta para publicar: el árbol de categorías (H11), los atributos de cada
+     * una (PM11) y las listas cerradas de valores que esos atributos usan (VL11). Es el mismo para todas las tiendas.
+     */
+    async leerCatalogo(auth: ChannelAuth): Promise<{ jerarquias: JerarquiaRipley[]; atributos: AtributoRipley[]; listas: ListaRipley[] }> {
+        const h = await this.get<any>(auth, '/api/hierarchies');
+        const a = await this.get<any>(auth, '/api/products/attributes');
+        const jerarquias: JerarquiaRipley[] = Array.isArray(h?.hierarchies) ? h.hierarchies : [];
+        const atributos: AtributoRipley[] = Array.isArray(a?.attributes) ? a.attributes : [];
+
+        const usadas = new Set(atributos.filter((x) => x?.type === 'LIST' && x?.type_parameter).map((x) => String(x.type_parameter)));
+        const todas = await this.get<any>(auth, '/api/values_lists');
+        const listas: ListaRipley[] = (Array.isArray(todas?.values_lists) ? todas.values_lists : []).filter((l: ListaRipley) => l?.code && usadas.has(String(l.code)));
+        // Si Ripley no trae los valores en el listado general, se piden lista por lista.
+        for (const lista of listas) {
+            if ((lista.values ?? []).length > 0) continue;
+            try {
+                const v = await this.get<any>(auth, '/api/values_lists', { code: String(lista.code) });
+                lista.values = (Array.isArray(v?.values_lists) ? v.values_lists : [])[0]?.values ?? [];
+            } catch (error: any) {
+                this.logger.warn(`No se pudo leer la lista ${lista.code} de Ripley: ${error?.message}`);
+            }
+        }
+        return { jerarquias, atributos, listas };
     }
 
     private async post<T = any>(auth: ChannelAuth, ruta: string, cuerpo: unknown): Promise<T> {

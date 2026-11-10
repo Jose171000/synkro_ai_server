@@ -237,9 +237,11 @@ export class SyncController {
     @ApiQuery({ name: 'buscar', required: false })
     @ApiQuery({ name: 'codigo', required: false })
     @ApiQuery({ name: 'valores', required: false })
+    @ApiQuery({ name: 'valor', required: false, description: 'Con valores=1: devuelve solo los valores de las listas que contienen este texto' })
+    @ApiQuery({ name: 'lista', required: false, description: 'Con valores=1: limita a una lista (p. ej. tipo_product, color_80)' })
     @ApiQuery({ name: 'connectionId', required: false })
-    ripleyCategorias(@Req() req, @Query('buscar') buscar?: string, @Query('codigo') codigo?: string, @Query('valores') valores?: string, @Query('connectionId') connectionId?: string) {
-        return this.ecommerce.categoriasDeRipley(scopeOf(req), { buscar, codigo, conValores: valores === '1' || valores === 'true' }, connectionId);
+    ripleyCategorias(@Req() req, @Query('buscar') buscar?: string, @Query('codigo') codigo?: string, @Query('valores') valores?: string, @Query('valor') valor?: string, @Query('lista') lista?: string, @Query('connectionId') connectionId?: string) {
+        return this.ecommerce.categoriasDeRipley(scopeOf(req), { buscar, codigo, conValores: valores === '1' || valores === 'true', buscarValor: valor, lista }, connectionId);
     }
 
     @Get('ripley/vista-previa-envio')
