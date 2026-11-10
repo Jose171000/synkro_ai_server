@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, BadRequestException, UseInterceptors, Query, ParseUUIDPipe } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { UploadedFiles } from '@nestjs/common';
-import { ApiConsumes, ApiBody, ApiOperation } from '@nestjs/swagger';
+import { ApiConsumes, ApiBody, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateProductWithAiDto } from './dto/create-product-with-ai.dto';
@@ -14,6 +14,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { UpdateProductGroupDto } from './dto/update-product-group.dto';
 import { PrepararRipleyDto } from './dto/preparar-ripley.dto';
+import { VariantCompatService } from './variant-compat.service';
 import { RellenarRipleyDto } from './dto/rellenar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -35,6 +36,7 @@ export class ProductsController {
     private readonly groups: ProductGroupsService,
     private readonly skuGenerator: SkuGeneratorService,
     private readonly overview: ProductOverviewService,
+    private readonly variantCompat: VariantCompatService,
   ) { }
 
   /**
@@ -148,6 +150,21 @@ export class ProductsController {
   @ApiOperation({ summary: 'Un producto con variantes y todas sus variantes' })
   getGroup(@Param('id') id: string, @Req() req) {
     return this.groups.obtener(id, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Get('groups/:id/variant-compat')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'Revisa si las variantes de un grupo caben en UNA publicación de cada canal',
+    description: 'Compara los ejes del grupo con lo que admite la categoría que tiene en cada canal (la guardada, o la que se indique en categoryId si se pide un solo canal). Si no caben, dice que se publicarán como productos separados y, cuando es por la categoría, recomienda otra parecida que sí las admite (sin cambiarla). Solo consulta.',
+  })
+  @ApiQuery({ name: 'marketplace', required: true, description: 'Canales separados por coma: ripley,falabella,mercadolibre' })
+  @ApiQuery({ name: 'categoryId', required: false })
+  variantCompatibility(@Param('id') id: string, @Query('marketplace') marketplace: string, @Query('categoryId') categoryId: string | undefined, @Req() req) {
+    const canales = String(marketplace ?? '').split(',').map((m) => m.trim()).filter(Boolean).slice(0, 8);
+    // Una categoría indicada solo vale cuando se pide un único canal.
+    return this.variantCompat.revisar(id, canales.map((m) => ({ marketplace: m, ...(canales.length === 1 && categoryId ? { categoryId } : {}) })), { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Patch('groups/:id')
@@ -300,7 +317,7 @@ export class ProductsController {
     description: 'La IA elige y verifica la categoría de Ripley, redacta con sus reglas y rellena los atributos llevando cada valor a las listas cerradas del canal. Lo que no se pueda deducir sale en `faltantes`. Con guardar=false (por defecto) es solo una vista previa; con guardar=true se anota en el producto. Nunca envía nada a Ripley.',
   })
   prepareRipley(@Param('id') id: string, @Body() dto: PrepararRipleyDto, @Req() req) {
-    return this.productsService.prepararParaRipley(id, req.user.id, { guardar: dto?.guardar === true }, req.store.storeId);
+    return this.productsService.prepararParaRipley(id, req.user.id, { guardar: dto?.guardar === true, alGrupo: dto?.alGrupo === true }, req.store.storeId);
   }
 
   @Post(':id/generate-ai')

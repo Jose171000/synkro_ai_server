@@ -63,6 +63,11 @@ export class RipleyCatalogoService {
         return { id: c.categoryId, path: c.name, campos: camposDeCategoria(atributos, listas), ejesDeVariante: ejes, admiteVariantes: ejes.length > 0 };
     }
 
+    /** Todos los valores de una lista cerrada (para comprobar si un color o una talla existe en Ripley). */
+    async listaCompleta(code: string): Promise<string[]> {
+        return (await this.listasDe([code])).get(code) ?? [];
+    }
+
     /** Valores de una lista cerrada que coinciden con el texto (para las listas largas, como el tipo de producto). */
     async valoresDeLista(code: string, texto: string, max = 30): Promise<string[]> {
         const fila = await this.listas.findOne({ where: { marketplace: 'ripley', code } });

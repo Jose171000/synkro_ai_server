@@ -1,5 +1,6 @@
 import type { CategoryAttribute } from '../../categories/entities/marketplace-category.entity';
 import { ajustarAtributosDeRipley } from '../../ai/ripley-atributos';
+import type { InfoVariantesDeCategoria } from '../../products/compatibilidad-variantes';
 
 /**
  * Lo que la pantalla de Ripley necesita saber de una categoría guardada: los campos a dibujar y la validación de lo que se escribe.
@@ -44,6 +45,25 @@ export function camposDeCategoria(atributos: CategoryAttribute[] | null | undefi
             ...(valores && !corta ? { listaLarga: true } : {}),
         };
     });
+}
+
+/**
+ * Lo que una categoría de Ripley admite como variante, en la forma que compara `revisarCompatibilidad`: sus datos de variante
+ * (color, talla…) con sus valores permitidos cuando se conocen.
+ */
+export function infoDeVariantesDeRipley(
+    categoryId: string,
+    ruta: string | null,
+    atributos: CategoryAttribute[] | null | undefined,
+    listas: Map<string, string[]> = new Map(),
+): InfoVariantesDeCategoria {
+    const ejes = (atributos ?? []).filter((a) => a.isVariant).map((a) => ({
+        id: a.name,
+        label: String(a.description ?? '').split(' — ')[0] || a.name,
+        required: !!a.isRequired,
+        ...(((a.listCode ? listas.get(a.listCode) : undefined) ?? a.options)?.length ? { options: (a.listCode ? listas.get(a.listCode) : undefined) ?? a.options } : {}),
+    }));
+    return { canal: 'ripley', categoryId, ruta, admite: ejes.length > 0, ejes };
 }
 
 /** ¿Esta categoría permite agrupar variantes? Solo si algún atributo suyo define la variante. */

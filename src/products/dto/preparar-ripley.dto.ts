@@ -5,4 +5,9 @@ export class PrepararRipleyDto {
     @IsBoolean()
     @IsOptional()
     guardar?: boolean;
+
+    /** Se pidió desde la fila de un grupo de variantes: se analizan la información general, las fotos de todas (hasta el límite) y todos los ejes. */
+    @IsBoolean()
+    @IsOptional()
+    alGrupo?: boolean;
 }

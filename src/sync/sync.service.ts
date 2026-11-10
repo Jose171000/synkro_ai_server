@@ -1035,6 +1035,17 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /** Los atributos que Mercado Libre admite como variación en una categoría (con sus valores, si los restringe). Solo consulta. */
+    async ejesDeVariacionMeli(categoryId: string): Promise<{ id: string; label: string; options?: string[] }[]> {
+        const atributos = await this.meliApi.getCategoryAttributes(categoryId);
+        return (atributos ?? [])
+            .filter((a: any) => a?.tags?.variation_attribute || a?.tags?.allow_variations)
+            .map((a: any) => {
+                const options = (Array.isArray(a?.values) ? a.values : []).map((v: any) => String(v?.name ?? '')).filter(Boolean);
+                return { id: String(a.id), label: String(a.name ?? a.id), ...(options.length ? { options } : {}) };
+            });
+    }
+
     /** De cada categoría de las publicaciones, qué atributos admite Mercado Libre como variación (una consulta por categoría). */
     private async atributosDeVariacionMeli(items: any[]): Promise<Map<string, Set<string>>> {
         const salida = new Map<string, Set<string>>();

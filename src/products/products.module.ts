@@ -15,6 +15,8 @@ import { SkuUnicoService } from './sku-unico.service';
 import { ProductGroupsService } from './product-groups.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { ProductGroup } from './entities/product-group.entity';
+import { VariantCompatService } from './variant-compat.service';
+import { CategoryModule } from '../categories/category.module';
 
 @Module({
   imports: [
@@ -24,9 +26,10 @@ import { ProductGroup } from './entities/product-group.entity';
     UploadModule,
     SyncModule,
     StoresModule,
+    CategoryModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, ProductGroupsService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
+  providers: [ProductsService, ProductGroupsService, VariantCompatService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
   exports: [ProductsService, ProductGroupsService, SkuGeneratorService],
 })
 export class ProductModule { }

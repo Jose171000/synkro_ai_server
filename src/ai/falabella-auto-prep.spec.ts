@@ -123,7 +123,7 @@ describe('dejar un producto listo para Falabella con un paso', () => {
     });
 });
 
-describe('un producto con variantes prefiere una categoría que admita variantes', () => {
+describe('un producto con variantes: la categoría que mejor encaja manda y la que admite variantes solo se recomienda', () => {
     const SCOPE = { userId: 'u', storeId: 's' };
     const grupo = (extra: any = {}) => ({ ...producto(), id: 'g1', marketplaceIds: { falabella_category_id: '3169' }, aiAttributes: { brand: 'GENERICO' }, ...extra });
 
@@ -137,7 +137,7 @@ describe('un producto con variantes prefiere una categoría que admita variantes
         return t;
     }
 
-    it('si la categoría no las admite y hay una parecida y verificada que sí, usa esa', async () => {
+    it('si la categoría no las admite y hay una parecida y verificada que sí, la RECOMIENDA sin cambiar la elegida', async () => {
         const p = grupo();
         const { service } = conVariantes(p, ['5000'], ['Percheros', 'Colgadores'], [
             { categoryId: '3169', name: 'Hogar › Percheros | Colgadores de ropa' },
@@ -146,8 +146,11 @@ describe('un producto con variantes prefiere una categoría que admita variantes
         ]);
         (service as any).falabella.getCategories = jest.fn(async () => []);
         const r = await service.preparar(SCOPE, 'g1');
-        expect(r.category).toMatchObject({ id: '5000', auto: true });
-        expect(p.marketplaceIds.falabella_category_id).toBe('5000');
+        // La categoría que mejor encaja se queda...
+        expect(r.category).toMatchObject({ id: '3169' });
+        expect(p.marketplaceIds.falabella_category_id).toBe('3169');
+        // ...y la que sí admite variantes queda como recomendación (solo la que la IA verificó para el producto).
+        expect(p.aiAttributes._categoriaConVariantes).toEqual({ falabella: { id: '5000', path: 'Hogar › Percheros con variantes' } });
     });
 
     it('si ninguna parecida las admite, conserva la suya y cada variante saldrá como ficha suelta', async () => {
@@ -155,14 +158,17 @@ describe('un producto con variantes prefiere una categoría que admita variantes
         const { service } = conVariantes(p, [], ['Percheros'], [{ categoryId: '3169', name: 'Hogar › Percheros' }, { categoryId: '6000', name: 'Hogar › Otro Percheros' }]);
         const r = await service.preparar(SCOPE, 'g1');
         expect(r.category?.id).toBe('3169');
+        expect(p.aiAttributes._categoriaConVariantes).toBeUndefined();
     });
 
-    it('una categoría que eligió una persona no se cambia', async () => {
+    it('una categoría que eligió una persona no se cambia; también se le recomienda la que admite variantes', async () => {
         const p = grupo({ aiAttributes: { brand: 'GENERICO', _categoriaManual: '3169' } });
-        const { service, sync } = conVariantes(p, ['5000'], ['Percheros'], [{ categoryId: '5000', name: 'Hogar › Percheros con variantes' }]);
+        const { service } = conVariantes(p, ['5000'], ['Percheros'], [{ categoryId: '5000', name: 'Hogar › Percheros con variantes' }]);
+        (service as any).falabella.getCategories = jest.fn(async () => []);
         const r = await service.preparar(SCOPE, 'g1');
         expect(r.category).toMatchObject({ id: '3169', confidence: 'manual' });
-        expect(sync.falabellaCategoryVariants).not.toHaveBeenCalled();
+        expect(p.marketplaceIds.falabella_category_id).toBe('3169');
+        expect(p.aiAttributes._categoriaConVariantes?.falabella?.id).toBe('5000');
     });
 
     it('un producto sin variantes ni consulta si la categoría las admite', async () => {

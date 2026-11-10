@@ -14,6 +14,8 @@ import { combinarAtributos } from '../ai/combinar-atributos';
 import { datosConocidos } from '../ai/datos-conocidos';
 import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
 import { fotosParaIA } from './fotos-para-ia';
+import { EjeParaIA } from '../ai/ejes-de-variacion';
+import { ProductGroup } from './entities/product-group.entity';
 import { MAX_IMAGES } from '../ai/product-vision.service';
 import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { huellaDeFotos } from '../ai/vision-fotos';
@@ -286,6 +288,20 @@ export class ProductsService {
     }
 
     /**
+     * Lo que la IA debe analizar de un producto: si se pidió para un grupo de variantes, el nombre del grupo, UNA foto de cada
+     * variante (hasta el límite del análisis, sin repetir) y todos sus ejes con sus valores; si no, el producto tal cual.
+     */
+    private async contextoDeGrupo(product: Product, alGrupo?: boolean): Promise<{ grupo: ProductGroup | null; fotos: string[]; ejes: EjeParaIA[] | undefined; nombre: string }> {
+        const suelto = { grupo: null, fotos: (product.images ?? []).map((i) => i.url).filter(Boolean), ejes: undefined, nombre: product.name };
+        if (!alGrupo) return suelto;
+        const conGrupo = await this.productRepository.findOne({ where: { id: product.id }, relations: { group: true } });
+        const grupo = conGrupo?.group ?? null;
+        if (!grupo) return suelto;
+        const variantes = await this.productRepository.find({ where: { group: { id: grupo.id } }, order: { createdAt: 'ASC' } });
+        return { grupo, fotos: fotosParaIA(variantes, MAX_IMAGES), ejes: grupo.axes?.length ? grupo.axes : undefined, nombre: grupo.name || product.name };
+    }
+
+    /**
      * «Llenar atributos» de Ripley: con la categoría que la persona ya eligió, la IA completa SOLO los atributos que están vacíos.
      * No cambia la categoría, no pisa lo ya escrito y no toca el contenido. Si se pide para un grupo de variantes, analiza la
      * información general, una foto de cada variante (hasta el límite del análisis) y todos los ejes. No guarda nada: devuelve los
@@ -294,15 +310,10 @@ export class ProductsService {
     async rellenarAtributosDeRipley(productId: string, userId: string, entrada: { categoryId: string; actuales?: Record<string, string>; alGrupo?: boolean }, storeId?: string | null) {
         const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
         const attrs = ((product.aiAttributes as any) || {}) as Record<string, any>;
-        const conGrupo = entrada.alGrupo
-            ? await this.productRepository.findOne({ where: { id: productId }, relations: { group: true } })
-            : null;
-        const grupo = conGrupo?.group ?? null;
-        const variantes = grupo ? await this.productRepository.find({ where: { group: { id: grupo.id } }, order: { createdAt: 'ASC' } }) : [];
-        const fotos = grupo ? fotosParaIA(variantes, MAX_IMAGES) : (product.images ?? []).map((i) => i.url).filter(Boolean);
+        const { grupo, fotos, ejes, nombre } = await this.contextoDeGrupo(product, entrada.alGrupo);
 
         return this.aiService.rellenarAtributosDeRipley({
-            nombre: grupo?.name || product.name,
+            nombre,
             descripcion: [product.description, product.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n') || product.name,
             categoryId: entrada.categoryId,
             actuales: entrada.actuales ?? {},
@@ -310,7 +321,7 @@ export class ProductsService {
             // Un grupo se analiza con las fotos de todas sus variantes; un producto suelto reutiliza lo que ya se vio en sus fotos.
             visionGuardada: grupo ? undefined : attrs.vision,
             userId: product.owner?.id ?? userId,
-            ejes: grupo?.axes?.length ? grupo.axes : undefined,
+            ejes,
             datos: datosConocidos(attrs, {
                 'Ancho del paquete (cm)': product.packageWidth, 'Largo del paquete (cm)': product.packageLength,
                 'Alto del paquete (cm)': product.packageHeight, 'Peso del paquete (kg)': product.packageWeight,
@@ -333,11 +344,13 @@ export class ProductsService {
      * el resultado se anota en el producto (atributos y contenido de Ripley aparte, sin pisar el título ni la descripción de los
      * demás canales ni lo que ya tuviera escrito); tampoco se envía nada a Ripley.
      */
-    async prepararParaRipley(productId: string, userId: string, opciones: { guardar?: boolean } = {}, storeId?: string | null) {
+    async prepararParaRipley(productId: string, userId: string, opciones: { guardar?: boolean; alGrupo?: boolean } = {}, storeId?: string | null) {
         const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
-        const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
+        // Un grupo de variantes se analiza completo: información general, una foto de cada variante (hasta el límite) y todos los ejes.
+        const { fotos, ejes, nombre } = await this.contextoDeGrupo(product, opciones.alGrupo);
         const aiContent: any = await this.aiService.generateProductContent({
-            name: product.name,
+            name: nombre,
+            ejes,
             description: [product.description, product.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n'),
             category: product.category,
             subcategory: product.subCategory,

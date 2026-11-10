@@ -2,9 +2,10 @@ import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
 
 const def = (name: string, over: any = {}) => ({ name, feedName: name.toUpperCase(), label: name, description: `Ayuda de ${name}`, isMandatory: false, inputType: 'textField', options: [], ...over });
 
-function construir(producto: any) {
+function construir(producto: any, familia?: any[]) {
     const sync: any = {
         findScopedProduct: jest.fn(async () => producto),
+        familiaDe: jest.fn(async () => familia ?? [producto]),
         resolveConnection: jest.fn(async () => ({ id: 'c1' })),
         credentialsOf: jest.fn(() => ({ userId: 'x', apiKey: 'k' })),
         buscarAtributo: jest.fn((a: any, n: string) => a[n]),
@@ -58,5 +59,22 @@ describe('sugerir los atributos de una categoría de Falabella', () => {
         const contexto = ai.completarAtributos.mock.calls[0][4];
         expect(contexto).toMatchObject({ textoCliente: 'Torre de madera de pino, color azul\n\ndesc', sku: 'MK-TOR-004', medidas: '45 x 40 x 90 cm, 9 kg' });
         expect(contexto.vision).toMatchObject({ productType: 'torre de aprendizaje' });
+    });
+
+    it('en un producto con variantes la IA también recibe todos los ejes y sus valores', async () => {
+        const base = producto();
+        const grupo = { name: 'Torre Montessori', axes: [{ name: 'Color', values: ['Azul', 'Rosado'] }, { name: 'Talla', values: ['S', 'M'] }] };
+        const { service, ai } = construir(base, [{ ...base, group: grupo }, { ...base, id: 'p2', group: grupo }]);
+        await service.sugerirAtributos({ userId: 'u', storeId: 's' }, 'p1', '956');
+
+        const descripcion = ai.completarAtributos.mock.calls[0][1] as string;
+        expect(descripcion).toContain('Color: Azul, Rosado');
+        expect(descripcion).toContain('Talla: S, M');
+    });
+
+    it('un producto sin variantes no recibe ejes', async () => {
+        const { service, ai } = construir(producto());
+        await service.sugerirAtributos({ userId: 'u', storeId: 's' }, 'p1', '956');
+        expect(ai.completarAtributos.mock.calls[0][1] as string).not.toContain('Opciones disponibles');
     });
 });

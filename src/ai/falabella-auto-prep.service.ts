@@ -9,10 +9,12 @@ import { SyncScope, SyncService } from '../sync/sync.service';
 import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
-import { ProductVision, ProductVisionService } from './product-vision.service';
+import { MAX_IMAGES, ProductVision, ProductVisionService } from './product-vision.service';
 import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 import { huellaDeFotos, necesitaVision } from './vision-fotos';
+import { fotosParaIA } from '../products/fotos-para-ia';
+import { textoDeEjes } from './ejes-de-variacion';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
 
 export interface FalabellaPrepReport {
@@ -124,9 +126,11 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         // Un producto que no nació con IA (por ejemplo, uno importado de un canal) no tiene guardado lo que muestran sus fotos. Se
         // analizan cuando nunca se hizo, cuando las fotos cambiaron desde el último análisis o cuando la persona pide rehacerlo.
         // Si el análisis falla se conserva lo que hubiera y se vuelve a intentar la próxima vez.
-        const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
+        // Un producto con variantes se analiza completo: una foto de cada variante (hasta el límite, sin repetir) y todos sus ejes.
+        const { familia, textoEjes } = await this.deGrupo(scope, productId);
+        const fotos = familia.length > 1 ? fotosParaIA(familia, MAX_IMAGES) : (product.images ?? []).map((i) => i.url).filter(Boolean);
         if (necesitaVision(attrs, fotos, opciones.regenerar)) {
-            const nueva = await this.vision.analyze(fotos, { name: product.name, description: quitarUrls(product.description) });
+            const nueva = await this.vision.analyze(fotos, { name: familia.length > 1 ? ((familia[0] as any).group?.name || product.name) : product.name, description: [quitarUrls(product.description), textoEjes].filter(Boolean).join('\n\n') });
             if (nueva) {
                 vision = nueva;
                 attrs.vision = nueva;
@@ -187,20 +191,16 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         }
         if (!categoryId) delete attrs.falabella_category_id;
 
-        // Un producto con variantes se publica agrupado si la categoría lo admite: si la elegida no admite variantes, se busca una
-        // parecida y verificada que sí; si no hay ninguna razonable, cada variante saldrá como ficha suelta con la variante en el nombre.
-        // Una categoría que eligió una persona no se toca.
-        if (categoryId && confianza !== 'manual' && (await this.sync.familiaDe(scope, productId)).length > 1
+        // Un producto con variantes se publica agrupado si la categoría lo admite. La categoría que MEJOR ENCAJA con el producto es la
+        // que manda y NO se cambia: si no admite variantes, se busca una parecida y verificada que sí y solo se RECOMIENDA a la persona
+        // (queda en `_categoriaConVariantes`); si no hay ninguna razonable, cada variante saldrá como ficha suelta con aviso.
+        delete attrs._categoriaConVariantes;
+        if (categoryId && (await this.sync.familiaDe(scope, productId)).length > 1
             && !(await this.admiteVariantes(scope, String(categoryId), connection.id))) {
             const alternativa = await this.categoriaQueAdmiteVariantes(scope, connection.id, creds, [...descartadas, String(categoryId)], nombre, descripcion, vision);
             if (alternativa) {
-                this.logger.log(`Categoría de Falabella para ${product.sku}: ${categoryId} no admite variantes; se usa ${alternativa.id} (${alternativa.path}).`);
-                categoryId = alternativa.id;
-                ids.falabella_category_id = alternativa.id;
-                attrs._categoriaVerificada = alternativa.id;
-                categoriaAuto = true;
-                confianza = 'alta';
-                delete attrs._categoriaDudosa;
+                this.logger.log(`Categoría de Falabella para ${product.sku}: ${categoryId} no admite variantes; se recomienda ${alternativa.id} (${alternativa.path}) sin cambiarla.`);
+                attrs._categoriaConVariantes = { falabella: { id: alternativa.id, path: alternativa.path } };
             }
         }
 
@@ -245,7 +245,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 return v === null || v === undefined || String(v).trim() === '';
             });
             if (faltantes.length) {
-                const r = await this.ai.completarAtributos(nombre, descripcion, faltantes, { marca: attrs.brand, color: attrs.color }, this.contextoDe(product, attrs, vision));
+                const r = await this.ai.completarAtributos(nombre, [descripcion, textoEjes].filter(Boolean).join('\n\n'), faltantes, { marca: attrs.brand, color: attrs.color }, this.contextoDe(product, attrs, vision));
                 attrs = { ...attrs, ...r.values };
                 estimadosAhora = r.estimated;
                 estimated.attributes.falabella = [...new Set([...(estimated.attributes.falabella ?? []), ...r.estimated])];
@@ -347,6 +347,13 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         return texto.slice(0, 4000);
     }
 
+    /** Si el producto es parte de un grupo de variantes: sus miembros y el texto de sus ejes (Color: Beige, Vino…) para la IA. */
+    private async deGrupo(scope: SyncScope, productId: string): Promise<{ familia: any[]; textoEjes: string }> {
+        const familia = await this.sync.familiaDe(scope, productId);
+        const ejes = familia.length > 1 ? (familia[0] as any).group?.axes : undefined;
+        return { familia, textoEjes: ejes?.length ? textoDeEjes(ejes) : '' };
+    }
+
     /** Todo lo que se sabe del producto, para que la IA llene los atributos con la mayor información posible. */
     private contextoDe(product: any, attrs: Record<string, any>, vision: any) {
         const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
@@ -365,6 +372,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const creds = this.sync.credentialsOf(connection);
         const attrs: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         const vision = (attrs.vision as ProductVision | undefined) ?? null;
+        const { textoEjes } = await this.deGrupo(scope, productId);
 
         const definiciones = (await this.falabella.getCategoryAttributes(creds, categoryId)).filter((a) => !esAtributoDeSistema(a));
         const actuales: Record<string, string> = {};
@@ -386,7 +394,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
 
         const r = await this.ai.completarAtributos(
             product.aiTitle || product.name,
-            product.aiDescription || product.description || product.name,
+            [product.aiDescription || product.description || product.name, textoEjes].filter(Boolean).join('\n\n'),
             faltantes.slice(0, 80),
             { marca: attrs.brand, color: attrs.color },
             this.contextoDe(product, attrs, vision),
