@@ -12,6 +12,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
 import { datosConocidos } from '../ai/datos-conocidos';
+import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
 import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { huellaDeFotos } from '../ai/vision-fotos';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
@@ -310,6 +311,8 @@ export class ProductsService {
             }),
             // La ficha HTML es información general: si ya existe, Ripley usa esa misma.
             htmlExistente: String((product.aiAttributes as any)?.descriptionHtml ?? '').trim() || null,
+            // Si el producto ya tiene su categoría de Ripley no se vuelve a elegir: solo se rellenan sus atributos.
+            categoriasElegidas: Object.fromEntries(Object.entries(categoriasElegidas(product.marketplaceIds as any)).filter(([canal]) => canal === 'ripley')),
         });
 
         const ripley = aiContent?.generatedListings?.ripley ?? {};
@@ -359,7 +362,7 @@ export class ProductsService {
 
         return {
             guardado,
-            categoria: { id: categoriaId, ruta: chequeo?.ruta ?? null, confianza: chequeo?.confianza ?? 'ninguna', motivo: chequeo?.motivo ?? null },
+            categoria: { id: categoriaId, ruta: chequeo?.ruta ?? ((product.marketplaceIds as any)?.ripley_category_path ?? null), confianza: chequeo?.confianza ?? 'ninguna', motivo: chequeo?.motivo ?? null },
             contenido,
             descripcionEsHtml,
             marca,
@@ -386,6 +389,8 @@ export class ProductsService {
             tone: options?.tone || 'professional',
             imageUrls: fotos,
             userId: cuentaDeCanales,
+            // Regenerar no reabre la categoría de ningún canal: la que ya tiene se mantiene y solo se completan las que faltan.
+            categoriasElegidas: categoriasElegidas(product.marketplaceIds as any, product.aiAttributes as any),
         });
 
         this.applyAiContent(product, aiContent);
@@ -668,15 +673,14 @@ export class ProductsService {
         }
 
         if (aiContent?.categorizedAs) {
-            product.marketplaceIds = {
-                ...((product.marketplaceIds as any) || {}),
-                ...aiContent.categorizedAs,
-            };
+            // Una categoría que el producto ya tenía no se cambia al regenerar: la IA solo completa las que faltaban.
+            product.marketplaceIds = fusionarCategorias((product.marketplaceIds as any) || {}, aiContent.categorizedAs) as any;
         }
 
         // Resultado de verificar la categoría de Falabella: queda anotado para que la Ficha avise si hay que revisarla.
         const chequeo = aiContent?.categoryChecks?.falabella;
-        if (chequeo) {
+        // Una categoría que el producto ya tenía no se verifica de nuevo ni se marca como dudosa: no se reabrió.
+        if (chequeo && chequeo.confianza !== 'elegida') {
             const atributos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
             if (chequeo.id) atributos._categoriaVerificada = chequeo.id;
             if (chequeo.id && chequeo.confianza === 'alta') delete atributos._categoriaDudosa;

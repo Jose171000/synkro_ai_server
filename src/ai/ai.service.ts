@@ -52,6 +52,8 @@ export class AiService {
     datosConocidos?: Record<string, string>,
     /** Ficha HTML general que el producto ya tiene: se reutiliza tal cual en vez de generar otra (es información general, igual para todos los canales). */
     htmlExistente?: string | null,
+    /** Categorías que el producto YA tiene por canal ({ falabella: '3223', ripley: 'R14…' }): no se reclasifican, solo se usan para pedir los atributos. */
+    categoriasElegidas?: Record<string, string>,
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
@@ -74,6 +76,11 @@ export class AiService {
     }
     dto = { ...dto, name: enriquecido.name, description: enriquecido.description };
 
+    // Una categoría ya guardada no se reabre: la IA solo rellena. Por canal: si Ripley ya tiene la suya y Falabella no, solo se busca la de Falabella.
+    const elegidas: Record<string, string> = Object.fromEntries(Object.entries(dto.categoriasElegidas ?? {}).map(([m, id]) => [m.toLowerCase(), String(id)]));
+    const yaElegida = (m: string) => !!elegidas[m.toLowerCase()];
+    const sinElegir = dto.targetMarketplaces.filter(m => !yaElegida(m));
+
     try {
       // PHASE A: Vector Search + LLM Categorization
       // Step 1: Get the embedding for the product text
@@ -82,7 +89,7 @@ export class AiService {
 
       // Step 2: For each marketplace, find the top 5 most semantically similar categories
       const categoriesPerMarketplace: Record<string, MarketplaceCategory[]> = {};
-      for (const marketplace of dto.targetMarketplaces) {
+      for (const marketplace of sinElegir) {
         const topCategories = await this.vectorSearchService.findSimilarCategories(
           productEmbedding,
           marketplace,
@@ -98,7 +105,7 @@ export class AiService {
 
       // Falabella: sin categorías guardadas la IA no tenía de dónde elegir. Se piden al árbol de Falabella en
       // vivo (con las palabras del producto) y, en segundo plano, se importan todas para la próxima vez.
-      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella') && dto.userId
+      if (sinElegir.map(m => m.toLowerCase()).includes('falabella') && dto.userId
         && (categoriesPerMarketplace['falabella']?.length ?? 0) < 3) {
         void this.falabellaImport.asegurarImportadas(dto.userId);
         const creds = await this.channelAttributes.credencialesDe(dto.userId).catch(() => null);
@@ -109,28 +116,36 @@ export class AiService {
         }
       }
 
-      // Step 3: Build the categorization prompt with only the relevant top-5 categories
-      const categorizationPrompt = this.buildCategorizationPrompt(
-        dto.name,
-        dto.description,
-        dto.targetMarketplaces,
-        categoriesPerMarketplace,
-      );
+      // Step 3: Build the categorization prompt with only the relevant top-5 categories (solo los canales que aún no tienen categoría)
+      if (sinElegir.length) {
+        const categorizationPrompt = this.buildCategorizationPrompt(
+          dto.name,
+          dto.description,
+          sinElegir,
+          categoriesPerMarketplace,
+        );
 
-      const catResponse = await this.openai.chat.completions.create({
-        model: modeloDeepseek(),
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
-          { role: 'user', content: categorizationPrompt }
-        ]
-      });
+        const catResponse = await this.openai.chat.completions.create({
+          model: modeloDeepseek(),
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON arrays and objects only.' },
+            { role: 'user', content: categorizationPrompt }
+          ]
+        });
 
-      catJson = JSON.parse(catResponse.choices[0].message.content || '{}');
+        catJson = JSON.parse(catResponse.choices[0].message.content || '{}');
+      }
+      // Las categorías que el producto ya tenía se mantienen tal cual (y se marcan como elegidas para quien lea el resultado).
+      for (const marketplace of dto.targetMarketplaces.map(m => m.toLowerCase())) {
+        if (!elegidas[marketplace]) continue;
+        catJson[`${marketplace}_category_id`] = elegidas[marketplace];
+        categoryChecks[marketplace] = { id: elegidas[marketplace], confianza: 'elegida' };
+      }
 
       // Falabella: la categoría se verifica con una segunda consulta; si ninguna encaja no se asigna ninguna
       // (publicar en la categoría equivocada es peor que pedir una revisión).
-      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')) {
+      if (sinElegir.map(m => m.toLowerCase()).includes('falabella')) {
         const creds = dto.userId ? await this.channelAttributes.credencialesDe(dto.userId).catch(() => null) : null;
         const r = await this.elegirCategoriaVerificada('falabella', enriquecido.name, enriquecido.description, categoriesPerMarketplace['falabella'] ?? [], {
           vision,
@@ -144,7 +159,7 @@ export class AiService {
 
       // Ripley: igual que Falabella, la categoría elegida se verifica con una segunda consulta; si ninguna encaja no se asigna
       // ninguna (publicar en la categoría equivocada es peor que pedir una revisión).
-      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('ripley')) {
+      if (sinElegir.map(m => m.toLowerCase()).includes('ripley')) {
         const r = await this.elegirCategoriaVerificada('ripley', enriquecido.name, enriquecido.description, categoriesPerMarketplace['ripley'] ?? [], {
           vision,
           preferida: catJson['ripley_category_id'] ? String(catJson['ripley_category_id']) : null,
@@ -168,7 +183,7 @@ export class AiService {
       // (las categorías guardadas aquí son de ejemplo y de otro país), y cada categoría
       // tiene sus atributos obligatorios con valores permitidos.
       for (const marketplace of dto.targetMarketplaces.map(m => m.toLowerCase())) {
-        if (marketplace === 'mercadolibre') {
+        if (marketplace === 'mercadolibre' && !yaElegida('mercadolibre')) {
           const real = await this.channelAttributes.predecirCategoriaMeli(enriquecido.titulo);
           if (real) catJson['mercadolibre_category_id'] = real;
         }

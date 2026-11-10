@@ -11,6 +11,7 @@ import { atributosConVariante, tituloDeVariante } from './titulos-de-variante';
 import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/product-vision.service';
 import { fotosParaIA } from './fotos-para-ia';
 import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
+import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
 } from './variantes';
@@ -206,6 +207,8 @@ export class ProductGroupsService {
             // Las cuentas de canales con las que la IA verifica categorías y atributos son las de quien subió el producto.
             userId: grupo.owner?.id ?? ambito.userId,
             ejes: vista.axes,
+            // Regenerar no reabre la categoría de ningún canal: la que ya tiene el grupo (en cualquiera de sus variantes) se mantiene.
+            categoriasElegidas: variantes.reduce((acc, v) => ({ ...categoriasElegidas(v.marketplaceIds as any, v.aiAttributes as any), ...acc }), {} as Record<string, string>),
         });
 
         const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
@@ -217,7 +220,8 @@ export class ProductGroupsService {
             if (titulo) v.aiTitle = titulo as any;
             if (molde.aiDescription) v.aiDescription = molde.aiDescription;
             if (molde.aiKeywords) v.aiKeywords = molde.aiKeywords;
-            v.marketplaceIds = { ...((v.marketplaceIds as any) || {}), ...(molde.marketplaceIds ?? {}) };
+            // Una categoría que la variante ya tenía no se cambia; si otra variante del grupo ya la tenía, se completa en las que no.
+            v.marketplaceIds = fusionarCategorias((v.marketplaceIds as any) || {}, molde.marketplaceIds ?? {}) as any;
             v.aiAttributes = atributosConVariante(
                 atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any,
                 v.variantValues,
