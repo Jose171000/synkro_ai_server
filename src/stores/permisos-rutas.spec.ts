@@ -80,6 +80,7 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/falabella/brands': 'canales.publicar',
     'Sync POST /sync/mercadolibre/products/:id/link': 'canales.publicar',
     'Sync PATCH /sync/falabella/products/:id/brand': 'canales.publicar',
+    'Sync PATCH /sync/ripley/products/:id/brand': 'canales.publicar',
     'Sync PATCH /sync/falabella/products/:id/preparation': 'canales.publicar',
     'Sync POST /sync/falabella/publish': 'canales.publicar',
     'Sync PATCH /sync/products/:id/inventory': 'inventario.editar',

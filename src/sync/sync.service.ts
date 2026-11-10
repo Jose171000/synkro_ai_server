@@ -1691,6 +1691,18 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
+     * Guarda la marca con la que el producto se publicará en Ripley (ya validada contra su catálogo). Va en los datos propios de
+     * Ripley y no pisa la marca general ni la de otros canales. No envía nada a Ripley.
+     */
+    async setRipleyBrand(scope: SyncScope, productId: string, brand: string) {
+        const product = await this.findScopedProduct(scope, productId);
+        const atributos = ((product.aiAttributes as any) || {}) as Record<string, any>;
+        product.aiAttributes = { ...atributos, ripley: { ...(atributos.ripley ?? {}), brand } } as any;
+        await this.productRepository.save(product);
+        return { brand };
+    }
+
+    /**
      * Guarda en un producto lo que Falabella exige y el sistema no puede
      * deducir solo: la categoría, las medidas del paquete y los atributos
      * propios de esa categoría.

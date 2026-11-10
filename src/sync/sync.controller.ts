@@ -515,6 +515,23 @@ export class SyncController {
         return this.syncService.setFalabellaBrand(scopeOf(req), id, dto.brand, dto.connectionId);
     }
 
+    @Patch('ripley/products/:id/brand')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Cambia la marca con la que se publica un producto en Ripley',
+        description: 'Solo vale una marca del catálogo aprobado de Ripley (o GENÉRICO); se guarda con su escritura exacta. No envía nada a Ripley.',
+    })
+    async setRipleyBrand(@Param('id') id: string, @Body() dto: SetBrandDto, @Req() req) {
+        const marca = await this.ripleyMarcas.revisar(dto.brand);
+        if (!marca.valida || !marca.canonica) {
+            const parecidas = marca.sugerencias.length ? ` Parecidas: ${marca.sugerencias.join(', ')}.` : '';
+            throw new BadRequestException(`La marca «${dto.brand.trim()}» no existe en el catálogo de Ripley. Búscala en la lista o usa GENÉRICO.${parecidas}`);
+        }
+        return this.syncService.setRipleyBrand(scopeOf(req), id, marca.canonica);
+    }
+
     @Patch('falabella/products/:id/preparation')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
