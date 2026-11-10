@@ -18,6 +18,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role';
 import { FalabellaCategoryImportService } from './falabella-category-import.service';
 import { RipleyCategoryImportService } from './ripley-category-import.service';
+import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { CategorySeederService } from './category-seeder.service';
 import { AddCategoryDto } from './dto/add-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -33,6 +34,7 @@ export class CategoryController {
     constructor(
         private readonly falabellaImport: FalabellaCategoryImportService,
         private readonly ripleyImport: RipleyCategoryImportService,
+        private readonly ripleyMarcas: RipleyMarcasService,
         private readonly categorySeederService: CategorySeederService,
         @InjectRepository(MarketplaceCategory)
         private readonly categoryRepository: Repository<MarketplaceCategory>,
@@ -50,6 +52,16 @@ export class CategoryController {
     })
     importFalabellaCategories(@Req() req) {
         return this.falabellaImport.importCategories(req.user.id);
+    }
+
+    @Post('ripley/brands/import')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({
+        summary: 'Carga la lista de marcas aprobadas de Ripley (27.116) desde data/ripley-marcas.json',
+        description: 'La API de Ripley no entrega sus marcas; salen de la plantilla de carga del portal. Se puede repetir: reemplaza la lista completa.',
+    })
+    importRipleyBrands() {
+        return this.ripleyMarcas.cargarDesdeArchivo();
     }
 
     @Post('ripley/import')

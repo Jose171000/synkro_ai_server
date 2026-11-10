@@ -43,6 +43,8 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/connections': 'canales.ver',
     'Sync GET /sync/ripley/diagnostico': 'canales.conectar',
     'Sync GET /sync/ripley/categorias': 'canales.conectar',
+    'Sync GET /sync/ripley/brands': 'canales.publicar',
+    'Sync GET /sync/ripley/brands/check': 'canales.publicar',
     'Sync GET /sync/ripley/vista-previa-envio': 'canales.conectar',
     'Sync POST /sync/ripley/colores-ia': 'canales.conectar',
     'Sync POST /sync/listings/:id/resend-stock': 'inventario.editar',

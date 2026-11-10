@@ -8,6 +8,7 @@ import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ajustarAtributosDeRipley, conOpcionesParaLaIa } from './ripley-atributos';
+import { textoDeDatosConocidos } from './datos-conocidos';
 import { EjeParaIA, textoDeEjes } from './ejes-de-variacion';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml, textoPlanoDeContenido } from './description-html';
 import { soloElNumero } from '../sync/falabella/falabella-fields';
@@ -47,6 +48,10 @@ export class AiService {
     estimar?: boolean,
     /** Producto con variantes: los ejes y sus valores (Color: Beige, Vino…) para que la IA trate el grupo como una sola publicación. */
     ejes?: EjeParaIA[],
+    /** Lo que el producto ya sabe de sí mismo (material, capacidad, medidas…): dato de partida, no se contradice. */
+    datosConocidos?: Record<string, string>,
+    /** Ficha HTML general que el producto ya tiene: se reutiliza tal cual en vez de generar otra (es información general, igual para todos los canales). */
+    htmlExistente?: string | null,
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
@@ -55,7 +60,7 @@ export class AiService {
 
     // Los enlaces de imágenes o GIFs que el cliente pegó en su descripción van a la ficha HTML, no al texto que redacta la IA.
     const urlsDelCliente = extraerUrlsDeImagen(`${dto.name ?? ''} ${dto.description ?? ''}`);
-    dto = { ...dto, name: quitarUrls(dto.name), description: [quitarUrls(dto.description), textoDeEjes(dto.ejes)].filter(Boolean).join('\n\n') };
+    dto = { ...dto, name: quitarUrls(dto.name), description: [quitarUrls(dto.description), textoDeEjes(dto.ejes), textoDeDatosConocidos(dto.datosConocidos)].filter(Boolean).join('\n\n') };
 
     // PHASE 0: las fotos. Todo lo que se ve (tipo, color, material, marca) deja de depender de lo que escriba el cliente.
     const vision: ProductVision | null = dto.imageUrls?.length
@@ -236,10 +241,13 @@ export class AiService {
       }
 
       // Descripción HTML estándar de la agencia para los canales que aceptan HTML.
-      const aceptaHtml = dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce'].includes(m));
+      const aceptaHtml = dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce', 'ripley'].includes(m));
       const atributosParaFicha: Record<string, any> = { ...(vision ? this.atributosDeVision(vision) : {}) };
       for (const listing of Object.values<any>(finalJson ?? {})) Object.assign(atributosParaFicha, listing?.attributes ?? {});
-      const ficha = aceptaHtml
+      // Si el producto ya tiene su ficha HTML general se reutiliza tal cual: es información general, la misma en todos los canales.
+      const ficha = dto.htmlExistente?.trim()
+        ? { html: dto.htmlExistente }
+        : aceptaHtml
         ? await this.generarDescripcionHtml({
             nombre: enriquecido.name,
             textoCliente: textoDelCliente,

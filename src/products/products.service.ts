@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
@@ -11,6 +11,8 @@ import { AiService } from 'src/ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
+import { datosConocidos } from '../ai/datos-conocidos';
+import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { huellaDeFotos } from '../ai/vision-fotos';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
 
@@ -300,6 +302,13 @@ export class ProductsService {
             tone: 'professional',
             imageUrls: fotos,
             userId: product.owner?.id ?? userId,
+            // Lo que el producto ya sabe (material, capacidad, medidas…) es el punto de partida; la IA no lo contradice.
+            datosConocidos: datosConocidos((product.aiAttributes as any) ?? {}, {
+                'Ancho del paquete (cm)': product.packageWidth, 'Largo del paquete (cm)': product.packageLength,
+                'Alto del paquete (cm)': product.packageHeight, 'Peso del paquete (kg)': product.packageWeight,
+            }),
+            // La ficha HTML es información general: si ya existe, Ripley usa esa misma.
+            htmlExistente: String((product.aiAttributes as any)?.descriptionHtml ?? '').trim() || null,
         });
 
         const ripley = aiContent?.generatedListings?.ripley ?? {};
@@ -308,7 +317,12 @@ export class ProductsService {
         const chequeo = aiContent?.categoryChecks?.ripley ?? null;
         const categoriaId: string | null = aiContent?.categorizedAs?.ripley_category_id ?? null;
         const atributos = completos(ripley.attributes);
-        const contenido = completos({ name: ripley.name, shortDescription: ripley.shortDescription, description: ripley.description, brand: ripley.brand });
+        // La descripción de Ripley es la ficha HTML general (la del producto o la recién generada); la redacción de la IA es el respaldo.
+        const html: string = String(aiContent?.htmlDescription ?? '').trim();
+        const contenido = completos({
+            name: ripley.name, shortDescription: ripley.shortDescription, description: html || ripley.description, brand: ripley.brand,
+        });
+        const descripcionEsHtml = !!html;
         const faltantes = aiContent?.missingAttributes?.ripley ?? [];
 
         let guardado = false;
@@ -334,6 +348,7 @@ export class ProductsService {
             guardado,
             categoria: { id: categoriaId, ruta: chequeo?.ruta ?? null, confianza: chequeo?.confianza ?? 'ninguna', motivo: chequeo?.motivo ?? null },
             contenido,
+            descripcionEsHtml,
             atributos,
             faltantes,
         };

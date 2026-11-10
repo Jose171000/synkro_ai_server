@@ -42,6 +42,7 @@ import { plantillaDeVentas, ventasDeFilas } from './ventas-manuales';
 import { escribirHoja } from '../common/excel/excel';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
+import { RipleyMarcasService } from './ripley/ripley-marcas.service';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
 import { VerifyChannelsDto } from './dto/verify-channels.dto';
 import { MarkImportedDto } from './dto/mark-imported.dto';
@@ -71,6 +72,7 @@ export class SyncController {
         private readonly variantImport: FalabellaVariantImportService,
         private readonly yavendioCatalog: YavendioCatalogImportService,
         private readonly yavendioOrders: YavendioOrdersService,
+        private readonly ripleyMarcas: RipleyMarcasService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -466,6 +468,30 @@ export class SyncController {
     })
     searchFalabellaBrands(@Query('search') search: string, @Req() req, @Query('connectionId') connectionId?: string) {
         return this.syncService.searchFalabellaBrands(scopeOf(req), search || '', connectionId);
+    }
+
+    @Get('ripley/brands')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Busca marcas del catálogo de Ripley',
+        description: 'Ripley solo acepta marcas de su catálogo aprobado (o GENÉRICO). Primero salen las que empiezan por el texto.',
+    })
+    searchRipleyBrands(@Query('search') search: string) {
+        return this.ripleyMarcas.buscar(search || '');
+    }
+
+    @Get('ripley/brands/check')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Comprueba si una marca está en el catálogo de Ripley',
+        description: 'Dice si la marca escrita existe (con su escritura exacta) o, si no, sugiere marcas parecidas.',
+    })
+    checkRipleyBrand(@Query('brand') brand: string) {
+        return this.ripleyMarcas.revisar(brand || '');
     }
 
     @Post('mercadolibre/products/:id/link')

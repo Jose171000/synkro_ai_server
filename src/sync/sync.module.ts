@@ -23,6 +23,8 @@ import { FalabellaApiService } from './falabella/falabella-api.service';
 import { WooApiService } from './woo/woo-api.service';
 import { ShopifyApiService } from './shopify/shopify-api.service';
 import { RipleyApiService } from './ripley/ripley-api.service';
+import { RipleyMarcasService } from './ripley/ripley-marcas.service';
+import { MarketplaceValueList } from '../categories/entities/marketplace-value-list.entity';
 import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { CredentialsEncryptionService } from './credentials-encryption.service';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
@@ -40,13 +42,13 @@ import { Product } from '../products/entities/product.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, ProductGroup, User, Store, StoreMember]),
+        TypeOrmModule.forFeature([MarketplaceValueList, MarketplaceConnection, ListingLink, MarketplaceOrder, MarketplaceFeed, SyncChangeRequest, Product, ProductGroup, User, Store, StoreMember]),
         BullModule.registerQueue({ name: 'marketplace-sync-queue' }),
         NotificationsModule,
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, ShopifyApiService, RipleyApiService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, EcommerceSyncService],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, ShopifyApiService, RipleyApiService, RipleyMarcasService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
+    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, RipleyMarcasService, EcommerceSyncService],
 })
 export class SyncModule { }
