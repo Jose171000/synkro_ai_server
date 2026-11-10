@@ -6,6 +6,7 @@ import { SyncModule } from '../sync/sync.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 import { MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
+import { MarketplaceValueList } from '../categories/entities/marketplace-value-list.entity';
 import { ProductVisionService } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { FalabellaAutoPrepService } from './falabella-auto-prep.service';
@@ -15,7 +16,7 @@ import { StoresModule } from '../stores/stores.module';
 import { Product } from '../products/entities/product.entity';
 
 @Module({
-  imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, Product])],
+  imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, MarketplaceValueList, Product])],
   controllers: [AiController, FalabellaPrepController],
   providers: [AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService, ProductLaunchService],
   exports: [AiService, ProductVisionService, FalabellaAutoPrepService, ProductLaunchService],

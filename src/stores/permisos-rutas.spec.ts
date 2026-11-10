@@ -126,6 +126,7 @@ const TABLA: Record<string, string> = {
     'Products GET /products/summary': 'productos.ver',
     'Products GET /products': 'productos.ver',
     'Products GET /products/:id': 'productos.ver',
+    'Products POST /products/:id/prepare-ripley': 'productos.editar',
     'Products POST /products/:id/generate-ai': 'productos.editar',
     'Products PATCH /products/:id': 'productos.editar',
     'Products DELETE /products/:id': 'productos.eliminar',

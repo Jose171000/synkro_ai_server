@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CategoryAttribute, MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
+import { MarketplaceValueList } from '../categories/entities/marketplace-value-list.entity';
 import { CategorySeederService } from '../categories/category-seeder.service';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { MeliApiService } from '../sync/meli/meli-api.service';
@@ -83,7 +84,22 @@ export class ChannelAttributesService {
         private readonly connections: Repository<MarketplaceConnection>,
         @InjectRepository(MarketplaceCategory)
         private readonly categories: Repository<MarketplaceCategory>,
+        @InjectRepository(MarketplaceValueList)
+        private readonly valueLists: Repository<MarketplaceValueList>,
     ) { }
+
+    /** Las listas cerradas de valores de Ripley (colores, tipos de producto…) que piden los atributos de una categoría. */
+    async listasDeRipley(codigos: string[]): Promise<Map<string, string[]>> {
+        const unicos = [...new Set((codigos ?? []).filter(Boolean))];
+        if (!unicos.length) return new Map();
+        try {
+            const filas = await this.valueLists.find({ where: { marketplace: 'ripley', code: In(unicos) } });
+            return new Map(filas.map((f) => [f.code, Array.isArray(f.values) ? f.values : []]));
+        } catch (error: any) {
+            this.logger.warn(`No se pudieron leer las listas de valores de Ripley: ${error?.message}`);
+            return new Map();
+        }
+    }
 
     /** Credenciales de la cuenta de Falabella de un usuario, si tiene una activa. */
     async credencialesDe(userId: string): Promise<FalabellaCredentials | null> {

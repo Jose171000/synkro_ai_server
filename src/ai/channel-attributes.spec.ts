@@ -23,7 +23,7 @@ function construir(opts: { guardadas?: any[]; meliFalla?: boolean } = {}) {
         predictCategory: jest.fn(),
     };
     const seeder: any = { generateEmbedding: jest.fn(async () => [0.1, 0.2]) };
-    const service = new ChannelAttributesService(meli, {} as any, {} as any, seeder, {} as any, categories);
+    const service = new ChannelAttributesService(meli, {} as any, {} as any, seeder, {} as any, categories, {} as any);
     return { service, filas, meli, seeder, categories };
 }
 

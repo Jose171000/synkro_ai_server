@@ -13,6 +13,7 @@ import { ProductGroupsService } from './product-groups.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { UpdateProductGroupDto } from './dto/update-product-group.dto';
+import { PrepararRipleyDto } from './dto/preparar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
@@ -277,6 +278,17 @@ export class ProductsController {
   @ApiOperation({ summary: 'Obtener un producto por ID' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
     return this.productsService.findOne(id, req.user.id, req.store.storeId);
+  }
+
+  @Post(':id/prepare-ripley')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Preparar un producto para Ripley con IA (categoría y atributos)',
+    description: 'La IA elige y verifica la categoría de Ripley, redacta con sus reglas y rellena los atributos llevando cada valor a las listas cerradas del canal. Lo que no se pueda deducir sale en `faltantes`. Con guardar=false (por defecto) es solo una vista previa; con guardar=true se anota en el producto. Nunca envía nada a Ripley.',
+  })
+  prepareRipley(@Param('id') id: string, @Body() dto: PrepararRipleyDto, @Req() req) {
+    return this.productsService.prepararParaRipley(id, req.user.id, { guardar: dto?.guardar === true }, req.store.storeId);
   }
 
   @Post(':id/generate-ai')

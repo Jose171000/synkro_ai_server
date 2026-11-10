@@ -38,6 +38,19 @@ export const MARKETPLACE_PROMPT_RULES: Record<
     `,
         jsonStructure: `"falabella": { "name": "string", "description": "string", "brand": "string", "conditionType": "string", "model": "string", "productionCountry": "string" }`,
     },
+    ripley: {
+        instructions: `
+      - REGLAS PARA RIPLEY (Mercado Ripley):
+        - name: Máximo 125 caracteres, SIEMPRE EN MAYÚSCULAS, sin emojis. Empieza por el tipo de producto y añade lo que lo distingue
+          (material, capacidad, uso). Si incluyes género y color, que NO vayan juntos (por ejemplo "MOCHILA DE MUJER ... COLOR NEGRO" está
+          bien; "MOCHILA MUJER NEGRO" no). Lo usan los buscadores de Ripley.com.
+        - shortDescription: Una o dos frases (máximo 250 caracteres), texto plano, sin HTML.
+        - description: TODO el detalle del producto en texto plano (sin HTML): materiales, medidas, capacidad, usos y contenido del
+          paquete. Sin datos de contacto, precios ni menciones a otras tiendas.
+        - brand: La marca real del producto. Si no la tiene, exactamente "GENÉRICO" (con tilde).
+    `,
+        jsonStructure: `"ripley": { "name": "string", "shortDescription": "string", "description": "string", "brand": "string" }`,
+    },
     shopify: {
         instructions: `
       - REGLAS PARA SHOPIFY:

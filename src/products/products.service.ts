@@ -279,6 +279,66 @@ export class ProductsService {
         return this.buscarProducto(id, userId, storeId);
     }
 
+    /**
+     * Prepara un producto para Ripley: la IA elige su categoría de Ripley (verificada), la redacta con las reglas de Ripley y rellena
+     * los atributos de esa categoría llevando cada valor a las listas cerradas del canal. Lo que no se pueda deducir sale en
+     * `faltantes` (es lo único que hay que completar a mano).
+     *
+     * Con `guardar: false` (por defecto) es una VISTA PREVIA: no se cambia nada del producto ni se toca Ripley. Con `guardar: true`
+     * el resultado se anota en el producto (atributos y contenido de Ripley aparte, sin pisar el título ni la descripción de los
+     * demás canales ni lo que ya tuviera escrito); tampoco se envía nada a Ripley.
+     */
+    async prepararParaRipley(productId: string, userId: string, opciones: { guardar?: boolean } = {}, storeId?: string | null) {
+        const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
+        const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
+        const aiContent: any = await this.aiService.generateProductContent({
+            name: product.name,
+            description: [product.description, product.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n'),
+            category: product.category,
+            subcategory: product.subCategory,
+            targetMarketplaces: ['ripley'],
+            tone: 'professional',
+            imageUrls: fotos,
+            userId: product.owner?.id ?? userId,
+        });
+
+        const ripley = aiContent?.generatedListings?.ripley ?? {};
+        const completos = (obj: any): Record<string, any> =>
+            Object.fromEntries(Object.entries(obj ?? {}).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== ''));
+        const chequeo = aiContent?.categoryChecks?.ripley ?? null;
+        const categoriaId: string | null = aiContent?.categorizedAs?.ripley_category_id ?? null;
+        const atributos = completos(ripley.attributes);
+        const contenido = completos({ name: ripley.name, shortDescription: ripley.shortDescription, description: ripley.description, brand: ripley.brand });
+        const faltantes = aiContent?.missingAttributes?.ripley ?? [];
+
+        let guardado = false;
+        if (opciones.guardar) {
+            const previos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
+            // Lo que el producto ya tenía de Ripley manda: la IA solo rellena lo vacío.
+            product.aiAttributes = {
+                ...previos,
+                ripley_attributes: { ...atributos, ...completos(previos.ripley_attributes) },
+                ripley: { ...contenido, ...completos(previos.ripley) },
+            } as any;
+            const ids: Record<string, any> = { ...((product.marketplaceIds as any) || {}) };
+            if (categoriaId && !String(ids.ripley_category_id ?? '').trim()) {
+                ids.ripley_category_id = categoriaId;
+                if (chequeo?.ruta) ids.ripley_category_path = chequeo.ruta;
+            }
+            product.marketplaceIds = ids as any;
+            await this.productRepository.save(product);
+            guardado = true;
+        }
+
+        return {
+            guardado,
+            categoria: { id: categoriaId, ruta: chequeo?.ruta ?? null, confianza: chequeo?.confianza ?? 'ninguna', motivo: chequeo?.motivo ?? null },
+            contenido,
+            atributos,
+            faltantes,
+        };
+    }
+
     async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }, storeId?: string | null) {
         const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
         // Los canales con los que la IA verifica categorías y atributos son los de quien subió el producto (como siempre), no los de
@@ -481,7 +541,8 @@ export class ProductsService {
      */
     applyAiContent(product: Product, aiContent: any): void {
         const listings = aiContent?.generatedListings ?? aiContent ?? {};
-        const primero = Object.values(listings)[0] as any;
+        // El título de Ripley va en mayúsculas y con sus propias reglas: no debe ser el título general del producto.
+        const primero = Object.entries(listings).find(([canal]) => canal !== 'ripley')?.[1] as any;
 
         if (primero) {
             // Falabella nombra el título como `name`.
@@ -526,6 +587,17 @@ export class ProductsService {
         const meli = completos((listings as any).mercadolibre?.attributes);
         if (Object.keys(meli).length) {
             product.aiAttributes = { ...((product.aiAttributes as any) || {}), mercadolibre_attributes: meli };
+        }
+        // Ripley: sus atributos (ya llevados a sus listas cerradas) y su propio contenido se guardan aparte.
+        const ripley = (listings as any).ripley;
+        if (ripley) {
+            const delRipley = completos(ripley.attributes);
+            const propios = completos({ name: ripley.name, shortDescription: ripley.shortDescription, description: ripley.description, brand: ripley.brand });
+            product.aiAttributes = {
+                ...((product.aiAttributes as any) || {}),
+                ...(Object.keys(delRipley).length ? { ripley_attributes: delRipley } : {}),
+                ...(Object.keys(propios).length ? { ripley: propios } : {}),
+            };
         }
         const delFalabella = completos((listings as any).falabella?.attributes);
         if (Object.keys(delFalabella).length) {

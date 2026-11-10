@@ -7,6 +7,7 @@ import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/m
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
+import { ajustarAtributosDeRipley, conOpcionesParaLaIa } from './ripley-atributos';
 import { EjeParaIA, textoDeEjes } from './ejes-de-variacion';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml, textoPlanoDeContenido } from './description-html';
 import { soloElNumero } from '../sync/falabella/falabella-fields';
@@ -81,7 +82,7 @@ export class AiService {
           productEmbedding,
           marketplace,
           // De Mercado Libre se piden más: parte de lo guardado son ejemplos de otro país que se descartan.
-          marketplace.toLowerCase() === "mercadolibre" ? 20 : 5,
+          marketplace.toLowerCase() === "mercadolibre" ? 20 : marketplace.toLowerCase() === 'ripley' ? 8 : 5,
         );
         // Las categorías de ejemplo de Mercado Libre son de otro país: solo valen las del sitio configurado.
         const sitio = process.env.MELI_SITE_ID || 'MPE';
@@ -136,6 +137,18 @@ export class AiService {
         else delete catJson['falabella_category_id'];
       }
 
+      // Ripley: igual que Falabella, la categoría elegida se verifica con una segunda consulta; si ninguna encaja no se asigna
+      // ninguna (publicar en la categoría equivocada es peor que pedir una revisión).
+      if (dto.targetMarketplaces.map(m => m.toLowerCase()).includes('ripley')) {
+        const r = await this.elegirCategoriaVerificada('ripley', enriquecido.name, enriquecido.description, categoriesPerMarketplace['ripley'] ?? [], {
+          vision,
+          preferida: catJson['ripley_category_id'] ? String(catJson['ripley_category_id']) : null,
+        });
+        categoryChecks['ripley'] = r;
+        if (r.id) catJson['ripley_category_id'] = r.id;
+        else delete catJson['ripley_category_id'];
+      }
+
       // Step 4: Extract requiredAttributes from the matched category objects (already in memory)
       dto.targetMarketplaces.forEach(marketplace => {
         const electedId = catJson[`${marketplace.toLowerCase()}_category_id`];
@@ -162,6 +175,16 @@ export class AiService {
           palabras: [vision?.productType ?? '', ...(vision?.keywords ?? [])].filter(Boolean),
         });
         if (reales) categoryRequirements[marketplace] = reales;
+
+        // Ripley: sus atributos de color, tipo de producto, etc. son listas cerradas. La IA ve la lista completa si es corta o los
+        // valores más parecidos al producto si es larga (la de tipos de producto tiene más de 2.000).
+        if (marketplace === 'ripley' && categoryRequirements['ripley']?.length) {
+          const listas = await this.channelAttributes.listasDeRipley(categoryRequirements['ripley'].map(a => a.listCode ?? ''));
+          categoryRequirements['ripley'] = conOpcionesParaLaIa(
+            categoryRequirements['ripley'], listas,
+            [enriquecido.name, enriquecido.titulo, vision?.productType, ...(vision?.keywords ?? [])],
+          );
+        }
       }
 
     } catch (error) {
@@ -190,6 +213,17 @@ export class AiService {
           { role: 'user', content: generationPrompt }
         ]
       }));
+
+      // Ripley solo acepta EXACTAMENTE uno de los valores de sus listas: lo que escribió la IA se lleva a uno de ellos, y lo que no
+      // tiene equivalente se quita para que quede como dato faltante (no se manda un valor que Ripley rechazaría).
+      const atributosRipley = finalJson?.ripley?.attributes;
+      if (atributosRipley && categoryRequirements['ripley']?.length) {
+        const listas = await this.channelAttributes.listasDeRipley(categoryRequirements['ripley'].map(a => a.listCode ?? ''));
+        const ajuste = ajustarAtributosDeRipley(atributosRipley, categoryRequirements['ripley'], listas);
+        finalJson.ripley.attributes = ajuste.atributos;
+        if (Object.keys(ajuste.ajustados).length) console.log('[AiService] Ripley: valores llevados a su lista:', JSON.stringify(ajuste.ajustados));
+        if (ajuste.invalidos.length) console.warn('[AiService] Ripley: sin equivalente en su lista, quedan como faltantes:', ajuste.invalidos.join(', '));
+      }
 
       // Lo que la IA estimó (solo en modo masivo) se anota aparte y se quita de los atributos.
       const estimatedAttributes: Record<string, string[]> = {};
