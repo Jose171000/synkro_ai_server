@@ -1690,6 +1690,39 @@ export class SyncService implements OnModuleInit {
         return { brand: canonica };
     }
 
+    /** La categoría de Ripley que el producto ya tiene guardada, si tiene. */
+    async ripleyCategoryOf(scope: SyncScope, productId: string): Promise<string | null> {
+        const product = await this.findScopedProduct(scope, productId);
+        const id = String((product.marketplaceIds as any)?.ripley_category_id ?? '').trim();
+        return id || null;
+    }
+
+    /**
+     * Guarda en el producto lo que Ripley exige: la categoría elegida y los valores de sus atributos (ya validados contra las listas
+     * de Ripley). Va en datos propios de Ripley, sin tocar lo de otros canales. Si se mandan atributos, reemplazan a los anteriores
+     * de Ripley (un valor vacío ya viene quitado). No envía nada a Ripley.
+     */
+    async saveRipleyPreparation(scope: SyncScope, productId: string, datos: { categoryId?: string; ruta?: string; atributos?: Record<string, string>; contenido?: { name?: string; shortDescription?: string } }) {
+        const product = await this.findScopedProduct(scope, productId);
+        const atributos = ((product.aiAttributes as any) || {}) as Record<string, any>;
+        if (datos.atributos) product.aiAttributes = { ...atributos, ripley_attributes: datos.atributos } as any;
+        if (datos.contenido) {
+            // El nombre de Ripley va en MAYÚSCULAS y con un máximo de 125 caracteres (sus reglas); la descripción corta, en texto plano.
+            const propios: Record<string, string> = {};
+            const nombre = String(datos.contenido.name ?? '').replace(/\s+/g, ' ').trim().toLocaleUpperCase('es').slice(0, 125);
+            const corta = String(datos.contenido.shortDescription ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250);
+            if (nombre) propios.name = nombre;
+            if (corta) propios.shortDescription = corta;
+            const actuales = (((product.aiAttributes as any) || {}) as Record<string, any>).ripley ?? {};
+            product.aiAttributes = { ...((product.aiAttributes as any) || {}), ripley: { ...actuales, ...propios } } as any;
+        }
+        if (datos.categoryId) {
+            product.marketplaceIds = { ...((product.marketplaceIds as any) || {}), ripley_category_id: datos.categoryId, ...(datos.ruta ? { ripley_category_path: datos.ruta } : {}) } as any;
+        }
+        await this.productRepository.save(product);
+        return { saved: true, categoryId: datos.categoryId ?? (product.marketplaceIds as any)?.ripley_category_id ?? null, atributos: Object.keys(datos.atributos ?? (atributos.ripley_attributes ?? {})).length };
+    }
+
     /**
      * Guarda la marca con la que el producto se publicará en Ripley (ya validada contra su catálogo). Va en los datos propios de
      * Ripley y no pisa la marca general ni la de otros canales. No envía nada a Ripley.

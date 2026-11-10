@@ -43,6 +43,8 @@ import { escribirHoja } from '../common/excel/excel';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { RipleyMarcasService } from './ripley/ripley-marcas.service';
+import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
+import { SaveRipleyPreparationDto } from './dto/save-ripley-preparation.dto';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
 import { VerifyChannelsDto } from './dto/verify-channels.dto';
 import { MarkImportedDto } from './dto/mark-imported.dto';
@@ -73,6 +75,7 @@ export class SyncController {
         private readonly yavendioCatalog: YavendioCatalogImportService,
         private readonly yavendioOrders: YavendioOrdersService,
         private readonly ripleyMarcas: RipleyMarcasService,
+        private readonly ripleyCatalogo: RipleyCatalogoService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -513,6 +516,64 @@ export class SyncController {
     @ApiOperation({ summary: 'Cambia la marca con la que se publica un producto en Falabella' })
     setFalabellaBrand(@Param('id') id: string, @Body() dto: SetBrandDto, @Req() req) {
         return this.syncService.setFalabellaBrand(scopeOf(req), id, dto.brand, dto.connectionId);
+    }
+
+    @Get('ripley/categories')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({ summary: 'Busca categorías de Ripley donde se puede publicar (del catálogo ya importado)' })
+    searchRipleyCategories(@Query('search') search: string) {
+        return this.ripleyCatalogo.buscarCategorias(search || '');
+    }
+
+    @Get('ripley/categories/:id/fields')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Los campos que pide una categoría de Ripley',
+        description: 'Con su nombre, si es obligatorio, si define la variante y sus valores (completos si la lista es corta; las largas se buscan en ripley/lists/:code/values). Dice también si la categoría admite agrupar variantes.',
+    })
+    getRipleyCategoryFields(@Param('id') id: string) {
+        return this.ripleyCatalogo.campos(id);
+    }
+
+    @Get('ripley/lists/:code/values')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({ summary: 'Busca valores dentro de una lista cerrada de Ripley (tipo de producto, color…)' })
+    searchRipleyListValues(@Param('code') code: string, @Query('search') search: string) {
+        return this.ripleyCatalogo.valoresDeLista(code, search || '');
+    }
+
+    @Patch('ripley/products/:id/preparation')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Guarda la categoría y los atributos de Ripley de un producto',
+        description: 'Valida los valores contra las listas de Ripley (los lleva a su escritura exacta y rechaza los que no existen). Solo guarda en Synkro: no envía nada a Ripley.',
+    })
+    async saveRipleyPreparation(@Param('id') id: string, @Body() dto: SaveRipleyPreparationDto, @Req() req) {
+        let categoryId = dto.categoryId?.trim() || undefined;
+        let ruta: string | undefined;
+        let atributos: Record<string, string> | undefined;
+        if (dto.attributes) {
+            // Los atributos se validan contra la categoría elegida o, si no se cambió, contra la que el producto ya tiene.
+            categoryId = categoryId ?? (await this.syncService.ripleyCategoryOf(scopeOf(req), id)) ?? undefined;
+            if (!categoryId) throw new BadRequestException('Elige primero la categoría de Ripley.');
+            const r = await this.ripleyCatalogo.validar(categoryId, dto.attributes);
+            if (r.errores.length) {
+                throw new BadRequestException(`Revisa estos campos: ${r.errores.map((e) => `${e.campo} (${e.motivo})`).join('; ')}.`);
+            }
+            ruta = r.ruta;
+            atributos = r.atributos;
+        } else if (categoryId) {
+            ruta = await this.ripleyCatalogo.rutaDe(categoryId);
+        }
+        return this.syncService.saveRipleyPreparation(scopeOf(req), id, { categoryId, ruta, atributos, contenido: dto.content });
     }
 
     @Patch('ripley/products/:id/brand')
