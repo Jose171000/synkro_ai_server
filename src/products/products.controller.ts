@@ -14,6 +14,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { UpdateProductGroupDto } from './dto/update-product-group.dto';
 import { PrepararRipleyDto } from './dto/preparar-ripley.dto';
+import { RellenarRipleyDto } from './dto/rellenar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
@@ -280,9 +281,20 @@ export class ProductsController {
     return this.productsService.findOne(id, req.user.id, req.store.storeId);
   }
 
+  @Post(':id/ripley/fill-attributes')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'Llenar con IA los atributos VACÍOS de la categoría de Ripley ya elegida',
+    description: 'No cambia la categoría, no pisa lo ya escrito y no toca el contenido. Para un grupo de variantes analiza la información general, una foto de cada variante (hasta el límite) y todos los ejes. No guarda nada: devuelve los valores.',
+  })
+  fillRipleyAttributes(@Param('id') id: string, @Body() dto: RellenarRipleyDto, @Req() req) {
+    return this.productsService.rellenarAtributosDeRipley(id, req.user.id, { categoryId: dto.categoryId, actuales: dto.actuales, alGrupo: dto.alGrupo === true }, req.store.storeId);
+  }
+
   @Post(':id/prepare-ripley')
   @UseGuards(StoreAccessGuard)
-  @RequirePermission('productos.editar')
+  @RequirePermission('canales.publicar')
   @ApiOperation({
     summary: 'Preparar un producto para Ripley con IA (categoría y atributos)',
     description: 'La IA elige y verifica la categoría de Ripley, redacta con sus reglas y rellena los atributos llevando cada valor a las listas cerradas del canal. Lo que no se pueda deducir sale en `faltantes`. Con guardar=false (por defecto) es solo una vista previa; con guardar=true se anota en el producto. Nunca envía nada a Ripley.',

@@ -775,6 +775,61 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
     }
   }
 
+  /**
+   * «Llenar atributos» de Ripley: con la categoría YA elegida, completa únicamente los atributos que están vacíos. No elige ni
+   * cambia la categoría, no toca lo que ya tiene valor y no reescribe el contenido. Los valores de lista se llevan a la escritura
+   * exacta de Ripley; el que no tiene equivalente queda sin llenar (`sinEquivalente`). No guarda nada: devuelve los valores.
+   */
+  public async rellenarAtributosDeRipley(e: {
+    nombre: string;
+    descripcion: string;
+    categoryId: string;
+    /** Lo que ya está escrito: no se vuelve a pedir ni se pisa. */
+    actuales: Record<string, string>;
+    fotos?: string[];
+    visionGuardada?: any;
+    userId?: string;
+    /** Producto con variantes: los ejes, para que la IA entienda que es una publicación con varias opciones. */
+    ejes?: EjeParaIA[];
+    /** Lo que el producto ya sabe de sí mismo (material, medidas…). */
+    datos?: Record<string, string>;
+    textoCliente?: string;
+    medidas?: string;
+    sku?: string;
+    marca?: string;
+    color?: string;
+  }): Promise<{ values: Record<string, string>; estimated: string[]; filled: number; total: number; sinEquivalente: string[]; sinValor: string[] }> {
+    const esGrupo = !!e.ejes?.length;
+    const requisitos = (await this.channelAttributes.requisitos('ripley', e.categoryId, e.userId, undefined, undefined, { todos: true })) ?? [];
+    // En un grupo, los datos que definen la variante (color, talla…) se toman de cada variante: no se rellenan aquí.
+    const aplicables = requisitos.filter((a) => !(esGrupo && a.isVariant));
+    const listas = await this.channelAttributes.listasDeRipley(aplicables.map((a) => a.listCode ?? ''));
+
+    const vision = e.visionGuardada ?? (e.fotos?.length ? await this.vision.analyze(e.fotos, { name: e.nombre, description: e.descripcion }) : null);
+    const conOpciones = conOpcionesParaLaIa(aplicables, listas, [e.nombre, vision?.productType, ...(vision?.keywords ?? [])]);
+    const vacios = conOpciones.filter((a) => !String(e.actuales?.[a.name] ?? '').trim());
+    if (!vacios.length) return { values: {}, estimated: [], filled: 0, total: conOpciones.length, sinEquivalente: [], sinValor: [] };
+
+    const descripcion = [e.descripcion, textoDeEjes(e.ejes), textoDeDatosConocidos(e.datos)].filter(Boolean).join('\n\n');
+    const r = await this.completarAtributos(
+      e.nombre, descripcion, vacios,
+      { marca: e.marca, color: e.color },
+      { textoCliente: e.textoCliente, vision, medidas: e.medidas, sku: e.sku },
+    );
+    const ajuste = ajustarAtributosDeRipley(r.values, conOpciones, listas);
+    // Solo se devuelven los que estaban vacíos (nunca uno que ya tenía valor).
+    const values = Object.fromEntries(Object.entries(ajuste.atributos).filter(([k, v]) => vacios.some((a) => a.name === k) && String(v ?? '').trim()));
+    return {
+      values: values as Record<string, string>,
+      estimated: r.estimated.filter((n) => n in values),
+      filled: Object.keys(values).length,
+      total: conOpciones.length,
+      sinEquivalente: ajuste.invalidos,
+      // Los vacíos que la IA no pudo deducir (o cuyo valor no tiene equivalente en la lista de Ripley): los completa una persona.
+      sinValor: vacios.filter((a) => !(a.name in values)).map((a) => a.name),
+    };
+  }
+
   /** Datos de las fotos que van al prompt como atributos ya conocidos. */
   private atributosDeVision(vision: ProductVision): Record<string, any> {
     const base: Record<string, any> = {

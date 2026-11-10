@@ -13,6 +13,8 @@ import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
 import { datosConocidos } from '../ai/datos-conocidos';
 import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
+import { fotosParaIA } from './fotos-para-ia';
+import { MAX_IMAGES } from '../ai/product-vision.service';
 import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { huellaDeFotos } from '../ai/vision-fotos';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
@@ -281,6 +283,45 @@ export class ProductsService {
 
     async findOne(id: string, userId: string, storeId?: string | null) {
         return this.buscarProducto(id, userId, storeId);
+    }
+
+    /**
+     * «Llenar atributos» de Ripley: con la categoría que la persona ya eligió, la IA completa SOLO los atributos que están vacíos.
+     * No cambia la categoría, no pisa lo ya escrito y no toca el contenido. Si se pide para un grupo de variantes, analiza la
+     * información general, una foto de cada variante (hasta el límite del análisis) y todos los ejes. No guarda nada: devuelve los
+     * valores para que la pantalla los muestre y la persona los guarde.
+     */
+    async rellenarAtributosDeRipley(productId: string, userId: string, entrada: { categoryId: string; actuales?: Record<string, string>; alGrupo?: boolean }, storeId?: string | null) {
+        const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
+        const attrs = ((product.aiAttributes as any) || {}) as Record<string, any>;
+        const conGrupo = entrada.alGrupo
+            ? await this.productRepository.findOne({ where: { id: productId }, relations: { group: true } })
+            : null;
+        const grupo = conGrupo?.group ?? null;
+        const variantes = grupo ? await this.productRepository.find({ where: { group: { id: grupo.id } }, order: { createdAt: 'ASC' } }) : [];
+        const fotos = grupo ? fotosParaIA(variantes, MAX_IMAGES) : (product.images ?? []).map((i) => i.url).filter(Boolean);
+
+        return this.aiService.rellenarAtributosDeRipley({
+            nombre: grupo?.name || product.name,
+            descripcion: [product.description, product.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n') || product.name,
+            categoryId: entrada.categoryId,
+            actuales: entrada.actuales ?? {},
+            fotos,
+            // Un grupo se analiza con las fotos de todas sus variantes; un producto suelto reutiliza lo que ya se vio en sus fotos.
+            visionGuardada: grupo ? undefined : attrs.vision,
+            userId: product.owner?.id ?? userId,
+            ejes: grupo?.axes?.length ? grupo.axes : undefined,
+            datos: datosConocidos(attrs, {
+                'Ancho del paquete (cm)': product.packageWidth, 'Largo del paquete (cm)': product.packageLength,
+                'Alto del paquete (cm)': product.packageHeight, 'Peso del paquete (kg)': product.packageWeight,
+            }),
+            textoCliente: product.description,
+            medidas: [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
+                ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg` : undefined,
+            sku: product.sku,
+            marca: attrs.ripley?.brand ?? attrs.brand,
+            color: attrs.color,
+        });
     }
 
     /**
