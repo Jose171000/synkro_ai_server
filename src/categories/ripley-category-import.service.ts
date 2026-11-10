@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import OpenAI from 'openai';
@@ -7,6 +7,7 @@ import { MarketplaceValueList } from './entities/marketplace-value-list.entity';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 import { RipleyApiService } from '../sync/ripley/ripley-api.service';
 import { EcommerceSyncService } from '../sync/channels/ecommerce-sync.service';
+import { SyncService } from '../sync/sync.service';
 import { atributosPorCategoria, atributosParaGuardar, hojasDeRipley, listasDeValores, textoParaVector } from '../sync/ripley/ripley-categorias';
 
 /**
@@ -38,6 +39,7 @@ export class RipleyCategoryImportService {
         @InjectRepository(MarketplaceConnection) private readonly connections: Repository<MarketplaceConnection>,
         private readonly ripleyApi: RipleyApiService,
         private readonly ecommerce: EcommerceSyncService,
+        private readonly sync: SyncService,
     ) {
         this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     }
@@ -63,7 +65,11 @@ export class RipleyCategoryImportService {
                 (await this.connections.findOne({ where: { marketplace: 'ripley', status: 'active' } as any }));
             if (!cuenta) throw new BadRequestException('No hay ninguna cuenta de Ripley conectada para traer su catálogo.');
 
-            const { jerarquias, atributos, listas } = await this.ripleyApi.leerCatalogo(this.ecommerce.authOf(cuenta));
+            // La conexión «validada» es la que trae las credenciales listas para usar (igual que en el resto de funciones de Ripley).
+            const valida = await this.sync.getValidConnectionById(cuenta.id);
+            this.logger.log('Leyendo el catálogo de Ripley (categorías, atributos y listas)…');
+            const { jerarquias, atributos, listas } = await this.ripleyApi.leerCatalogo(this.ecommerce.authOf(valida));
+            this.logger.log(`Ripley devolvió ${jerarquias.length} categorías, ${atributos.length} atributos y ${listas.length} listas.`);
             const hojas = hojasDeRipley(jerarquias);
             if (!hojas.length) throw new BadRequestException('Ripley no devolvió ninguna categoría.');
 
@@ -110,6 +116,11 @@ export class RipleyCategoryImportService {
             }
             this.logger.log(`Catálogo de Ripley listo: ${hojas.length} categorías (${nuevas} nuevas, ${actualizadas} actualizadas), ${filasL.length} listas, ${atributosGuardados} atributos.`);
             return { categorias: hojas.length, nuevas, actualizadas, sinAtributos, listas: filasL.length, atributosGuardados };
+        } catch (error: any) {
+            // Un fallo inesperado (base de datos, OpenAI…) no debe salir como un «Internal server error» mudo.
+            if (error instanceof HttpException) throw error;
+            this.logger.error(`La importación de Ripley falló: ${error?.message}`, error?.stack);
+            throw new BadRequestException(`La importación de Ripley falló: ${String(error?.message ?? error).slice(0, 300)}`);
         } finally {
             this.importando = false;
         }
