@@ -32,6 +32,7 @@ export class ProductsService {
         private productRepository: Repository<Product>,
         private aiService: AiService,
         private skuGenerator: SkuGeneratorService,
+        @Optional() private readonly ripleyMarcas?: RipleyMarcasService,
     ) { }
 
     async create(createProductDto: CreateProductDto, userId: string, storeId?: string | null) {
@@ -323,7 +324,19 @@ export class ProductsService {
             name: ripley.name, shortDescription: ripley.shortDescription, description: html || ripley.description, brand: ripley.brand,
         });
         const descripcionEsHtml = !!html;
-        const faltantes = aiContent?.missingAttributes?.ripley ?? [];
+        const faltantes: { name: string; description: string; options?: string[] }[] = [...(aiContent?.missingAttributes?.ripley ?? [])];
+
+        // La marca solo vale si está en el catálogo aprobado de Ripley (27.116 marcas + GENÉRICO): se lleva a su escritura exacta o se avisa.
+        let marca: { valor: string; valida: boolean; canonica: string | null; sugerencias: string[]; listaCargada: boolean } | null = null;
+        if (this.ripleyMarcas) {
+            const listaCargada = (await this.ripleyMarcas.todas()).length > 0;
+            const r = await this.ripleyMarcas.revisar(String(contenido.brand ?? ''));
+            marca = { ...r, listaCargada };
+            if (listaCargada && r.canonica) contenido.brand = r.canonica;
+            else if (listaCargada && String(contenido.brand ?? '').trim()) {
+                faltantes.push({ name: 'marca', description: 'La marca no está en el catálogo aprobado de Ripley: elige una de la lista o usa GENÉRICO.', options: r.sugerencias });
+            }
+        }
 
         let guardado = false;
         if (opciones.guardar) {
@@ -349,6 +362,7 @@ export class ProductsService {
             categoria: { id: categoriaId, ruta: chequeo?.ruta ?? null, confianza: chequeo?.confianza ?? 'ninguna', motivo: chequeo?.motivo ?? null },
             contenido,
             descripcionEsHtml,
+            marca,
             atributos,
             faltantes,
         };
