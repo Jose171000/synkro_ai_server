@@ -170,6 +170,17 @@ export class ProductsController {
     return this.groups.regenerarContenido(id, { tone: dto.tone, marketplaces: dto.targetMarketplaces }, { userId: req.user.id, storeId: req.store.storeId });
   }
 
+  @Post('groups/:id/align-axes')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Corregir el color y la talla guardados en cada variante de un grupo',
+    description: 'Deja en los atributos de cada variante su propio color y talla (en vez del valor general que dedujo la IA). No usa la IA ni toca nada más.',
+  })
+  async alignGroupAxes(@Param('id') id: string, @Req() req) {
+    return this.groups.alinearEjes(id, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
   @Post(':id/variants')
   @UseGuards(StoreAccessGuard)
   @RequirePermission('productos.editar')

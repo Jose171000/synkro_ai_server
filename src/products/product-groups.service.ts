@@ -7,7 +7,7 @@ import { EjeDeVariacion, ProductGroup } from './entities/product-group.entity';
 import { ProductsService } from './products.service';
 import { AiService } from '../ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
-import { tituloDeVariante } from './titulos-de-variante';
+import { atributosConVariante, tituloDeVariante } from './titulos-de-variante';
 import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/product-vision.service';
 import { fotosParaIA } from './fotos-para-ia';
 import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
@@ -166,7 +166,8 @@ export class ProductGroupsService {
                 variante.aiKeywords = molde.aiKeywords;
                 variante.marketplaceIds = { ...(molde.marketplaceIds ?? {}) };
                 // Cada variante lleva sus propios valores como atributos (Color: Rojo, Talla: M) y lo común del grupo.
-                variante.aiAttributes = { ...(molde.aiAttributes ?? {}), ...(variante.variantValues ?? {}) };
+                // Los atributos de color y talla que la IA dedujo para el grupo (p. ej. «Multicolor», «38») no valen para una variante: mandan los suyos.
+                variante.aiAttributes = atributosConVariante({ ...(molde.aiAttributes ?? {}), ...(variante.variantValues ?? {}) }, variante.variantValues);
                 if (molde.packageWidth != null) {
                     variante.packageWidth = molde.packageWidth; variante.packageLength = molde.packageLength;
                     variante.packageHeight = molde.packageHeight; variante.packageWeight = molde.packageWeight;
@@ -217,7 +218,10 @@ export class ProductGroupsService {
             if (molde.aiDescription) v.aiDescription = molde.aiDescription;
             if (molde.aiKeywords) v.aiKeywords = molde.aiKeywords;
             v.marketplaceIds = { ...((v.marketplaceIds as any) || {}), ...(molde.marketplaceIds ?? {}) };
-            v.aiAttributes = atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any;
+            v.aiAttributes = atributosConVariante(
+                atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any,
+                v.variantValues,
+            ) as any;
             // Las medidas del paquete que el cliente no dio se completan con las estimadas.
             if (v.packageWidth == null && molde.packageWidth != null) v.packageWidth = molde.packageWidth;
             if (v.packageLength == null && molde.packageLength != null) v.packageLength = molde.packageLength;
@@ -228,6 +232,25 @@ export class ProductGroupsService {
         // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
         if (titulo) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
         return { variantes: variantes.length, titulo: titulo || null };
+    }
+
+    /**
+     * Corrige los atributos de color y talla guardados en cada variante para que digan los de ESA variante (no el «Multicolor» o la
+     * talla que la IA dedujo para todo el grupo). No usa la IA ni toca nada más; devuelve cuántas variantes cambió.
+     */
+    async alinearEjes(grupoId: string, ambito: AmbitoDeGrupo): Promise<{ variantes: number; corregidas: number }> {
+        await this.obtener(grupoId, ambito);
+        const variantes = await this.productRepository.find({ where: { group: { id: grupoId } } });
+        let corregidas = 0;
+        for (const v of variantes) {
+            const antes = (v.aiAttributes ?? {}) as Record<string, any>;
+            const despues = atributosConVariante(antes, v.variantValues);
+            if (JSON.stringify(antes) === JSON.stringify(despues)) continue;
+            v.aiAttributes = despues as any;
+            await this.productRepository.save(v);
+            corregidas++;
+        }
+        return { variantes: variantes.length, corregidas };
     }
 
     // ─────────────────────────────────────────────────────────────
