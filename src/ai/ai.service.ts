@@ -7,6 +7,7 @@ import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/m
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
+import { EjeParaIA, textoDeEjes } from './ejes-de-variacion';
 import { elegirImagenes, extraerUrlsDeImagen, normalizarContenido, quitarUrls, renderDescripcionHtml, textoPlanoDeContenido } from './description-html';
 import { soloElNumero } from '../sync/falabella/falabella-fields';
 import { medidasQueFaltan } from '../sync/meli/unidades-meli';
@@ -43,6 +44,8 @@ export class AiService {
     userId?: string,
     /** Modo masivo: se estima todo lo que falte (datos obligatorios y medidas) para poder publicar sin revisión. */
     estimar?: boolean,
+    /** Producto con variantes: los ejes y sus valores (Color: Beige, Vino…) para que la IA trate el grupo como una sola publicación. */
+    ejes?: EjeParaIA[],
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
@@ -51,7 +54,7 @@ export class AiService {
 
     // Los enlaces de imágenes o GIFs que el cliente pegó en su descripción van a la ficha HTML, no al texto que redacta la IA.
     const urlsDelCliente = extraerUrlsDeImagen(`${dto.name ?? ''} ${dto.description ?? ''}`);
-    dto = { ...dto, name: quitarUrls(dto.name), description: quitarUrls(dto.description) };
+    dto = { ...dto, name: quitarUrls(dto.name), description: [quitarUrls(dto.description), textoDeEjes(dto.ejes)].filter(Boolean).join('\n\n') };
 
     // PHASE 0: las fotos. Todo lo que se ve (tipo, color, material, marca) deja de depender de lo que escriba el cliente.
     const vision: ProductVision | null = dto.imageUrls?.length

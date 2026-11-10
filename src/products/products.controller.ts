@@ -13,6 +13,7 @@ import { ProductGroupsService } from './product-groups.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { AddVariantsDto, CreateProductGroupDto } from './dto/product-group.dto';
 import { UpdateProductGroupDto } from './dto/update-product-group.dto';
+import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -156,6 +157,17 @@ export class ProductsController {
   })
   updateGroup(@Param('id') id: string, @Body() dto: UpdateProductGroupDto, @Req() req) {
     return this.groups.actualizarGeneral(id, dto, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('groups/:id/generate-ai')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Regenerar con IA el contenido de un producto con variantes (una sola vez para todo el grupo)',
+    description: 'La IA recibe la información general del grupo, los ejes con todos sus valores y una foto de cada variante (hasta el límite de fotos). El título, la descripción y la ficha HTML resultantes se aplican a todas las variantes; lo propio de cada una (nombre, color, talla, precio, stock) no se toca.',
+  })
+  async regenerateGroup(@Param('id') id: string, @Body() dto: RegenerarGrupoDto, @Req() req) {
+    return this.groups.regenerarContenido(id, { tone: dto.tone, marketplaces: dto.targetMarketplaces }, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post(':id/variants')

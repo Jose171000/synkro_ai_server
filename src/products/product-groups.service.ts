@@ -8,7 +8,9 @@ import { ProductsService } from './products.service';
 import { AiService } from '../ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
 import { tituloDeVariante } from './titulos-de-variante';
-import { DeteccionDeVariantes, ProductVisionService } from '../ai/product-vision.service';
+import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/product-vision.service';
+import { fotosParaIA } from './fotos-para-ia';
+import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
 } from './variantes';
@@ -134,9 +136,7 @@ export class ProductGroupsService {
         try {
             const variantes = await this.productRepository.find({ where: { group: { id: grupoId } }, order: { createdAt: 'ASC' } });
             // Una foto de cada variante primero (así la IA ve todos los colores), y luego las demás.
-            const primeras = variantes.map((v) => v.images?.[0]?.url).filter(Boolean) as string[];
-            const resto = variantes.flatMap((v) => (v.images ?? []).slice(1).map((i) => i.url));
-            const urls = [...new Set([...primeras, ...resto])].slice(0, 4);
+            const urls = fotosParaIA(variantes, MAX_IMAGES);
 
             const contenido = await this.ai.generateProductContent({
                 // Sin nombre escrito la IA parte de las fotos, no del código usado mientras tanto.
@@ -147,6 +147,7 @@ export class ProductGroupsService {
                 targetMarketplaces: entrada.targetMarketplaces?.length ? entrada.targetMarketplaces : ['mercadolibre', 'falabella'],
                 imageUrls: urls,
                 userId: ambito.userId,
+                ejes: vista.axes,
             });
 
             const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
@@ -177,6 +178,56 @@ export class ProductGroupsService {
         } catch (error: any) {
             return { ok: false, motivo: String(error?.response?.message ?? error?.message ?? 'La IA no pudo generar el contenido') };
         }
+    }
+
+    /**
+     * Regenera con IA el contenido de un grupo UNA sola vez y lo reparte entre todas sus variantes. La IA recibe la información
+     * general del grupo (nombre, descripción, categoría), los ejes con todos sus valores y una foto de cada variante (hasta el
+     * límite de fotos del análisis). Se rehacen el título, la descripción, la ficha HTML y lo que se ve en las fotos; el resto
+     * de lo que cada variante ya tenía se conserva, y su color, talla, nombre, precio y stock no se tocan.
+     */
+    async regenerarContenido(grupoId: string, opciones: { tone?: string; marketplaces?: string[] }, ambito: AmbitoDeGrupo): Promise<{ variantes: number; titulo: string | null }> {
+        const vista = await this.obtener(grupoId, ambito);
+        const grupo = await this.groupRepository.findOne({ where: { id: grupoId }, relations: { owner: true } });
+        const variantes = await this.productRepository.find({ where: { group: { id: grupoId } }, order: { createdAt: 'ASC' } });
+        if (!grupo || !variantes.length) throw new NotFoundException('Grupo no encontrado');
+        const base = variantes[0];
+        const fotos = fotosParaIA(variantes, MAX_IMAGES);
+
+        const contenido = await this.ai.generateProductContent({
+            name: grupo.name,
+            description: [base.description, base.aiDescription].filter((t, i, todos) => t && todos.indexOf(t) === i).join('\n\n'),
+            category: variantes.map((v) => v.category).find(Boolean),
+            subcategory: variantes.map((v) => v.subCategory).find(Boolean),
+            targetMarketplaces: opciones.marketplaces?.length ? opciones.marketplaces : (base.targetMarketplaces?.length ? base.targetMarketplaces : ['amazon', 'mercadolibre']),
+            tone: opciones.tone || 'professional',
+            imageUrls: fotos,
+            // Las cuentas de canales con las que la IA verifica categorías y atributos son las de quien subió el producto.
+            userId: grupo.owner?.id ?? ambito.userId,
+            ejes: vista.axes,
+        });
+
+        const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
+        this.products.applyAiContent(molde, contenido);
+        const delGrupo = sinAtributosDeEje(molde.aiAttributes, vista.axes);
+        const titulo = String(molde.aiTitle ?? '').trim();
+
+        for (const v of variantes) {
+            if (titulo) v.aiTitle = titulo as any;
+            if (molde.aiDescription) v.aiDescription = molde.aiDescription;
+            if (molde.aiKeywords) v.aiKeywords = molde.aiKeywords;
+            v.marketplaceIds = { ...((v.marketplaceIds as any) || {}), ...(molde.marketplaceIds ?? {}) };
+            v.aiAttributes = atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any;
+            // Las medidas del paquete que el cliente no dio se completan con las estimadas.
+            if (v.packageWidth == null && molde.packageWidth != null) v.packageWidth = molde.packageWidth;
+            if (v.packageLength == null && molde.packageLength != null) v.packageLength = molde.packageLength;
+            if (v.packageHeight == null && molde.packageHeight != null) v.packageHeight = molde.packageHeight;
+            if (v.packageWeight == null && molde.packageWeight != null) v.packageWeight = molde.packageWeight;
+            await this.productRepository.save(v);
+        }
+        // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
+        if (titulo) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
+        return { variantes: variantes.length, titulo: titulo || null };
     }
 
     // ─────────────────────────────────────────────────────────────
