@@ -1713,7 +1713,7 @@ export class SyncService implements OnModuleInit {
      * de Ripley). Va en datos propios de Ripley, sin tocar lo de otros canales. Si se mandan atributos, reemplazan a los anteriores
      * de Ripley (un valor vacío ya viene quitado). No envía nada a Ripley.
      */
-    async saveRipleyPreparation(scope: SyncScope, productId: string, datos: { categoryId?: string; ruta?: string; atributos?: Record<string, string>; contenido?: { name?: string; shortDescription?: string } }) {
+    async saveRipleyPreparation(scope: SyncScope, productId: string, datos: { categoryId?: string; ruta?: string; atributos?: Record<string, string>; contenido?: { name?: string; shortDescription?: string; description?: string } }) {
         const product = await this.findScopedProduct(scope, productId);
         const atributos = ((product.aiAttributes as any) || {}) as Record<string, any>;
         if (datos.atributos) product.aiAttributes = { ...atributos, ripley_attributes: datos.atributos } as any;
@@ -1724,6 +1724,9 @@ export class SyncService implements OnModuleInit {
             const corta = String(datos.contenido.shortDescription ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250);
             if (nombre) propios.name = nombre;
             if (corta) propios.shortDescription = corta;
+            // La descripción completa de Ripley es una ficha HTML (la estándar de la agencia): va aparte de la de los demás canales.
+            const completa = String(datos.contenido.description ?? '').trim().slice(0, 30000);
+            if (completa) propios.description = completa;
             const actuales = (((product.aiAttributes as any) || {}) as Record<string, any>).ripley ?? {};
             product.aiAttributes = { ...((product.aiAttributes as any) || {}), ripley: { ...actuales, ...propios } } as any;
         }

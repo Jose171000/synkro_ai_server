@@ -194,3 +194,58 @@ describe('SKU que ya existen en Ripley (el envío los actualizaría)', () => {
         expect(ripley.importarProductosYOfertas).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('corregir una ficha que ya está en Ripley (producto ya procesado)', () => {
+    const oferta = { offer_id: 5803478, product_sku: 'PMP1-1', product_title: 'CANGURO' };
+    const yaProcesado = (p: any) => { p.aiAttributes.ripley_envio = { importId: 77, productImportId: 88, enviadoEn: '2026-11-01T00:00:00.000Z' }; };
+
+    it('con el SKU existente en Ripley y la actualización confirmada, un producto ya procesado SÍ se reenvía', async () => {
+        encender();
+        const { service, p, ripley } = construir();
+        yaProcesado(p);
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        await service.publicar(SCOPE, 'p1', { confirmar: true, confirmarActualizacion: true });
+        expect(ripley.importarProductosYOfertas).toHaveBeenCalledTimes(1);
+    });
+
+    it('sin confirmar la actualización, no se reenvía', async () => {
+        encender();
+        const { service, p, ripley } = construir();
+        yaProcesado(p);
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        await expect(service.publicar(SCOPE, 'p1', { confirmar: true })).rejects.toThrow('ya existen en Ripley');
+        expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+    });
+
+    it('si el SKU NO existe en Ripley, aunque se confirme, un producto ya procesado sigue bloqueado (duplicaría)', async () => {
+        encender();
+        const { service, p, ripley } = construir();
+        yaProcesado(p);
+        await expect(service.publicar(SCOPE, 'p1', { confirmar: true, confirmarActualizacion: true })).rejects.toThrow('duplicarlo');
+        expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+    });
+
+    it('uno pendiente de aprobación nunca se reenvía, ni confirmando la actualización', async () => {
+        encender();
+        const { service, p, ripley } = construir();
+        p.aiAttributes.ripley_envio = { importId: 77, productImportId: 88, enviadoEn: new Date().toISOString() };
+        ripley.estadoDeImportacion.mockResolvedValue({ status: 'WAITING_SYNCHRONIZATION_PRODUCT' });
+        ripley.estadoDeProductos.mockResolvedValue({ import_status: 'SENT' });
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        await expect(service.publicar(SCOPE, 'p1', { confirmar: true, confirmarActualizacion: true })).rejects.toThrow('pendiente de aprobación');
+        expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+    });
+
+    it('el CSV lleva la ficha HTML propia de Ripley cuando existe, y no un texto plano guardado para Ripley', async () => {
+        encender();
+        const { service, p } = construir();
+        p.aiAttributes.descriptionHtml = '<p>General importada</p>';
+        p.aiAttributes.ripley.description = '<div class="estandar"><h2>Ficha estándar</h2></div>';
+        let v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.csv).toContain('Ficha estándar');
+        expect(v.csv).not.toContain('General importada');
+        p.aiAttributes.ripley.description = 'texto plano de la IA';
+        v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.csv).toContain('General importada');
+    });
+});

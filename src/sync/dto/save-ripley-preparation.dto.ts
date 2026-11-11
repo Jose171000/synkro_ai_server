@@ -16,5 +16,5 @@ export class SaveRipleyPreparationDto {
     @ApiPropertyOptional({ description: 'Nombre de Ripley (máx. 125, se guarda en MAYÚSCULAS) y descripción corta.' })
     @IsOptional()
     @IsObject()
-    content?: { name?: string; shortDescription?: string };
+    content?: { name?: string; shortDescription?: string; description?: string };
 }

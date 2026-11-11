@@ -15,6 +15,16 @@ import { tituloDeVariante } from '../../products/titulos-de-variante';
 const publicacionEncendida = () => process.env.RIPLEY_PUBLISH_ENABLED === 'true';
 /** Tope de productos por envío: un piloto o una familia, nunca el catálogo entero de golpe. */
 const MAX_PRODUCTOS_POR_ENVIO = 50;
+
+/**
+ * La descripción completa que va a Ripley: su propia ficha HTML (la estándar de la agencia, guardada al preparar) si la tiene; si no, la
+ * ficha HTML general del producto y, como respaldo, el texto. Un texto plano guardado para Ripley no desplaza a una ficha HTML general.
+ */
+function descripcionParaRipley(attrs: Record<string, any>, p: any): string {
+    const propia = String(attrs.ripley?.description ?? '').trim();
+    const propiaEsHtml = /<[a-z][\s\S]*>/i.test(propia);
+    return String((propiaEsHtml ? propia : '') || attrs.descriptionHtml || propia || p.aiDescription || p.description || '').trim();
+}
 /** Espera entre reintentos al consultar si un SKU ya existe en Ripley (su límite de peticiones es bajo). */
 const LIMITE_ESPERA_MS = process.env.NODE_ENV === 'test' ? 1 : 1200;
 
@@ -123,7 +133,7 @@ export class RipleyPublicacionService {
                 nombre,
                 descripcionCorta: String(attrs.ripley?.shortDescription ?? '').trim(),
                 // La descripción completa es la ficha HTML general del producto (Ripley la acepta); el texto de Ripley es el respaldo.
-                descripcion: String(attrs.descriptionHtml ?? attrs.ripley?.description ?? p.aiDescription ?? p.description ?? '').trim(),
+                descripcion: descripcionParaRipley(attrs, p),
                 marca: marca.canonica ?? marcaEscrita,
                 marcaValida: marca.valida,
                 imagenes,
@@ -247,7 +257,13 @@ export class RipleyPublicacionService {
             throw new BadRequestException(`Estos SKU ya existen en Ripley (${vista.yaEnRipley.map((e) => e.sku).join(', ')}): enviarlos actualizaría esas fichas en vez de crear nuevas. Si es lo que quieres, confirma la actualización.`);
         }
         // Un producto ya enviado y pendiente de aprobación (o ya procesado) no se reenvía: crearía un duplicado.
-        if (vista.bloqueo) throw new BadRequestException(vista.bloqueo.motivo);
+        // Un envío ya procesado normalmente se bloquea (duplicaría), pero si TODOS los SKU ya existen en Ripley y se confirmó la actualización,
+        // es corregir la ficha existente (título, descripción…), no crear otra. Uno todavía pendiente de aprobación nunca se reenvía.
+        if (vista.bloqueo) {
+            const esActualizacion = vista.bloqueo.situacion === 'procesado' && opciones.confirmarActualizacion === true
+                && vista.productos.length > 0 && vista.yaEnRipley.length === vista.productos.length;
+            if (!esActualizacion) throw new BadRequestException(vista.bloqueo.motivo);
+        }
         if (!vista.puedeEnviar) {
             const primeros = vista.productos.flatMap((p) => p.errores.map((e) => `${p.sku}: ${e}`)).slice(0, 5);
             throw new BadRequestException(`Hay datos por corregir antes de enviar. ${primeros.join(' · ')}`);
