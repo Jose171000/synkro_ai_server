@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { descripcionDeTexto } from './meli/descripcion-meli';
@@ -6,6 +6,7 @@ import { Product } from '../products/entities/product.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { FalabellaApiService } from './falabella/falabella-api.service';
+import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
 import { SyncScope, SyncService } from './sync.service';
 import { preciosParaCanal } from './precios-por-canal';
 import { fechaDeFalabella } from './falabella/falabella-product-xml';
@@ -17,6 +18,8 @@ import { ATRIBUTOS_DE_SISTEMA, atributosObligatoriosAprendidos, claveDeAtributo,
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
 const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
+/** Ripley solo se MUESTRA en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
+const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley'];
 
 export interface SheetChannel {
     marketplace: string;
@@ -61,6 +64,7 @@ export class ProductSheetService {
         private readonly links: Repository<ListingLink>,
         @InjectRepository(Product)
         private readonly products: Repository<Product>,
+        @Optional() private readonly ripleyCatalogo?: RipleyCatalogoService,
     ) { }
 
     async getSheet(scope: SyncScope, productId: string) {
@@ -80,8 +84,8 @@ export class ProductSheetService {
         const precios: SheetPrice[] = [];
         for (const enlace of enlaces) {
             const cuenta = enlace.connection;
-            if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(enlace.marketplace)) continue;
-            precios.push(this.preciosDeEnlace(product, enlace, cuenta));
+            if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_QUE_SE_MUESTRAN.includes(enlace.marketplace)) continue;
+            if (enlace.marketplace !== 'ripley') precios.push(this.preciosDeEnlace(product, enlace, cuenta));
             const base = {
                 marketplace: enlace.marketplace,
                 connectionId: cuenta.id,
@@ -93,7 +97,9 @@ export class ProductSheetService {
             canales.push(
                 enlace.marketplace === 'falabella'
                     ? await this.hojaFalabella(base, product, attrs, cuenta)
-                    : this.hojaMeli(base, product, attrs),
+                    : enlace.marketplace === 'ripley'
+                        ? await this.hojaRipley(base, product, attrs, enlace)
+                        : this.hojaMeli(base, product, attrs),
             );
         }
 
@@ -196,6 +202,41 @@ export class ProductSheetService {
             },
             listo: !('reason' in validacion),
             motivo: 'reason' in validacion ? validacion.reason : undefined,
+        };
+    }
+
+    /** Lo que Synkro guardó y envió a Ripley (solo lectura) junto con lo que Ripley muestra hoy de la oferta. */
+    private async hojaRipley(base: Omit<SheetChannel, 'sent' | 'listo' | 'motivo'>, product: Product, attrs: Record<string, any>, enlace: ListingLink): Promise<SheetChannel> {
+        const datos = attrs.ripley ?? {};
+        const categoriaId: string | null = (product.marketplaceIds as any)?.ripley_category_id ?? null;
+        const valores: Record<string, any> = attrs.ripley_attributes ?? {};
+        let etiquetas = new Map<string, { label: string; required: boolean }>();
+        if (categoriaId && this.ripleyCatalogo) {
+            const c = await this.ripleyCatalogo.campos(categoriaId).catch(() => null);
+            for (const f of c?.campos ?? []) etiquetas.set(f.name, { label: f.label || f.name, required: !!f.required });
+        }
+        const envio = attrs.ripley_envio ?? null;
+        return {
+            ...base,
+            sent: {
+                name: datos.name ?? null,
+                shortDescription: datos.shortDescription ?? null,
+                description: datos.description ?? null,
+                isHtml: /<[a-z][\s\S]*>/i.test(String(datos.description ?? '')),
+                brand: datos.brand ?? null,
+                categoryId: categoriaId,
+                categoryPath: (product.marketplaceIds as any)?.ripley_category_path ?? null,
+                offerId: enlace.externalId ?? null,
+                channelPrice: enlace.regularPrice !== null && enlace.regularPrice !== undefined ? Number(enlace.regularPrice) : null,
+                channelStock: enlace.lastStockSynced ?? null,
+                sentAt: envio?.enviadoEn ?? null,
+                attributes: Object.entries(valores)
+                    .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '')
+                    .map(([name, value]) => ({ name, label: etiquetas.get(name)?.label ?? name, required: etiquetas.get(name)?.required ?? false, value: String(value) }))
+                    .sort((x, y) => Number(y.required) - Number(x.required)),
+            },
+            listo: !!(datos.name && categoriaId),
+            motivo: !categoriaId ? 'Falta elegir la categoría de Ripley (Publicar → Preparar para Ripley).' : undefined,
         };
     }
 

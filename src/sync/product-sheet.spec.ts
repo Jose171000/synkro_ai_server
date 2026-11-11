@@ -337,3 +337,32 @@ describe('la ficha de una variante muestra lo que se envía', () => {
         expect(hoja.channels[0].sent.title).toBe('Perchero Elegante Multifuncional Kasari Metal');
     });
 });
+
+describe('ficha: pestaña de Ripley (solo lectura)', () => {
+    const cuenta = { id: 'rp1', label: 'Chumpi Bags', status: 'active', store: { id: 't1' } };
+    const producto: any = {
+        id: 'p1', sku: 'BP000007', name: 'Lonchera', description: 'x', price: 99, stock: 4, images: [],
+        marketplaceIds: { ripley_category_id: 'R141100000000', ripley_category_path: 'MALETERÍA › LONCHERAS' },
+        aiAttributes: {
+            ripley: { name: 'LONCHERA TÉRMICA', shortDescription: 'Corta', description: '<p>Ficha</p>', brand: 'GENÉRICO' },
+            ripley_attributes: { tipo_product: 'Loncheras', color_80: 'Negro', vacio: '' },
+            ripley_envio: { enviadoEn: '2026-11-10T00:00:00.000Z' },
+        },
+    };
+    const enlace = { id: 'l1', marketplace: 'ripley', syncStatus: 'published', product: { id: 'p1' }, connection: cuenta, externalId: '10407700', regularPrice: 99, lastStockSynced: 4, permalink: null, lastError: null };
+
+    it('muestra lo enviado a Ripley (nombre, categoría, marca, atributos con su etiqueta) y la oferta, sin precios editables', async () => {
+        const { service, links } = construir(producto, [enlace]);
+        (service as any).ripleyCatalogo = { campos: jest.fn(async () => ({ campos: [{ name: 'tipo_product', label: 'Tipo de producto', required: true }, { name: 'color_80', label: 'Color', required: false }] })) };
+        const hoja = await service.getSheet(SCOPE, 'p1');
+        expect(links.find).toHaveBeenCalled();
+        expect(hoja.channels).toHaveLength(1);
+        expect(hoja.channels[0]).toMatchObject({ marketplace: 'ripley', listo: true });
+        expect(hoja.channels[0].sent).toMatchObject({ name: 'LONCHERA TÉRMICA', brand: 'GENÉRICO', categoryId: 'R141100000000', offerId: '10407700', channelPrice: 99, channelStock: 4, isHtml: true });
+        expect(hoja.channels[0].sent.attributes).toEqual([
+            { name: 'tipo_product', label: 'Tipo de producto', required: true, value: 'Loncheras' },
+            { name: 'color_80', label: 'Color', required: false, value: 'Negro' },
+        ]);
+        expect(hoja.prices).toHaveLength(0);
+    });
+});
