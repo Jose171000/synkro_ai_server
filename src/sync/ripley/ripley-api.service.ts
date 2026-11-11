@@ -346,6 +346,61 @@ export class RipleyApiService implements ChannelClient {
         return oferta;
     }
 
+    /**
+     * OF01: envía un CSV de «Productos y ofertas» (crea el producto en el catálogo y su oferta). Escribe en el catálogo REAL de la
+     * tienda: quien llama debe haber comprobado el interruptor de publicación y la confirmación de la persona.
+     * Devuelve los dos números para seguirlo: `importId` (ofertas, OF02) y `productImportId` (productos, P42).
+     */
+    async importarProductosYOfertas(auth: ChannelAuth, csv: string): Promise<{ importId: string | number; productImportId: string | number | null }> {
+        const host = normalizarHostDeRipley(auth.site);
+        const clave = normalizarClaveDeRipley(auth.token);
+        const form = new FormData();
+        form.append('file', new Blob([csv], { type: 'text/csv; charset=utf-8' }), 'synkro-productos.csv');
+        form.append('import_mode', 'NORMAL');
+        form.append('with_products', 'true');
+        let data: any;
+        try {
+            ({ data } = await axios.post(`https://${host}/api/offers/imports`, form, {
+                headers: { Authorization: clave, Accept: 'application/json' },
+                timeout: 60_000,
+                maxRedirects: 0,
+                maxBodyLength: Infinity,
+                validateStatus: (s) => s >= 200 && s < 300,
+            }));
+        } catch (error: any) {
+            throw new BadRequestException(describirErrorRipley(error));
+        }
+        if (data?.import_id === undefined || data?.import_id === null) throw new BadRequestException('Ripley recibió el archivo pero no dio el número de importación.');
+        this.logger.log(`Ripley: archivo de productos enviado (importación de ofertas ${data.import_id}, de productos ${data?.product_import_id ?? 'sin dato'}).`);
+        return { importId: data.import_id, productImportId: data?.product_import_id ?? null };
+    }
+
+    /** Cómo va la importación de PRODUCTOS (P42). Solo lectura. */
+    async estadoDeProductos(auth: ChannelAuth, productImportId: number | string): Promise<any> {
+        return this.get<any>(auth, `/api/products/imports/${encodeURIComponent(String(productImportId))}`);
+    }
+
+    /** Las primeras líneas de un reporte de errores en texto (OF03 de ofertas o P47 de productos). Nunca lanza. */
+    async reporteDeErrores(auth: ChannelAuth, tipo: 'ofertas' | 'productos', id: number | string, lineas = 12): Promise<string[]> {
+        try {
+            const host = normalizarHostDeRipley(auth.site);
+            const ruta = tipo === 'ofertas'
+                ? `/api/offers/imports/${encodeURIComponent(String(id))}/error_report`
+                : `/api/products/imports/${encodeURIComponent(String(id))}/transformation_error_report`;
+            const { data } = await axios.get(`https://${host}${ruta}`, {
+                headers: { Authorization: normalizarClaveDeRipley(auth.token) },
+                timeout: TIMEOUT_MS,
+                maxRedirects: 0,
+                responseType: 'text',
+                transformResponse: (d) => d,
+                validateStatus: (s) => s >= 200 && s < 300,
+            });
+            return String(data ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, lineas).map((l) => l.slice(0, 400));
+        } catch {
+            return [];
+        }
+    }
+
     /** Cómo va una importación de ofertas (OF02). */
     async estadoDeImportacion(auth: ChannelAuth, importId: number | string): Promise<any> {
         return this.get<any>(auth, `/api/offers/imports/${encodeURIComponent(String(importId))}`);

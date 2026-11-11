@@ -44,6 +44,8 @@ import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { RipleyMarcasService } from './ripley/ripley-marcas.service';
 import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
+import { RipleyPublicacionService } from './ripley/ripley-publicacion.service';
+import { PublishRipleyDto } from './dto/publish-ripley.dto';
 import { SaveRipleyPreparationDto } from './dto/save-ripley-preparation.dto';
 import { ImportarPedidosYavendioDto, VincularYavendioDto } from './dto/yavendio-import.dto';
 import { VerifyChannelsDto } from './dto/verify-channels.dto';
@@ -76,6 +78,7 @@ export class SyncController {
         private readonly yavendioOrders: YavendioOrdersService,
         private readonly ripleyMarcas: RipleyMarcasService,
         private readonly ripleyCatalogo: RipleyCatalogoService,
+        private readonly ripleyPublicacion: RipleyPublicacionService,
     ) { }
 
     // ── Connections ──────────────────────────────────────────────
@@ -574,6 +577,43 @@ export class SyncController {
             ruta = await this.ripleyCatalogo.rutaDe(categoryId);
         }
         return this.syncService.saveRipleyPreparation(scopeOf(req), id, { categoryId, ruta, atributos, contenido: dto.content });
+    }
+
+    @Post('ripley/products/:id/publish-preview')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Vista previa de lo que se enviaría a Ripley (no envía nada)',
+        description: 'Valida el producto contra lo que exige Ripley y arma el CSV de Productos y ofertas con las columnas oficiales: problemas por producto, si las variantes van en una publicación o separadas, y el archivo. No escribe en Ripley.',
+    })
+    ripleyPublishPreview(@Param('id') id: string, @Body() dto: PublishRipleyDto, @Req() req) {
+        return this.ripleyPublicacion.vistaPrevia(scopeOf(req), id, { alGrupo: dto?.alGrupo === true });
+    }
+
+    @Post('ripley/products/:id/publish')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'ENVÍA el producto a Ripley (crea su ficha y su oferta)',
+        description: 'Escribe en el catálogo real de la tienda. Exige a la vez: confirmar=true, el interruptor RIPLEY_PUBLISH_ENABLED encendido, el SKU en RIPLEY_PUBLISH_SKUS y cero errores en la vista previa. Devuelve los números de importación para seguirla.',
+    })
+    ripleyPublish(@Param('id') id: string, @Body() dto: PublishRipleyDto, @Req() req) {
+        return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, connectionId: dto?.connectionId });
+    }
+
+    @Get('ripley/imports/:importId')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({ summary: 'Cómo va lo enviado a Ripley (ofertas y productos) y sus errores. Solo consulta.' })
+    @ApiQuery({ name: 'productImportId', required: false })
+    @ApiQuery({ name: 'connectionId', required: false })
+    ripleyImportStatus(@Param('importId') importId: string, @Req() req, @Query('productImportId') productImportId?: string, @Query('connectionId') connectionId?: string) {
+        return this.ripleyPublicacion.estado(scopeOf(req), importId, productImportId, connectionId);
     }
 
     @Patch('ripley/products/:id/brand')
