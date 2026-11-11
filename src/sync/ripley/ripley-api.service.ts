@@ -10,6 +10,7 @@ import {
     ChannelOrdersResult,
 } from '../channels/channel-types';
 import { armarOfertaParaEnviar } from './ripley-oferta';
+import { motivosDelReporte } from './ripley-publicacion';
 import type { AtributoRipley, JerarquiaRipley, ListaRipley } from './ripley-categorias';
 import { filaDeOfertaRipley, fotosDeRespuestaP11, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
 
@@ -395,6 +396,9 @@ export class RipleyApiService implements ChannelClient {
                 transformResponse: (d) => d,
                 validateStatus: (s) => s >= 200 && s < 300,
             });
+            // El motivo va en las columnas «error-line» y «error-message» al final de cada fila rechazada.
+            const motivos = motivosDelReporte(String(data ?? ''), lineas);
+            if (motivos.length) return motivos;
             return String(data ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, lineas).map((l) => l.slice(0, 400));
         } catch {
             return [];

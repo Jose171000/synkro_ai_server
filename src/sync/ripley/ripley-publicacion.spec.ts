@@ -1,4 +1,4 @@
-import { armarCsv, columnasDeAtributos, COLUMNAS_ANTES, COLUMNAS_DESPUES, filaDeRipley, MAX_NOMBRE, ProductoParaRipley, rutaParaCsv, validarProductoParaRipley } from './ripley-publicacion';
+import { armarCsv, columnasDeAtributos, COLUMNAS_ANTES, COLUMNAS_DESPUES, ESTADO_NUEVO, filaDeRipley, MAX_NOMBRE, motivosDelReporte, ProductoParaRipley, rutaParaCsv, validarProductoParaRipley } from './ripley-publicacion';
 
 const CAMPOS = [
     { name: 'tipo_product', label: 'Tipo de producto', required: true },
@@ -83,8 +83,9 @@ describe('filaDeRipley', () => {
         expect(fila.categoria).toBe('MALETERÍA, BOLSOS Y CARTERAS/LONCHERAS');
     });
 
-    it('la oferta usa el SKU del vendedor, el estado «Nuevo» y la actualización', () => {
-        expect(fila).toMatchObject({ sku: 'BP000007', sku_seller: 'BP000007', 'product-id': 'BP000007', 'product-id-type': 'SHOP_SKU', state: 'Nuevo', 'update-delete': 'UPDATE', price: '99', quantity: '4', is_displayable: 'true' });
+    it('la oferta usa el SKU del vendedor, el estado como CÓDIGO 11 (con «Nuevo» Ripley dijo «state of the product is unknown») y la actualización', () => {
+        expect(fila).toMatchObject({ sku: 'BP000007', sku_seller: 'BP000007', 'product-id': 'BP000007', 'product-id-type': 'SHOP_SKU', state: '11', 'update-delete': 'UPDATE', price: '99', quantity: '4', is_displayable: 'true' });
+        expect(ESTADO_NUEVO).toBe('11');
     });
 
     it('la primera foto es la imagen y la miniatura; las demás van en imagen2…', () => {
@@ -127,5 +128,32 @@ describe('columnasDeAtributos y armarCsv', () => {
         expect(filas).toHaveLength(2);
         // Sin celdas entrecomilladas con «;» dentro de la segunda fila, así que contar separadores es seguro.
         expect(filas[1].split(';')).toHaveLength(columnas.length);
+    });
+});
+
+describe('motivosDelReporte (el reporte de errores de Ripley)', () => {
+    // Formato real del reporte de la importación 6896364: la fila rechazada más «error-line» y «error-message» al final.
+    const REPORTE = [
+        '"categoria";"sku_seller";"descripcion";"state";"error-line";"error-message"',
+        '2\t"MALETERÍA/LONCHERAS";"BP000007";"<div style=""a"">hola;\nmundo</div>";"Nuevo";"2";"The state of the product is unknown"',
+    ].join('\r\n').replace('2\t', '');
+
+    it('devuelve el motivo y la línea, aunque la fila rechazada traiga comillas, «;» y saltos de línea', () => {
+        expect(motivosDelReporte(REPORTE)).toEqual(['Línea 2: The state of the product is unknown']);
+    });
+
+    it('con varias filas rechazadas devuelve un motivo por cada una', () => {
+        const dos = `${REPORTE}\r\n"X";"B2";"d";"Nuevo";"3";"The sku is required"\r\n`;
+        expect(motivosDelReporte(dos)).toEqual(['Línea 2: The state of the product is unknown', 'Línea 3: The sku is required']);
+    });
+
+    it('un reporte sin columna de mensaje o vacío no inventa motivos', () => {
+        expect(motivosDelReporte('"a";"b"\r\n"1";"2"')).toEqual([]);
+        expect(motivosDelReporte('')).toEqual([]);
+    });
+
+    it('respeta el máximo', () => {
+        const filas = Array.from({ length: 20 }, (_, i) => `"x";"d";"d";"n";"${i + 2}";"motivo ${i}"`);
+        expect(motivosDelReporte(['"a";"b";"c";"d";"error-line";"error-message"', ...filas].join('\r\n'), 3)).toHaveLength(3);
     });
 });

@@ -19,6 +19,9 @@ export const COLUMNAS_DESPUES = [
     'discount-start-date', 'discount-end-date', 'leadtime-to-ship', 'update-delete',
 ];
 
+/** Código del estado «nuevo» de una oferta en Ripley (documentado por Ripley: «state SIEMPRE debe ir el número 11»). */
+export const ESTADO_NUEVO = '11';
+
 export const MAX_NOMBRE = 125;
 export const MAX_IMAGENES = 10;
 export const MAX_SKU = 40;
@@ -142,7 +145,9 @@ export function filaDeRipley(p: ProductoParaRipley, columnasDeAtributos: string[
         'product-id-type': 'SHOP_SKU',
         price: numero(p.precio),
         quantity: numero(p.stock),
-        state: 'Nuevo',
+        // En el CSV enviado por API el estado va como CÓDIGO (11 = nuevo): con la etiqueta «Nuevo» Ripley respondió
+        // «The state of the product is unknown». La plantilla de Excel muestra la etiqueta, pero el CSV usa el número.
+        state: ESTADO_NUEVO,
         'update-delete': 'UPDATE',
     };
     imagenes.slice(1).forEach((u, i) => { fila[`imagen${i + 2}`] = u; });
@@ -158,6 +163,42 @@ export function columnasDeAtributos(campos: { name: string }[]): string[] {
 
 const CELDA_RIESGOSA = /[;"\r\n]/;
 const celda = (v: string) => (CELDA_RIESGOSA.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+
+/**
+ * Los motivos de rechazo de un reporte de errores de Ripley (OF03 / P47): el CSV repite cada fila rechazada y añade al final las
+ * columnas `error-line` y `error-message`. Se devuelve «Línea 2: The state of the product is unknown».
+ */
+export function motivosDelReporte(csv: string, max = 10): string[] {
+    const filas: string[][] = [];
+    let fila: string[] = [];
+    let celdaActual = '';
+    let entreComillas = false;
+    const texto = String(csv ?? '').replace(/^﻿/, '');
+    for (let i = 0; i < texto.length; i++) {
+        const c = texto[i];
+        if (entreComillas) {
+            if (c === '"') { if (texto[i + 1] === '"') { celdaActual += '"'; i++; } else entreComillas = false; } else celdaActual += c;
+        } else if (c === '"') entreComillas = true;
+        else if (c === ';') { fila.push(celdaActual); celdaActual = ''; }
+        else if (c === '\n' || c === '\r') {
+            if (c === '\r' && texto[i + 1] === '\n') i++;
+            fila.push(celdaActual); celdaActual = '';
+            if (fila.some((x) => x !== '')) filas.push(fila);
+            fila = [];
+        } else celdaActual += c;
+    }
+    if (celdaActual !== '' || fila.length) { fila.push(celdaActual); if (fila.some((x) => x !== '')) filas.push(fila); }
+    if (!filas.length) return [];
+    const cab = filas[0].map((x) => x.trim().toLowerCase());
+    const iMensaje = cab.indexOf('error-message');
+    const iLinea = cab.indexOf('error-line');
+    if (iMensaje < 0) return [];
+    return filas.slice(1)
+        .map((f) => ({ linea: iLinea >= 0 ? f[iLinea] : '', mensaje: String(f[iMensaje] ?? '').trim() }))
+        .filter((x) => x.mensaje)
+        .slice(0, max)
+        .map((x) => (x.linea ? `Línea ${x.linea}: ${x.mensaje}` : x.mensaje).slice(0, 400));
+}
 
 /** El CSV completo: encabezado con los códigos de la plantilla, separador «;», UTF-8. Cada fila usa las mismas columnas. */
 export function armarCsv(filas: Record<string, string>[], atributos: string[]): { csv: string; columnas: string[] } {
