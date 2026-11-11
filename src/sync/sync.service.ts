@@ -2472,6 +2472,20 @@ export class SyncService implements OnModuleInit {
                         meta: { feedId: feed.externalFeedId },
                     });
                 }
+                // Un cambio de precio, contenido, stock o fotos que Falabella nunca terminó también se avisa: antes solo se avisaba de las altas y
+                // la persona creía que el cambio estaba hecho.
+                else {
+                    const que = feed.action === 'ProductUpdate' ? 'un cambio de precio' : feed.action === 'ContentUpdate' ? 'una actualización de contenido'
+                        : feed.action === 'UpdateStock' ? 'un cambio de stock' : feed.action === 'Image' ? 'el envío de fotos' : 'un envío';
+                    await this.notifications.notify(userId, {
+                        type: 'publish-error',
+                        severity: 'warning',
+                        title: `Falabella no terminó de procesar ${que}`,
+                        body: `Lleva varias horas en cola (${(feed.skus ?? []).slice(0, 5).join(', ')}${(feed.skus ?? []).length > 5 ? '…' : ''}). Revisa el Seller Center y vuelve a enviarlo si hace falta.`,
+                        marketplace: 'falabella',
+                        meta: { feedId: feed.externalFeedId },
+                    });
+                }
                 return { status: 'timeout' };
             }
             // Sigue en cola dentro de Falabella: se vuelve a mirar, cada vez con más calma.

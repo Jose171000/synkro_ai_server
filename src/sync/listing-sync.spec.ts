@@ -983,6 +983,25 @@ describe('preguntar a Falabella por un envío que sigue procesando', () => {
     });
 });
 
+describe('un cambio de precio o contenido que Falabella nunca termina', () => {
+    it('al llegar al máximo se avisa (antes solo se avisaba de las altas) y no se toca el estado de la ficha', async () => {
+        const prod = { id: 'p1', sku: 'MK-1', stock: 5, price: 480 };
+        const t = await construir({
+            conexiones: [cuenta({ id: 'fa1', marketplace: 'falabella', externalUserId: 'seller' })],
+            productos: [prod],
+            enlaces: [{ id: 'e1', marketplace: 'falabella', syncStatus: 'published', product: prod, connection: { id: 'fa1' } }],
+        });
+        const feed: any = { id: 'f1', externalFeedId: 'ext', action: 'ProductUpdate', skus: ['MK-1'], connection: { id: 'fa1' }, status: 'pending' };
+        (t.service as any).feedRepository = { findOne: jest.fn(async () => feed), save: jest.fn(async (x: any) => x) };
+        t.falabella.getFeedStatus = jest.fn(async () => ({ feedId: 'ext', status: 'Queued', action: 'ProductUpdate', totalRecords: 1, processedRecords: 0, failedRecords: 0, errors: [] }));
+
+        const r = await t.service.checkFalabellaFeed('f1', 'u1', 30);
+        expect(r.status).toBe('timeout');
+        expect(t.avisos[0]).toMatchObject({ type: 'publish-error', title: expect.stringContaining('un cambio de precio'), body: expect.stringContaining('MK-1') });
+        expect(t.enlaces[0].syncStatus).toBe('published');
+    });
+});
+
 describe('si falla la comprobación de un envío a Falabella', () => {
     it('se reprograma en vez de dejar el producto en «Publicando…», y tras el máximo se rinde avisando', async () => {
         const { service, trabajos, avisos } = await construir({});
