@@ -48,6 +48,11 @@ export function nombreDeFamilia(nombre: string, valoresDelGrupo: string[] = [], 
     return recortarEnPalabra(sinValoresAlFinal(recortarEnPalabra(nombre, 150), valoresDelGrupo), max);
 }
 
+/** Texto sin tildes ni símbolos: «Tamaño cama» → «tamanocama», «COMFORTER_MATTRESS_SIZE» → «comfortermattresssize». */
+const laxo = (t: string) => normalizar(String(t ?? '')).replace(/[^a-z0-9]/g, '');
+/** ¿El eje o dato habla de la medida del producto (talla, tamaño, tamaño de cama, plazas)? */
+const esDeMedida = (t: string) => /talla|size|tamano|tamanio|plaza|medida/.test(laxo(t));
+
 const claveLaxa = (t: string) => String(t ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
@@ -57,10 +62,16 @@ const claveLaxa = (t: string) => String(t ?? '').toLowerCase().replace(/[^a-z0-9
 export function atributosConVariante(atributos: Record<string, any>, valores?: Record<string, string> | null): Record<string, any> {
     const salida: Record<string, any> = { ...(atributos ?? {}) };
     for (const [eje, valor] of Object.entries(valores ?? {})) {
-        const ejeLaxo = claveLaxa(eje);
-        const iguales = ejeLaxo === 'color' ? [ejeLaxo, 'colorbasico', 'maincolor'] : ejeLaxo === 'talla' ? [ejeLaxo, 'size'] : [ejeLaxo];
+        const ejeLaxo = laxo(eje);
+        const medida = esDeMedida(eje);
+        const colores = ejeLaxo === 'color' ? [ejeLaxo, 'colorbasico', 'maincolor', 'colorprincipal', 'colorfiltrable', 'filtrablecolor'] : [];
         for (const clave of Object.keys(salida)) {
-            if (iguales.includes(claveLaxa(clave))) salida[clave] = valor;
+            const k = laxo(clave);
+            // El mismo dato con el sufijo «variant» que usan los canales («Color variant», «Tamaño cama variant»).
+            const igual = k === ejeLaxo || k === ejeLaxo + 'variant' || colores.includes(k) || colores.some((c) => k === c + 'variant');
+            // Medida (talla, tamaño de cama, plazas…): el dato del canal puede llamarse distinto (Tamaño del colchón, Tamaño de la cama, Talla).
+            const mismaMedida = medida && esDeMedida(clave) && !/paquete|package|embalaje|caja|peso|weight|largo|ancho|alto|height|width|length/.test(k);
+            if (igual || mismaMedida) salida[clave] = valor;
         }
     }
     return salida;

@@ -43,6 +43,22 @@ describe('atributos de una variante', () => {
         expect(atributosConVariante(molde, { Color: 'Celeste' })).toMatchObject({ color: 'Celeste', color_basico: 'Celeste', Color: 'Celeste', brand: 'Kasari' });
     });
 
+    it('el tamaño de cama de la variante gana en TODOS los datos de medida del canal (Tamaño cama variant, Tamaño del colchón, Talla…), no solo en uno', () => {
+        const molde = {
+            COMFORTER_MATTRESS_SIZE: '2 plazas', Talla: '2 plazas', TamanoCamaVariant: '2 plazas', TamanoDeLaCama: '2 plazas',
+            tamano_cama_variant: '2 plazas', tamano_de_la_cama: '2 plazas', TipoDePlumonYCubrecama: 'Edredón', TamanoDelPaquete: 'Grande', PackageWidth: '40',
+        };
+        const r = atributosConVariante(molde, { 'Tamaño cama': 'King' });
+        expect(r).toMatchObject({ COMFORTER_MATTRESS_SIZE: 'King', Talla: 'King', TamanoCamaVariant: 'King', TamanoDeLaCama: 'King', tamano_cama_variant: 'King', tamano_de_la_cama: 'King' });
+        // lo que no es la medida de la variante no se toca
+        expect(r).toMatchObject({ TipoDePlumonYCubrecama: 'Edredón', TamanoDelPaquete: 'Grande', PackageWidth: '40' });
+    });
+
+    it('el color de la variante también llega a «Color variant» y «Color básico variant»', () => {
+        const r = atributosConVariante({ ColorVariant: 'Blanco', ColorBasicoVariant: 'Blanco', color_principal: 'Blanco', ColorDelCierre: 'Gris' }, { Color: 'Beige' });
+        expect(r).toMatchObject({ ColorVariant: 'Beige', ColorBasicoVariant: 'Beige', ColorDelCierre: 'Gris' });
+    });
+
     it('no inventa atributos que el producto no tenía', () => {
         expect(atributosConVariante({ brand: 'X' }, { Color: 'Rojo' })).toEqual({ brand: 'X' });
     });
