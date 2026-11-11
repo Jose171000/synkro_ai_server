@@ -74,6 +74,41 @@ describe('revisarCompatibilidad', () => {
         expect(mucho.avisos[0]).toContain('hasta 3 ejes');
     });
 
+    it('un eje con un solo valor («Modelo: CANGURO») no impide la publicación única: solo cuentan los ejes que varían', () => {
+        const ejes = [{ name: 'Modelo', values: ['CANGURO'] }, { name: 'Color', values: ['Rosado', 'Negro', 'Rojo', 'Crema'] }];
+        const r = revisarCompatibilidad(ejes, ripley({ ruta: 'MALETERÍA › CANGUROS', ejes: [{ id: 'color_80', label: 'Color', options: ['Rosado', 'Negro', 'Rojo', 'Crema'], required: true }] }));
+        expect(r.publicaComo).toBe('una');
+        expect(r.mapeo).toEqual([{ eje: 'Color', atributo: 'color_80' }]);
+        expect(r.ejesNoPermitidos).toEqual([]);
+        expect(r.avisos).toEqual([]);
+    });
+
+    it('pero un eje que SÍ varía y la categoría no acepta sigue obligando a publicar por separado', () => {
+        const ejes = [{ name: 'Modelo', values: ['CANGURO', 'MORRAL'] }, { name: 'Color', values: ['Rosado', 'Negro'] }];
+        const r = revisarCompatibilidad(ejes, ripley({ ejes: [{ id: 'color_80', label: 'Color', options: ['Rosado', 'Negro'], required: true }] }));
+        expect(r.publicaComo).toBe('separadas');
+        expect(r.ejesNoPermitidos).toEqual(['Modelo']);
+    });
+
+    it('en un canal libre (Shopify, WooCommerce) un eje de un solo valor no cuenta contra el máximo de ejes', () => {
+        const libre: InfoVariantesDeCategoria = { canal: 'shopify', categoryId: null, admite: true, ejes: [], libre: true, maxEjes: 2 } as any;
+        const ejes = [{ name: 'Modelo', values: ['CANGURO'] }, { name: 'Color', values: ['Rosado', 'Negro'] }, { name: 'Talla', values: ['S', 'M'] }];
+        const r = revisarCompatibilidad(ejes, libre);
+        expect(r.publicaComo).toBe('una');
+        expect(r.mapeo.map((m) => m.eje)).toEqual(['Color', 'Talla']);
+        // Con tres ejes que sí varían, el máximo se sigue respetando.
+        const tres = [{ name: 'Color', values: ['A', 'B'] }, { name: 'Talla', values: ['S', 'M'] }, { name: 'Material', values: ['X', 'Y'] }];
+        expect(revisarCompatibilidad(tres, libre).publicaComo).toBe('separadas');
+    });
+
+    it('la regla es la misma para Falabella y Mercado Libre: un eje fijo que su categoría no acepta no las separa', () => {
+        const ejes = [{ name: 'Modelo', values: ['CANGURO'] }, { name: 'Color', values: ['Rojo', 'Negro'] }];
+        for (const canal of ['falabella', 'mercadolibre']) {
+            const info: InfoVariantesDeCategoria = { canal, categoryId: '1', ruta: 'X', admite: true, ejes: [{ id: 'ColorVariant', label: 'Color', required: false }] } as any;
+            expect(revisarCompatibilidad(ejes, info).publicaComo).toBe('una');
+        }
+    });
+
     it('un producto sin ejes no tiene nada que revisar', () => {
         expect(revisarCompatibilidad([], ripley()).publicaComo).toBe('una');
     });

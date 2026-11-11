@@ -67,6 +67,9 @@ export function claseDeEje(texto: unknown): string {
     return n.replace(/variant$/, '').replace(/\d+$/, '');
 }
 
+/** Un eje con un solo valor (p. ej. «Modelo: CANGURO»): no distingue a las variantes entre sí, viaja como dato fijo del producto. */
+const esEjeConstante = (e: EjeSynkro) => new Set((e.values ?? []).map((v) => String(v).trim().toLowerCase())).size <= 1;
+
 const lista = (items: string[]) => items.map((i) => `«${i}»`).join(', ');
 
 export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCategoria): ResultadoDeCompatibilidad {
@@ -86,10 +89,13 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
 
     // Canales sin categorías de variante: aceptan cualquier eje hasta su máximo.
     if (info.libre) {
-        if (info.maxEjes && ejesDelProducto.length > info.maxEjes) {
-            return separadas(`${nombreDelCanal} admite hasta ${info.maxEjes} ejes de variación y el producto tiene ${ejesDelProducto.length}.`);
+        // Un eje con un solo valor no distingue a las variantes entre sí (es un dato fijo): no cuenta contra el máximo de ejes del canal.
+        const quePesan = ejesDelProducto.filter((e) => !esEjeConstante(e));
+        const ejesDeVariacion = quePesan.length ? quePesan : ejesDelProducto;
+        if (info.maxEjes && ejesDeVariacion.length > info.maxEjes) {
+            return separadas(`${nombreDelCanal} admite hasta ${info.maxEjes} ejes de variación y el producto tiene ${ejesDeVariacion.length}.`);
         }
-        return { ...base, mapeo: ejesDelProducto.map((e) => ({ eje: e.name, atributo: e.name })) };
+        return { ...base, mapeo: ejesDeVariacion.map((e) => ({ eje: e.name, atributo: e.name })) };
     }
 
     if (!info.admite || !info.ejes.length) {
@@ -103,7 +109,11 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     for (const eje of ejesDelProducto) {
         const clase = claseDeEje(eje.name);
         const atributo = info.ejes.find((a) => !usados.has(a.id) && (claseDeEje(a.label) === clase || claseDeEje(a.id) === clase));
-        if (atributo) { usados.add(atributo.id); mapeo.push({ eje: eje.name, atributo: atributo.id }); } else noPermitidos.push(eje.name);
+        if (atributo) { usados.add(atributo.id); mapeo.push({ eje: eje.name, atributo: atributo.id }); continue; }
+        // Un eje con UN solo valor que la categoría no acepta (por ejemplo «Modelo: CANGURO») no distingue a las variantes entre sí: es un
+        // dato fijo del producto y viaja como atributo normal. No debe impedir que las variantes que sí varían vayan en una sola publicación.
+        if (esEjeConstante(eje) && ejesDelProducto.length > 1) continue;
+        noPermitidos.push(eje.name);
     }
     // Datos de variante que la categoría exige y el producto no tiene como eje.
     const faltan = info.ejes.filter((a) => a.required && !usados.has(a.id)).map((a) => a.label);
