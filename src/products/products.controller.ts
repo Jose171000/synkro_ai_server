@@ -17,6 +17,7 @@ import { PrepararRipleyDto } from './dto/preparar-ripley.dto';
 import { VariantCompatService } from './variant-compat.service';
 import { RellenarRipleyDto } from './dto/rellenar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
+import { RenombrarEjeDto } from './dto/renombrar-eje.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -187,6 +188,17 @@ export class ProductsController {
   })
   async regenerateGroup(@Param('id') id: string, @Body() dto: RegenerarGrupoDto, @Req() req) {
     return this.groups.regenerarContenido(id, { tone: dto.tone, marketplaces: dto.targetMarketplaces }, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Patch('groups/:id/axes')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Renombrar un eje de variación de un grupo («Talla» → «Tamaño cama»)',
+    description: 'Cambia solo el nombre del eje, en el grupo y en cada variante; los valores no se tocan. Sirve para que el eje coincida con el dato de variante que pide un canal. No modifica ningún canal.',
+  })
+  renameGroupAxis(@Param('id') id: string, @Body() dto: RenombrarEjeDto, @Req() req) {
+    return this.groups.renombrarEje(id, dto.from, dto.to, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post('groups/:id/align-axes')

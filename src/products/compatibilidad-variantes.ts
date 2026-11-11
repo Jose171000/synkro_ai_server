@@ -42,6 +42,8 @@ export interface ResultadoDeCompatibilidad {
     /** Cada eje de Synkro con el dato del canal al que corresponde. */
     mapeo: { eje: string; atributo: string }[];
     ejesNoPermitidos: string[];
+    /** Datos de variante del canal que ningún eje del producto está usando (con el nombre limpio, sin «variant»): a qué se podría renombrar un eje no aceptado. */
+    ejesDisponibles: string[];
     ejesQueFaltan: string[];
     valoresSinEquivalente: { eje: string; valores: string[] }[];
     /** Frases para mostrar a la persona (en español). */
@@ -76,7 +78,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const nombreDelCanal = NOMBRE_DE_CANAL[info.canal] ?? info.canal;
     const base: ResultadoDeCompatibilidad = {
         canal: info.canal, nombreDelCanal, categoryId: info.categoryId, ruta: info.ruta ?? null,
-        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesQueFaltan: [], valoresSinEquivalente: [], avisos: [],
+        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesDisponibles: [], ejesQueFaltan: [], valoresSinEquivalente: [], avisos: [],
     };
     const donde = info.ruta ? `La categoría «${info.ruta}» de ${nombreDelCanal}` : `La categoría elegida en ${nombreDelCanal}`;
     const separadas = (motivo: string): ResultadoDeCompatibilidad => ({
@@ -128,7 +130,9 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
         if (malos.length) sinEquivalente.push({ eje: par.eje, valores: malos });
     }
 
-    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente };
+    // Solo se ofrece renombrar cuando hay un eje que el canal NO acepta tal como está; si todo encaja, no hay nada que cambiar.
+    const disponibles = noPermitidos.length ? info.ejes.filter((a) => !usados.has(a.id)).map((a) => String(a.label).replace(/\s*variant$/i, '').trim()).filter(Boolean) : [];
+    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesDisponibles: disponibles, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente };
     if (faltan.length) resultado.avisos.push(`${donde} también pide ${lista(faltan)} como dato de variante y el producto no tiene ese eje.`);
     for (const s of sinEquivalente) resultado.avisos.push(`En ${nombreDelCanal} no existen estos valores de «${s.eje}»: ${lista(s.valores)}. Se ajustarán al más cercano o habrá que cambiarlos.`);
 

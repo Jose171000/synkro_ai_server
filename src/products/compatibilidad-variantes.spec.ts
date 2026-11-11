@@ -109,6 +109,20 @@ describe('revisarCompatibilidad', () => {
         }
     });
 
+    it('si un eje no se acepta, dice qué datos de variante del canal quedan libres (nombre limpio) para poder renombrarlo; si todo encaja, no ofrece nada', () => {
+        const falabella: InfoVariantesDeCategoria = {
+            canal: 'falabella', categoryId: '3137', ruta: 'Hogar › Colchas', admite: true,
+            ejes: [{ id: 'ColorVariant', label: 'Color variant', required: false }, { id: 'TamanoCamaVariant', label: 'Tamaño cama variant', required: false }],
+        } as any;
+        const r = revisarCompatibilidad([{ name: 'Talla', values: ['2 plazas', 'King'] }], falabella);
+        expect(r.publicaComo).toBe('separadas');
+        expect(r.ejesNoPermitidos).toEqual(['Talla']);
+        expect(r.ejesDisponibles).toEqual(['Color', 'Tamaño cama']);
+        const bien = revisarCompatibilidad([{ name: 'Tamaño cama', values: ['2 plazas', 'King'] }], falabella);
+        expect(bien.publicaComo).toBe('una');
+        expect(bien.ejesDisponibles).toEqual([]);
+    });
+
     it('un producto sin ejes no tiene nada que revisar', () => {
         expect(revisarCompatibilidad([], ripley()).publicaComo).toBe('una');
     });

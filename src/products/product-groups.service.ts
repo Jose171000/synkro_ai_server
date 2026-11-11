@@ -12,6 +12,7 @@ import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/pr
 import { fotosParaIA } from './fotos-para-ia';
 import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
 import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
+import { renombrarClaveDeValores, renombrarEje } from './renombrar-eje';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
 } from './variantes';
@@ -236,6 +237,24 @@ export class ProductGroupsService {
         // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
         if (titulo) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
         return { variantes: variantes.length, titulo: titulo || null };
+    }
+
+    /**
+     * Cambia el NOMBRE de un eje de variación («Talla» → «Tamaño cama») en el grupo y en cada una de sus variantes, para que coincida con lo
+     * que pide un canal. Los valores, el orden y todo lo demás quedan igual. No toca ningún canal.
+     */
+    async renombrarEje(grupoId: string, desde: string, hasta: string, ambito: AmbitoDeGrupo): Promise<{ eje: string; variantes: number }> {
+        const vista = await this.obtener(grupoId, ambito);
+        const ejes = renombrarEje(vista.axes, desde, hasta);
+        const nuevo = ejes.find((e) => !vista.axes.includes(e))?.name ?? hasta;
+        const variantes = await this.productRepository.find({ where: { group: { id: grupoId } } });
+        await this.dataSource.transaction(async (manager) => {
+            await manager.update(ProductGroup, grupoId, { axes: ejes } as any);
+            for (const v of variantes) {
+                await manager.update(Product, v.id, { variantValues: renombrarClaveDeValores(v.variantValues as any, desde, nuevo) } as any);
+            }
+        });
+        return { eje: nuevo, variantes: variantes.length };
     }
 
     /**
