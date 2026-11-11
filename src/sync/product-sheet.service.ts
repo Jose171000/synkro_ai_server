@@ -51,6 +51,17 @@ export interface SheetPrice {
     canSetSale: boolean;
 }
 
+/** Lo que Synkro tiene y lo que un canal muestra de precio y stock, para sincronizar cuando difieren. */
+export interface SheetSync {
+    listingId: string;
+    marketplace: string;
+    connectionId: string;
+    account: string;
+    status: string;
+    price: { synkro: number | null; channel: number | null };
+    stock: { synkro: number; channel: number | null };
+}
+
 /**
  * La ficha de un producto: lo que se manda a cada marketplace, en un solo lugar y editable.
  * Al guardar un cambio se programa su envío automático a los canales donde el producto está publicado.
@@ -82,10 +93,21 @@ export class ProductSheetService {
 
         const canales: SheetChannel[] = [];
         const precios: SheetPrice[] = [];
+        const sincronizacion: SheetSync[] = [];
         for (const enlace of enlaces) {
             const cuenta = enlace.connection;
             if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_QUE_SE_MUESTRAN.includes(enlace.marketplace)) continue;
             if (enlace.marketplace !== 'ripley') precios.push(this.preciosDeEnlace(product, enlace, cuenta));
+            const numero = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+            sincronizacion.push({
+                listingId: enlace.id,
+                marketplace: enlace.marketplace,
+                connectionId: cuenta.id,
+                account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
+                status: enlace.syncStatus,
+                price: { synkro: preciosParaCanal(product, enlace).price ?? null, channel: numero(enlace.regularPrice) },
+                stock: { synkro: product.stock, channel: enlace.lastStockSynced ?? null },
+            });
             const base = {
                 marketplace: enlace.marketplace,
                 connectionId: cuenta.id,
@@ -128,6 +150,7 @@ export class ProductSheetService {
             },
             channels: canales,
             prices: precios,
+            sync: sincronizacion,
         };
     }
 

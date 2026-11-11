@@ -365,4 +365,10 @@ describe('ficha: pestaña de Ripley (solo lectura)', () => {
         ]);
         expect(hoja.prices).toHaveLength(0);
     });
+
+    it('informa, por canal enlazado, el precio y el stock de Synkro frente a los del canal (para sincronizar)', async () => {
+        const { service } = construir(producto, [{ ...enlace, regularPrice: 95, lastStockSynced: 2 }]);
+        const hoja = await service.getSheet(SCOPE, 'p1');
+        expect(hoja.sync).toEqual([{ listingId: 'l1', marketplace: 'ripley', connectionId: 'rp1', account: 'Chumpi Bags', status: 'published', price: { synkro: 99, channel: 95 }, stock: { synkro: 4, channel: 2 } }]);
+    });
 });
