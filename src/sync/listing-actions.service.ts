@@ -156,7 +156,7 @@ export class ListingActionsService {
         sku: string;
         enSynkro: string[];
         mercadolibre: { id: string; estado: string; subestado: string | null; cuenta: string }[];
-        falabella: { cuenta: string; existe: boolean; estado: string | null; calidad: string | null }[];
+        falabella: { cuenta: string; existe: boolean; estado: string | null; calidad: string | null; nombre?: string | null; variacion?: string | null; parentSku?: string | null; datos?: Record<string, string> }[];
     }[]> {
         const lista = [...new Set(skus.map((s) => String(s).trim()).filter(Boolean))];
         const enlaces = await this.listingLinkRepository.find({
@@ -202,7 +202,12 @@ export class ListingActionsService {
             const cuenta = conexion.label || conexion.externalNickname || conexion.externalUserId;
             for (const sku of setSkus) {
                 const p: any = encontrados.find((x: any) => String(x?.SellerSku).trim() === sku);
-                salida.get(sku)?.falabella.push({ cuenta, existe: !!p, estado: p ? String(p.Status ?? '') || null : null, calidad: p ? String(p.QCStatus ?? '') || null : null });
+                salida.get(sku)?.falabella.push({
+                    cuenta, existe: !!p, estado: p ? String(p.Status ?? '') || null : null, calidad: p ? String(p.QCStatus ?? '') || null : null,
+                    // Lo que Falabella tiene guardado de la ficha: nombre, variación, código padre y los datos de tamaño/color.
+                    nombre: p ? String(p.Name ?? '') || null : null, variacion: p ? String(p.Variation ?? '') || null : null, parentSku: p ? String(p.ParentSku ?? '') || null : null,
+                    datos: p ? Object.fromEntries(Object.entries((p.ProductData ?? {}) as Record<string, any>).filter(([k]) => /tama|talla|size|color|plaza/i.test(k)).map(([k, v]) => [k, String(v)])) : undefined,
+                });
             }
         }
         return [...salida.values()];
