@@ -35,6 +35,41 @@ describe('familias de Mercado Libre', () => {
     });
 });
 
+describe('Mercado Libre: variantes que salen como publicaciones separadas', () => {
+    const duvetGrupo = { name: 'Duvet Hotelero 100% Algodón Casatex con Cierre y Fundas', parentSku: 'UVT-001B', axes: [{ name: 'Tamaño cama', values: ['2 plazas', 'King'] }] };
+    const duvet = (sku: string, tam: string) => ({ sku, name: 'Duvet', aiTitle: 'Duvet', price: 350, stock: 10, images: [], group: duvetGrupo, variantValues: { 'Tamaño cama': tam }, aiAttributes: { brand: 'Casatex' } });
+    const servicio = (admitidos: any[], falla = false) => {
+        const s: any = Object.create(SyncService.prototype);
+        s.ejesDeVariacionMeli = jest.fn(async () => { if (falla) throw new Error('ML no responde'); return admitidos; });
+        return s;
+    };
+    const COLOR = [{ id: 'COLOR', label: 'Color' }, { id: 'FABRIC_DESIGN', label: 'Diseño de la tela' }, { id: 'PACKAGE_WIDTH', label: 'Ancho del paquete' }];
+
+    it('si la categoría no admite el eje (tamaño de cama), se detecta como separadas', async () => {
+        expect(await (servicio(COLOR) as any).variantesVanSeparadasEnMeli(duvet('F', '2 plazas'), 'MPE444718')).toBe(true);
+    });
+
+    it('si la categoría sí admite el eje, siguen como una familia', async () => {
+        const conTamano = [...COLOR, { id: 'MATTRESS_SIZE', label: 'Tamaño del colchón' }];
+        expect(await (servicio(conTamano) as any).variantesVanSeparadasEnMeli(duvet('F', '2 plazas'), 'MPE1')).toBe(false);
+    });
+
+    it('si no se puede saber (ML no responde) o no hay grupo, se publica como siempre', async () => {
+        expect(await (servicio([], true) as any).variantesVanSeparadasEnMeli(duvet('F', '2 plazas'), 'MPE1')).toBe(false);
+        expect(await (servicio(COLOR) as any).variantesVanSeparadasEnMeli({ sku: 'X', group: null }, 'MPE1')).toBe(false);
+    });
+
+    it('separadas: cada publicación lleva su tamaño en el nombre; juntas, el mismo nombre sin tamaño', () => {
+        const separado = (p: any) => proto.buildMeliItemPayload.call(contexto, p, 'MPE444718', true).family_name;
+        const junto = (p: any) => proto.buildMeliItemPayload.call(contexto, p, 'MPE444718', false).family_name;
+        expect(separado(duvet('F', '2 plazas'))).toMatch(/ - 2 plazas$/);
+        expect(separado(duvet('K', 'King'))).toMatch(/ - King$/);
+        expect(separado(duvet('F', '2 plazas')).length).toBeLessThanOrEqual(60);
+        expect(separado(duvet('F', '2 plazas'))).not.toBe(separado(duvet('K', 'King')));
+        expect(junto(duvet('F', '2 plazas'))).toBe(junto(duvet('K', 'King')));
+    });
+});
+
 describe('nombre de una variante en Falabella cuando sale como ficha suelta', () => {
     const servicio: any = Object.create(SyncService.prototype);
     const ficha = (sku: string, color: string, extra: any = {}) => ({

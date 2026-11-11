@@ -7,6 +7,7 @@ import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenD
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
+import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
@@ -1260,7 +1261,7 @@ export class SyncService implements OnModuleInit {
                 await this.enlazarPublicacionMeli(product, link, connection, link.externalId);
             } else {
                 const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
-                const payload = this.buildMeliItemPayload(product, categoryId);
+                const payload = this.buildMeliItemPayload(product, categoryId, await this.variantesVanSeparadasEnMeli(product, categoryId));
                 const created = await this.meliApi.createItem(connection.accessToken, payload);
 
                 // El ítem ya existe en Mercado Libre: se anota ya, para que un fallo posterior no lo deje huérfano (un reintento lo duplicaría).
@@ -1487,11 +1488,31 @@ export class SyncService implements OnModuleInit {
         ];
     }
 
-    private buildMeliItemPayload(product: Product, categoryId: string): MeliItemPayload {
+    /**
+     * ¿La categoría de Mercado Libre NO admite alguno de los ejes del grupo como variación (por ejemplo el tamaño de cama en Edredones)?
+     * Entonces cada variante se publica como producto propio y debe llevar su etiqueta en el nombre. Si no se puede saber, se publica como siempre.
+     */
+    private async variantesVanSeparadasEnMeli(product: Product, categoryId: string): Promise<boolean> {
+        const ejes = (product.group?.axes ?? []) as EjeSynkro[];
+        if (!product.group || !ejes.length) return false;
+        try {
+            const admitidos = await this.ejesDeVariacionMeli(categoryId);
+            return revisarCompatibilidad(ejes, { canal: 'mercadolibre', categoryId, admite: admitidos.length > 0, ejes: admitidos }).publicaComo === 'separadas';
+        } catch {
+            return false;
+        }
+    }
+
+    private buildMeliItemPayload(product: Product, categoryId: string, separadas = false): MeliItemPayload {
         // ML builds the final title from family_name + attributes (max 60 chars)
         // Las variantes de un grupo comparten el MISMO nombre de familia (sin color: Mercado Libre agrega el de cada una) y así quedan juntas.
+        // Si la categoría no admite uno de sus ejes, salen como publicaciones separadas y cada una lleva su etiqueta («… - King»).
+        const valoresDelGrupo = (product.group?.axes ?? []).flatMap((e) => e.values);
         const familyName = product.group
-            ? nombreDeFamilia(product.group.name || product.aiTitle || product.name, (product.group.axes ?? []).flatMap((e) => e.values))
+            ? (separadas
+                ? tituloDeVariante(product.group.name || product.aiTitle || product.name, etiquetaDe(product.variantValues ?? {}, product.group.axes ?? []), valoresDelGrupo, 60)
+                    ?? nombreDeFamilia(product.group.name || product.aiTitle || product.name, valoresDelGrupo)
+                : nombreDeFamilia(product.group.name || product.aiTitle || product.name, valoresDelGrupo))
             : (product.aiTitle || product.name).slice(0, 60);
 
         return {
