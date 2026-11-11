@@ -124,7 +124,9 @@ const numero = (v: unknown) => (vacio(v) || !Number.isFinite(Number(v)) ? '' : S
 export function filaDeRipley(p: ProductoParaRipley, columnasDeAtributos: string[]): Record<string, string> {
     const imagenes = (p.imagenes ?? []).filter((u) => !vacio(u)).slice(0, MAX_IMAGENES);
     const fila: Record<string, string> = {
-        categoria: rutaParaCsv(p.categoria?.ruta ?? ''),
+        // En el CSV enviado por API la categoría va como su CÓDIGO (R141100000000). Con la ruta en texto Ripley respondió
+        // «1001|The category MALETERÍA BOLSOS Y CARTERAS/LONCHERAS is unknown». La plantilla de Excel muestra el texto, el CSV usa el código.
+        categoria: texto(p.categoria?.id),
         sku_seller: texto(p.sku),
         nombre: texto(p.nombre).toLocaleUpperCase('es'),
         ShortDescription: texto(p.descripcionCorta),
@@ -190,8 +192,9 @@ export function motivosDelReporte(csv: string, max = 10): string[] {
     if (celdaActual !== '' || fila.length) { fila.push(celdaActual); if (fila.some((x) => x !== '')) filas.push(fila); }
     if (!filas.length) return [];
     const cab = filas[0].map((x) => x.trim().toLowerCase());
-    const iMensaje = cab.indexOf('error-message');
-    const iLinea = cab.indexOf('error-line');
+    // El reporte de ofertas (OF03) usa «error-line» y «error-message»; el de productos (P47), «line number» y «errors».
+    const iMensaje = cab.includes('error-message') ? cab.indexOf('error-message') : cab.indexOf('errors');
+    const iLinea = cab.includes('error-line') ? cab.indexOf('error-line') : cab.indexOf('line number');
     if (iMensaje < 0) return [];
     return filas.slice(1)
         .map((f) => ({ linea: iLinea >= 0 ? f[iLinea] : '', mensaje: String(f[iMensaje] ?? '').trim() }))

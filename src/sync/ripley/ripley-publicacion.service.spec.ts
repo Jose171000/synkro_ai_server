@@ -60,7 +60,7 @@ describe('vista previa de la publicación en Ripley (no envía nada)', () => {
         expect(v.publicaComo).toBe('sola');
         expect(v.puedeEnviar).toBe(true);
         expect(v.categoria).toEqual({ id: 'R141100000000', ruta: 'MALETERÍA, BOLSOS Y CARTERAS › LONCHERAS' });
-        expect(v.csv).toContain('MALETERÍA, BOLSOS Y CARTERAS/LONCHERAS');
+        expect(v.csv).toContain('R141100000000;BP000007');
         expect(v.csv).toContain('LONCHERA MARRÓN TÉRMICA');
         expect(v.csv).toContain('<p>Ficha</p>');
         expect(v.csv).toContain('BP000007;BP000007;SHOP_SKU');

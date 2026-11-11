@@ -78,9 +78,9 @@ describe('filaDeRipley', () => {
     const atributos = columnasDeAtributos(CAMPOS);
     const fila = filaDeRipley(lonchera(), atributos);
 
-    it('pone el nombre en MAYÚSCULAS y la categoría como en la plantilla', () => {
+    it('pone el nombre en MAYÚSCULAS y la categoría como CÓDIGO (con la ruta en texto Ripley respondió «1001|The category … is unknown»)', () => {
         expect(fila.nombre).toBe('LONCHERA MARRÓN TÉRMICA PUFFER POLIÉSTER 15 L DOBLE COMPARTIMIENTO');
-        expect(fila.categoria).toBe('MALETERÍA, BOLSOS Y CARTERAS/LONCHERAS');
+        expect(fila.categoria).toBe('R141100000000');
     });
 
     it('la oferta usa el SKU del vendedor, el estado como CÓDIGO 11 (con «Nuevo» Ripley dijo «state of the product is unknown») y la actualización', () => {
@@ -137,6 +137,14 @@ describe('motivosDelReporte (el reporte de errores de Ripley)', () => {
         '"categoria";"sku_seller";"descripcion";"state";"error-line";"error-message"',
         '2\t"MALETERÍA/LONCHERAS";"BP000007";"<div style=""a"">hola;\nmundo</div>";"Nuevo";"2";"The state of the product is unknown"',
     ].join('\r\n').replace('2\t', '');
+
+    it('el reporte de PRODUCTOS (P47) usa «line number» y «errors»: devuelve el código y el motivo', () => {
+        const p47 = [
+            '"categoria";"sku_seller";"line number";"warnings";"errors"',
+            '"X/Y";"BP000007";"2";"";"1001|The category MALETERÍA BOLSOS Y CARTERAS/LONCHERAS is unknown"',
+        ].join('\r\n');
+        expect(motivosDelReporte(p47)).toEqual(['Línea 2: 1001|The category MALETERÍA BOLSOS Y CARTERAS/LONCHERAS is unknown']);
+    });
 
     it('devuelve el motivo y la línea, aunque la fila rechazada traiga comillas, «;» y saltos de línea', () => {
         expect(motivosDelReporte(REPORTE)).toEqual(['Línea 2: The state of the product is unknown']);
