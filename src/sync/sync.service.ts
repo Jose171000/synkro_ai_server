@@ -2042,7 +2042,12 @@ export class SyncService implements OnModuleInit {
         const grupoDelProducto = (product as any).group;
         const agrupaPorTallaYColor = !!grupoDelProducto && !noAplican.has('parentsku')
             && !categoriaAdmiteVariantes(categoryAttributes) && variacionPorTallaYColor(categoryAttributes);
-        const nombreComun = agrupaPorTallaYColor
+        // Falabella guarda el NOMBRE por familia (el último envío gana) y muestra la variación (color, tamaño) aparte, por ficha. Si cada variante
+        // llevara su etiqueta en el nombre («- 2 plazas», «- King»), una pisaría a la otra y alguna quedaría con el tamaño equivocado. Por eso
+        // todas las variantes que salen bajo el mismo código padre llevan el MISMO nombre, sin color ni tamaño.
+        const conCodigoPadre = !!grupoDelProducto && !noAplican.has('parentsku')
+            && (categoriaAdmiteVariantes(categoryAttributes) || variacionPorTallaYColor(categoryAttributes));
+        const nombreComun = (agrupaPorTallaYColor || conCodigoPadre)
             ? nombreDeFamilia(grupoDelProducto.name || product.aiTitle || product.name, (grupoDelProducto.axes ?? []).flatMap((e: any) => e.values), 100)
             : undefined;
 

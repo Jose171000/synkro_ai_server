@@ -130,9 +130,11 @@ describe('calzado en Falabella: variantes por talla y color agrupadas por Parent
         const completos = { brand: 'G', genero: 'Mujer', color: 'Negro', color_basico: 'Negro', talla: '38' };
         const suelta: any = servicio.toFalabellaInput(variante('X-1', 'Negro', '38', { group: null, variantValues: null, aiAttributes: completos }), 'active', categoria);
         expect(suelta.input.name).toBe('Sandalias de cuero floater');
-        // Con campos «…Variant» el nombre se arma como siempre.
+        // Con campos «…Variant» también: Falabella guarda el nombre por familia, y la variación (color, talla) se muestra aparte en cada ficha.
         const conVariant: any = servicio.toFalabellaInput(variante('X-4', 'Negro', '38'), 'active', [campo('ColorVariant', { isMandatory: false, options: [] })]);
-        expect(conVariant.input.name).toContain('Negro');
+        const conVariant2: any = servicio.toFalabellaInput(variante('X-5', 'Beige', '35'), 'active', [campo('ColorVariant', { isMandatory: false, options: [] })]);
+        expect(conVariant.input.name).toBe('Sandalias de cuero');
+        expect(conVariant2.input.name).toBe(conVariant.input.name);
     });
 
     it('«Vino» no se rechaza: se manda como Burdeo (color básico) y Burdeos (color)', () => {
