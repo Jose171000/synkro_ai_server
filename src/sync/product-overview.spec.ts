@@ -42,6 +42,14 @@ describe('ProductOverviewService', () => {
         expect(r.completeness.ready).toBe(false);
     });
 
+    it('muestra también la categoría de Ripley (con su ruta) cuando el producto la tiene', async () => {
+        const p = { ...base, marketplaceIds: { ripley_category_id: 'R141100000000', ripley_category_path: 'MALETERÍA › LONCHERAS' } };
+        const { servicio } = construir([p], []);
+        expect((await servicio.obtener(ambito, ['p1'])).p1.categories.ripley).toEqual({ id: 'R141100000000', path: 'MALETERÍA › LONCHERAS' });
+        const { servicio: otro } = construir([{ ...base }], []);
+        expect((await otro.obtener(ambito, ['p1'])).p1.categories.ripley).toBeNull();
+    });
+
     it('un producto con todo está listo', async () => {
         const p = { ...base, marketplaceIds: { falabella_category_id: '123' }, packageWidth: 20, packageLength: 20, packageHeight: 20, packageWeight: 1 };
         const { servicio } = construir([p], []);

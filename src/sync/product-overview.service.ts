@@ -11,6 +11,7 @@ export interface ResumenDeProducto {
     categories: {
         falabella: { id: string; path: string | null } | null;
         mercadolibre: { id: string } | null;
+        ripley: { id: string; path: string | null } | null;
         internal: string | null;
     };
     channels: {
@@ -95,6 +96,9 @@ export class ProductOverviewService {
                 categories: {
                     falabella: cats.falabella ? { id: cats.falabella, path: rutas.get(cats.falabella) ?? null } : null,
                     mercadolibre: cats.mercadolibre ? { id: cats.mercadolibre } : null,
+                    ripley: String((p.marketplaceIds as any)?.ripley_category_id ?? '').trim()
+                        ? { id: String((p.marketplaceIds as any).ripley_category_id).trim(), path: String((p.marketplaceIds as any)?.ripley_category_path ?? '').trim() || null }
+                        : null,
                     internal: cats.interna,
                 },
                 channels: links
