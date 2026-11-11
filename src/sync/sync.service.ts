@@ -1590,36 +1590,62 @@ export class SyncService implements OnModuleInit {
     /**
      * Cambia en Falabella el nombre, la descripción, la marca y los atributos de una ficha que ya está
      * publicada, con lo que tenga el producto ahora. El resultado llega después: Falabella procesa en diferido.
+     *
+     * Las variantes de un grupo comparten código padre (ParentSku) y Falabella las trata como una familia: si se mandan de a una, el
+     * último envío pisa el tamaño o el color de las demás. Por eso, cuando el producto es una variante, se mandan TODAS las fichas
+     * publicadas de su familia en esta cuenta juntas, en un solo envío, cada una con SU color y SU tamaño.
      */
     async updateFalabellaContent(scope: SyncScope, productId: string, connectionId?: string) {
         const product = await this.findScopedProduct(scope, productId);
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const credentials = this.credentialsOf(connection);
 
-        const categoria = this.categoriaFalabella(product);
-        const atributos = categoria ? await this.falabellaApi.getCategoryAttributes(credentials, categoria).catch(() => []) : [];
-        // El enlace de esta cuenta aporta su precio propio y el descuento que Falabella ya muestra: actualizar el contenido no debe quitarlo.
-        const enlace = await this.listingLinkRepository.findOne({
-            where: { product: { id: productId }, connection: { id: connection.id }, marketplace: 'falabella' },
-        });
-        const resultado = this.toFalabellaInput(product, 'active', atributos, enlace);
-        if ('reason' in resultado) {
-            throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
+        const familia = await this.familiaDe(scope, productId);
+        const miembros = familia.length > 1 ? familia : [product];
+        const atributosPorCategoria = new Map<string, any[]>();
+        const entradas: any[] = [];
+        const skus: string[] = [];
+        for (const miembro of miembros) {
+            const esElPedido = miembro.id === product.id;
+            // El enlace de esta cuenta aporta su precio propio y el descuento que Falabella ya muestra: actualizar el contenido no debe quitarlo.
+            const enlace = await this.listingLinkRepository.findOne({
+                where: { product: { id: miembro.id }, connection: { id: connection.id }, marketplace: 'falabella' },
+            });
+            // Una hermana que no está publicada en esta cuenta no se manda.
+            if (!esElPedido && (!enlace || !['published', 'paused'].includes(enlace.syncStatus))) continue;
+
+            const categoria = this.categoriaFalabella(miembro);
+            if (categoria && !atributosPorCategoria.has(String(categoria))) {
+                atributosPorCategoria.set(String(categoria), await this.falabellaApi.getCategoryAttributes(credentials, categoria).catch(() => []));
+            }
+            const resultado = this.toFalabellaInput(miembro, 'active', categoria ? atributosPorCategoria.get(String(categoria)) ?? [] : [], enlace);
+            if ('reason' in resultado) {
+                if (esElPedido) throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
+                continue; // una hermana incompleta no frena a las demás
+            }
+            entradas.push(resultado.input);
+            skus.push(miembro.sku);
         }
 
-        const feedId = await this.falabellaApi.updateProductContent(credentials, [resultado.input], this.falabellaOperatorCode);
+        const feedId = await this.falabellaApi.updateProductContent(credentials, entradas, this.falabellaOperatorCode);
         const feed = await this.feedRepository.save(this.feedRepository.create({
             marketplace: 'falabella',
             externalFeedId: feedId,
             action: 'ContentUpdate',
-            skus: [product.sku],
+            skus,
             status: 'pending',
-            totalRecords: 1,
+            totalRecords: skus.length,
             owner: { id: scope.userId } as any,
             connection: { id: connection.id } as any,
         }));
         await this.syncQueue.add('falabella-feed', { feedRecordId: feed.id, userId: scope.userId }, { delay: 45_000 });
-        return { message: 'Actualización enviada a Falabella. Se procesa en segundo plano y la calidad de la ficha puede tardar en reflejarse.', feedId };
+        return {
+            message: skus.length > 1
+                ? `Actualización enviada a Falabella para las ${skus.length} fichas de la familia a la vez (${skus.join(', ')}). Se procesa en segundo plano y la calidad puede tardar en reflejarse.`
+                : 'Actualización enviada a Falabella. Se procesa en segundo plano y la calidad de la ficha puede tardar en reflejarse.',
+            feedId,
+            skus,
+        };
     }
 
     /**
