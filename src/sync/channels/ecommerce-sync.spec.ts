@@ -820,3 +820,41 @@ describe('Ripley: variantes al importar', () => {
         expect(variantImport.aplicar).not.toHaveBeenCalled();
     });
 });
+
+describe('enlazar UN producto con SU oferta de Ripley', () => {
+    const oferta = { shop_sku: 'BP000007', offer_id: 10407700, active: true, quantity: 4, price: 99, product_title: 'LONCHERA', product_sku: 'PMP20001875887-1', currency_iso_code: 'PEN' };
+
+    it('guarda solo el vínculo (oferta, estado, stock y precio) sin crear productos ni importar el resto', async () => {
+        const producto = { id: 'p1', sku: 'BP000007', store: { id: 't1' } };
+        const { service, cliente, sync, productos, enlaces } = construir({ conexiones: [cuenta({ id: 'rp1', marketplace: 'ripley' })], productos: [producto] });
+        sync.findScopedProduct = jest.fn(async () => producto);
+        cliente.ofertaPorSku = jest.fn(async () => oferta);
+
+        const r = await service.enlazarOfertaDeRipley(SCOPE, 'p1');
+
+        expect(cliente.ofertaPorSku).toHaveBeenCalledWith(expect.anything(), 'BP000007');
+        expect(cliente.listListings).not.toHaveBeenCalled();
+        expect(r).toMatchObject({ enlazado: true, sku: 'BP000007', offerId: '10407700', estado: 'published', stock: 4, precio: 99 });
+        expect(enlaces).toHaveLength(1);
+        expect(enlaces[0]).toMatchObject({ marketplace: 'ripley', externalId: '10407700', syncStatus: 'published', lastStockSynced: 4 });
+        expect(productos).toHaveLength(1);
+    });
+
+    it('si la oferta que devuelve Ripley no es de ese SKU, no enlaza nada', async () => {
+        const producto = { id: 'p1', sku: 'BP000007', store: { id: 't1' } };
+        const { service, cliente, sync, enlaces } = construir({ conexiones: [cuenta({ id: 'rp1', marketplace: 'ripley' })], productos: [producto] });
+        sync.findScopedProduct = jest.fn(async () => producto);
+        cliente.ofertaPorSku = jest.fn(async () => ({ ...oferta, shop_sku: 'OTRO' }));
+        await expect(service.enlazarOfertaDeRipley(SCOPE, 'p1')).rejects.toThrow('no corresponde al SKU');
+        expect(enlaces).toHaveLength(0);
+    });
+
+    it('si Ripley no tiene esa oferta, falla sin enlazar', async () => {
+        const producto = { id: 'p1', sku: 'BP000007', store: { id: 't1' } };
+        const { service, cliente, sync, enlaces } = construir({ conexiones: [cuenta({ id: 'rp1', marketplace: 'ripley' })], productos: [producto] });
+        sync.findScopedProduct = jest.fn(async () => producto);
+        cliente.ofertaPorSku = jest.fn(async () => { throw new BadRequestException('Ripley no tiene una oferta con el SKU «BP000007» en esta cuenta.'); });
+        await expect(service.enlazarOfertaDeRipley(SCOPE, 'p1')).rejects.toThrow('no tiene una oferta');
+        expect(enlaces).toHaveLength(0);
+    });
+});

@@ -23,7 +23,7 @@ import type { ColoresDeFamilia, FamiliaParaColores } from '../../ai/product-visi
 export const MAX_FAMILIAS_PARA_COLORES = 8;
 import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from '../falabella-variant-import.service';
 import { GrupoSinResolver } from '../falabella/variantes-falabella';
-import { HOST_DE_RIPLEY_POR_DEFECTO, esFotoDeMirakl, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
+import { HOST_DE_RIPLEY_POR_DEFECTO, esFotoDeMirakl, filaDeOfertaRipley, normalizarClaveDeRipley, normalizarHostDeRipley } from '../ripley/ripley-mapping';
 import { resolverMoneda } from '../../common/currency';
 import { importeDeProductos, OrderLine } from '../order-details';
 import {
@@ -383,6 +383,20 @@ export class EcommerceSyncService implements OnModuleInit {
             });
         }
         return resumen;
+    }
+
+    /**
+     * Enlaza UN producto de Synkro con SU oferta de Ripley (por SKU), sin importar nada más: no crea productos, no agrupa variantes y
+     * no toca el resto del catálogo. Sirve después de publicar un producto nuevo desde Synkro. Solo escribe el vínculo.
+     */
+    async enlazarOfertaDeRipley(scope: SyncScope, productId: string, connectionId?: string) {
+        const product = await this.sync.findScopedProduct(scope, productId);
+        const connection = await this.sync.resolveConnection(scope.storeId, 'ripley', connectionId);
+        const oferta = await (this.clientOf('ripley') as RipleyApiService).ofertaPorSku(this.authOf(connection), product.sku);
+        const fila = filaDeOfertaRipley(oferta, (connection as any).currency ?? null);
+        if (!fila || fila.sku !== product.sku) throw new BadRequestException(`La oferta de Ripley no corresponde al SKU «${product.sku}».`);
+        await this.guardarEnlace(connection, product, fila);
+        return { enlazado: true, sku: product.sku, offerId: fila.externalId, estado: fila.status, stock: fila.stock, precio: fila.regularPrice };
     }
 
     private async guardarEnlace(connection: MarketplaceConnection, product: Product, fila: ChannelListingRow): Promise<void> {

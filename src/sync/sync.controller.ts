@@ -605,6 +605,19 @@ export class SyncController {
         return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, connectionId: dto?.connectionId });
     }
 
+    @Post('ripley/products/:id/link-offer')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Enlaza un producto con su oferta de Ripley (por SKU), sin importar nada más',
+        description: 'Después de publicar un producto nuevo desde Synkro: lee SU oferta en Ripley y guarda el vínculo. No crea productos, no agrupa variantes y no toca el resto del catálogo. Desde ese momento el stock y el precio de Synkro se sincronizan con esa oferta.',
+    })
+    ripleyLinkOffer(@Param('id') id: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.ecommerce.enlazarOfertaDeRipley(scopeOf(req), id, connectionId);
+    }
+
     @Post('ripley/products/:id/register-sent')
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()
