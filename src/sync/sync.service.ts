@@ -8,6 +8,7 @@ import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
+import { valorConAjuste } from '../products/ajustes-de-canal';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
@@ -2014,7 +2015,12 @@ export class SyncService implements OnModuleInit {
             const bruto = this.buscarAtributo(attributes, attribute.name);
             const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
             // En una lista cerrada solo vale una de sus opciones (con la escritura de Falabella).
-            let valor = hayValor ? this.valorPermitido(attribute, String(bruto)) : undefined;
+            // Si la persona confirmó a qué opción de Falabella corresponde este valor (un color que su lista no tiene), ese ajuste manda.
+            let valor = hayValor
+                ? (attribute.options?.length && !esCampoNumerico(attribute.inputType)
+                    ? valorConAjuste({ canal: 'falabella', atributos: attributes, atributo: attribute.label || attribute.name, valor: String(bruto), opciones: attribute.options, automatico: (v, o) => opcionCercana(v.trim(), o) })
+                    : this.valorPermitido(attribute, String(bruto)))
+                : undefined;
             // Los textos largos se acortan al máximo que acepta Falabella para ese campo (p. ej. «Contenido del paquete»: 172).
             const maximo = valor !== undefined ? limiteDeLongitud(attribute, attributes) : undefined;
             if (valor !== undefined && maximo && valor.length > maximo) valor = recortarTexto(valor, maximo);

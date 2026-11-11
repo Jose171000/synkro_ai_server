@@ -18,6 +18,7 @@ import { VariantCompatService } from './variant-compat.service';
 import { RellenarRipleyDto } from './dto/rellenar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { RenombrarEjeDto } from './dto/renombrar-eje.dto';
+import { AplicarAjustesDto, SugerirAjustesDto } from './dto/ajustes-de-canal.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -166,6 +167,28 @@ export class ProductsController {
     const canales = String(marketplace ?? '').split(',').map((m) => m.trim()).filter(Boolean).slice(0, 8);
     // Una categoría indicada solo vale cuando se pide un único canal.
     return this.variantCompat.revisar(id, canales.map((m) => ({ marketplace: m, ...(canales.length === 1 && categoryId ? { categoryId } : {}) })), { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('groups/:id/channel-values/suggest')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'La IA propone a qué opción válida de un canal corresponde cada color, talla o tamaño que el canal no tiene en su lista',
+    description: 'Para los valores del grupo que no existen en la lista cerrada del canal (o que caerían en la misma opción), propone la opción válida más cercana mirando el nombre del producto y, si hace falta, la foto de la variante. Solo consulta: no cambia nada.',
+  })
+  suggestChannelValues(@Param('id') id: string, @Body() dto: SugerirAjustesDto, @Req() req) {
+    return this.variantCompat.sugerirAjustes(id, dto.marketplace, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('groups/:id/channel-values/apply')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'Guarda a qué opción de un canal corresponde cada valor confirmado',
+    description: 'Solo vale para ese canal: el color o la talla que escribió la persona no cambia en Synkro ni en los demás canales. Solo acepta opciones que existan en la lista del canal. No envía nada al canal.',
+  })
+  applyChannelValues(@Param('id') id: string, @Body() dto: AplicarAjustesDto, @Req() req) {
+    return this.variantCompat.aplicarAjustes(id, dto.marketplace, dto.cambios, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Patch('groups/:id')

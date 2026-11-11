@@ -278,6 +278,49 @@ export class ProductVisionService {
         }));
     }
 
+    /**
+     * Mira la foto de cada variante y elige, de la lista de un canal, la opción válida que mejor corresponde a su color (o talla) real.
+     * Se usa solo cuando el texto no alcanzó. Solo sugiere: la persona confirma. Nunca lanza; sin respuesta clara, esa variante vuelve con opción null.
+     */
+    async elegirOpcionesPorFoto(entrada: { producto: string; dato: string; opciones: string[]; items: { valor: string; imagen: string }[] }): Promise<{ valor: string; opcion: string | null; motivo: string }[]> {
+        const items = entrada.items.filter((i) => /^https?:\/\//i.test(i.imagen ?? '')).slice(0, 24);
+        if (!items.length || !entrada.opciones.length) return [];
+        try {
+            const respuesta = await this.openai.chat.completions.create({
+                model: process.env.VISION_MODEL || 'gpt-4o-mini',
+                response_format: { type: 'json_object' },
+                temperature: 0,
+                messages: [
+                    { role: 'system', content: `Eres un revisor de catálogo. Cada foto es una versión de un mismo producto («${entrada.producto}»). La persona escribió un valor para el dato «${entrada.dato}» que el canal de venta no tiene en su lista.
+Mira la foto, identifica el ${entrada.dato.toLowerCase()} real y elige UNA opción de la lista que mejor lo represente.
+Reglas estrictas:
+- La opción debe ser EXACTAMENTE una de la lista dada; nunca inventes una.
+- Si ninguna representa razonablemente lo que ves, devuelve null.
+- Si dos fotos son de tonos distintos y la lista tiene opciones distintas que los distinguen, usa opciones distintas.
+- "motivo": una frase corta en español.
+- Responde únicamente con un JSON válido.` },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: `Lista de opciones válidas: ${JSON.stringify(entrada.opciones)}\nHay ${items.length} foto(s) numeradas en orden. Valores que escribió la persona: ${items.map((i, n) => `${n + 1}=${i.valor}`).join('; ')}.\nDevuelve: { "fotos": [ { "foto": 1, "opcion": "…" o null, "motivo": "…" } ] }` },
+                            ...items.map((i) => ({ type: 'image_url' as const, image_url: { url: i.imagen, detail: 'low' as const } })),
+                        ],
+                    },
+                ],
+            });
+            const crudo = JSON.parse(respuesta.choices[0]?.message?.content || '{}');
+            const lista: any[] = Array.isArray(crudo?.fotos) ? crudo.fotos : [];
+            return items.map((i, n) => {
+                const f = lista.find((x) => Number(x?.foto) === n + 1);
+                const elegida = typeof f?.opcion === 'string' ? entrada.opciones.find((o) => normalizar(o) === normalizar(f.opcion)) ?? null : null;
+                return { valor: i.valor, opcion: elegida, motivo: typeof f?.motivo === 'string' ? f.motivo.slice(0, 160) : '' };
+            });
+        } catch (error: any) {
+            this.logger.warn(`No se pudieron elegir opciones mirando las fotos: ${error?.message}`);
+            return [];
+        }
+    }
+
     async analyze(imageUrls: string[], hint?: { name?: string; description?: string }): Promise<ProductVision | null> {
         const urls = (imageUrls ?? []).filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_IMAGES);
         if (!urls.length) return null;

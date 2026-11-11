@@ -428,6 +428,69 @@ Responde únicamente este JSON:
     }
   }
 
+  /**
+   * Para los valores de variante que un canal no tiene en su lista cerrada (un color, una talla, un tamaño): a qué opción VÁLIDA corresponde cada uno.
+   * Primero por texto (nombre del producto, valor y lista); lo que el texto no resuelve, y los valores que caerían en la misma opción,
+   * se resuelve mirando la foto de la variante. Solo sugiere: nunca inventa una opción fuera de la lista ni cambia nada.
+   */
+  public async sugerirOpcionesDeLista(entrada: {
+    canal: string; producto: string; dato: string; opciones: string[];
+    valores: { valor: string; imagen?: string | null; enConflicto?: boolean }[];
+  }): Promise<{ valor: string; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | null }[]> {
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9ñ]+/g, ' ').trim();
+    const enLista = (v: unknown) => (typeof v === 'string' ? entrada.opciones.find((o) => norm(o) === norm(v)) ?? null : null);
+    const salida = new Map<string, { valor: string; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | null }>();
+    for (const v of entrada.valores) salida.set(v.valor, { valor: v.valor, opcion: null, motivo: '', origen: null });
+    if (!entrada.valores.length || !entrada.opciones.length) return [...salida.values()];
+
+    // 1) Por texto: una sola consulta con todos los valores.
+    try {
+      const respuesta = await this.openai.chat.completions.create({
+        model: modeloDeepseek(),
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Eres un experto en catálogos de e-commerce. En ${entrada.canal} el dato «${entrada.dato}» solo admite las opciones de esta lista cerrada:
+${JSON.stringify(entrada.opciones)}
+
+Producto: ${entrada.producto}
+Valores que escribió la persona y que no están en la lista: ${JSON.stringify(entrada.valores.map((v) => v.valor))}
+
+Para cada valor elige la opción de la lista que mejor lo represente (por ejemplo un tono específico → su color básico más cercano).
+Reglas estrictas:
+- La opción debe ser EXACTAMENTE una de la lista; nunca inventes una.
+- Si ninguna lo representa razonablemente, devuelve null.
+- "motivo": una frase corta en español.
+Responde únicamente: { "resultados": [ { "valor": "…", "opcion": "…" o null, "motivo": "…" } ] }`,
+          },
+        ],
+      });
+      const crudo = JSON.parse(respuesta.choices[0]?.message?.content || '{}');
+      for (const r of Array.isArray(crudo?.resultados) ? crudo.resultados : []) {
+        const fila = entrada.valores.find((v) => norm(v.valor) === norm(String(r?.valor ?? '')));
+        const opcion = enLista(r?.opcion);
+        if (fila && opcion) salida.set(fila.valor, { valor: fila.valor, opcion, motivo: String(r?.motivo ?? '').slice(0, 160), origen: 'ia' });
+      }
+    } catch (error: any) {
+      console.warn('[AiService] No se pudieron sugerir opciones por texto:', error?.message);
+    }
+
+    // 2) Por foto: lo que el texto no resolvió y los valores que caerían en la misma opción que otro.
+    const porFoto = entrada.valores.filter((v) => v.imagen && (!salida.get(v.valor)?.opcion || v.enConflicto));
+    if (porFoto.length) {
+      const vistas = await this.vision.elegirOpcionesPorFoto({
+        producto: entrada.producto, dato: entrada.dato, opciones: entrada.opciones,
+        items: porFoto.map((v) => ({ valor: v.valor, imagen: v.imagen as string })),
+      });
+      for (const r of vistas) {
+        if (r.opcion) salida.set(r.valor, { valor: r.valor, opcion: r.opcion, motivo: r.motivo, origen: 'foto' });
+      }
+    }
+    return [...salida.values()];
+  }
+
   /** Elige, entre candidatas, la categoría de un marketplace que mejor le va a un producto. */
   public async elegirCategoria(marketplace: string, nombre: string, descripcion: string, candidatas: MarketplaceCategory[]): Promise<string | null> {
     if (!candidatas.length) return null;

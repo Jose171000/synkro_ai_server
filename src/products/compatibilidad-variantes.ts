@@ -29,6 +29,10 @@ export interface InfoVariantesDeCategoria {
     /** El canal acepta cualquier eje (sin depender de la categoría), hasta este máximo. */
     libre?: boolean;
     maxEjes?: number;
+    /** Ajustes que la persona ya confirmó para este canal: clase del dato (color, talla…) → valor normalizado → opción válida del canal. */
+    ajustes?: Record<string, Record<string, string>>;
+    /** La regla con la que el canal lleva un valor a su lista (por defecto la de Ripley). Debe ser la MISMA que usa al publicar. */
+    automatico?: (valor: string, opciones: string[]) => string | null | undefined;
 }
 
 export type PublicaComo = 'una' | 'separadas';
@@ -48,6 +52,8 @@ export interface ResultadoDeCompatibilidad {
     renombresSugeridos?: { eje: string; a: string }[];
     ejesQueFaltan: string[];
     valoresSinEquivalente: { eje: string; valores: string[] }[];
+    /** Valores distintos que el canal llevaría a la MISMA opción («Celeste» y «Turquesa» → «Azul»): dos variantes quedarían con el mismo dato. */
+    colisiones: { eje: string; atributo: string; opcion: string; valores: string[] }[];
     /** Frases para mostrar a la persona (en español). */
     avisos: string[];
     /**
@@ -80,7 +86,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const nombreDelCanal = NOMBRE_DE_CANAL[info.canal] ?? info.canal;
     const base: ResultadoDeCompatibilidad = {
         canal: info.canal, nombreDelCanal, categoryId: info.categoryId, ruta: info.ruta ?? null,
-        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesDisponibles: [], ejesQueFaltan: [], valoresSinEquivalente: [], avisos: [],
+        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesDisponibles: [], ejesQueFaltan: [], valoresSinEquivalente: [], colisiones: [], avisos: [],
     };
     const donde = info.ruta ? `La categoría «${info.ruta}» de ${nombreDelCanal}` : `La categoría elegida en ${nombreDelCanal}`;
     const separadas = (motivo: string): ResultadoDeCompatibilidad => ({
@@ -122,21 +128,38 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     // Datos de variante que la categoría exige y el producto no tiene como eje.
     const faltan = info.ejes.filter((a) => a.required && !usados.has(a.id)).map((a) => a.label);
 
-    // Valores que no existen en la lista del canal (un color que Ripley no tiene).
+    // Valores que no existen en la lista del canal (un color que Ripley no tiene) y valores distintos que caen en la misma opción.
+    // Un valor que la persona ya ajustó a una opción válida cuenta como resuelto.
     const sinEquivalente: { eje: string; valores: string[] }[] = [];
+    const colisiones: { eje: string; atributo: string; opcion: string; valores: string[] }[] = [];
+    const automatico = info.automatico ?? ((v: string, o: string[]) => ajustarAUnaLista(v, o));
     for (const par of mapeo) {
         const atributo = info.ejes.find((a) => a.id === par.atributo);
         if (!atributo?.options?.length) continue;
         const valores = ejesDelProducto.find((e) => e.name === par.eje)?.values ?? [];
-        const malos = valores.filter((v) => ajustarAUnaLista(v, atributo.options!) === null);
+        const guardados = info.ajustes?.[claseDeEje(par.eje)] ?? {};
+        const opcionDe = (v: string): string | null => {
+            const g = guardados[normalizar(v)];
+            const valida = g ? atributo.options!.find((o) => normalizar(o) === normalizar(g)) : undefined;
+            return valida ?? automatico(v, atributo.options!) ?? null;
+        };
+        const malos = valores.filter((v) => opcionDe(v) === null);
         if (malos.length) sinEquivalente.push({ eje: par.eje, valores: malos });
+        const porOpcion = new Map<string, string[]>();
+        for (const v of [...new Set(valores.map((x) => String(x).trim()).filter(Boolean))]) {
+            const o = opcionDe(v);
+            if (o !== null) porOpcion.set(o, [...(porOpcion.get(o) ?? []), v]);
+        }
+        for (const [opcion, vs] of porOpcion) if (vs.length > 1) colisiones.push({ eje: par.eje, atributo: par.atributo, opcion, valores: vs });
     }
 
     // Solo se ofrece renombrar cuando hay un eje que el canal NO acepta tal como está; si todo encaja, no hay nada que cambiar.
     const disponibles = noPermitidos.length ? info.ejes.filter((a) => !usados.has(a.id)).map((a) => String(a.label).replace(/\s*variant$/i, '').trim()).filter(Boolean) : [];
-    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesDisponibles: disponibles, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente };
+    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesDisponibles: disponibles, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente, colisiones };
     if (faltan.length) resultado.avisos.push(`${donde} también pide ${lista(faltan)} como dato de variante y el producto no tiene ese eje.`);
     for (const s of sinEquivalente) resultado.avisos.push(`En ${nombreDelCanal} no existen estos valores de «${s.eje}»: ${lista(s.valores)}. Se ajustarán al más cercano o habrá que cambiarlos.`);
+
+    for (const c of colisiones) resultado.avisos.push(`En ${nombreDelCanal} estos valores de «${c.eje}» quedarían como «${c.opcion}»: ${lista(c.valores)}. Dos variantes no deberían llevar la misma opción.`);
 
     if (noPermitidos.length) {
         return {

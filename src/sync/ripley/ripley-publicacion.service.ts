@@ -7,6 +7,7 @@ import { RipleyMarcasService } from './ripley-marcas.service';
 import { skuPermitidoParaRipley } from './ripley-oferta';
 import { armarCsv, columnasDeAtributos, decidirReenvio, EnvioARipley, filaDeRipley, MAX_NOMBRE, ProductoParaRipley, SituacionDeEnvio, validarProductoParaRipley } from './ripley-publicacion';
 import { ajustarAUnaLista } from '../../ai/ripley-atributos';
+import { unirAjustes, valorConAjuste } from '../../products/ajustes-de-canal';
 import { EjeSynkro, InfoVariantesDeCategoria, revisarCompatibilidad } from '../../products/compatibilidad-variantes';
 import { etiquetaDe } from '../../products/variantes';
 import { tituloDeVariante } from '../../products/titulos-de-variante';
@@ -96,7 +97,7 @@ export class RipleyPublicacionService {
                 const options = c.options ?? (c.listCode ? await this.catalogo.listaCompleta(c.listCode) : undefined);
                 ejesDeCanal.push({ id: c.name, label: c.label, required: c.required, ...(options?.length ? { options } : {}) });
             }
-            const info: InfoVariantesDeCategoria = { canal: 'ripley', categoryId, ruta, admite: ejesDeCanal.length > 0, ejes: ejesDeCanal };
+            const info: InfoVariantesDeCategoria = { canal: 'ripley', categoryId, ruta, admite: ejesDeCanal.length > 0, ejes: ejesDeCanal, ajustes: unirAjustes(familia.map((p) => p.aiAttributes as any), 'ripley') };
             const r = revisarCompatibilidad(ejes, info);
             publicaComo = r.publicaComo;
             avisosDeVariantes = r.avisos;
@@ -114,7 +115,10 @@ export class RipleyPublicacionService {
                 const valor = p.variantValues?.[par.eje];
                 const campo = campos.campos.find((c) => c.name === par.atributo);
                 const lista = campo?.options ?? (campo?.listCode ? await this.catalogo.listaCompleta(campo.listCode) : undefined);
-                const ajustado = valor && lista?.length ? ajustarAUnaLista(valor, lista) : (valor ?? null);
+                // Si la persona confirmó a qué opción de Ripley corresponde este valor (un color que su lista no tiene), ese ajuste manda.
+                const ajustado = valor && lista?.length
+                    ? (valorConAjuste({ canal: 'ripley', atributos: attrs, atributo: campo?.label ?? par.atributo, valor, opciones: lista, automatico: ajustarAUnaLista }) ?? null)
+                    : (valor ?? null);
                 if (ajustado) atributos[par.atributo] = ajustado; else delete atributos[par.atributo];
             }
 
