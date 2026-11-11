@@ -616,7 +616,9 @@ export class SyncController {
     async ripleySkusEnRipley(@Query('skus') skus: string, @Req() req) {
         const lista = [...new Set(String(skus ?? '').split(',').map((s) => s.trim()).filter(Boolean))].slice(0, 60);
         if (!lista.length) throw new BadRequestException('Indica al menos un SKU.');
-        return { consultados: lista.length, yaEnRipley: await this.ripleyPublicacion.yaEnRipley(scopeOf(req), lista) };
+        const r = await this.ripleyPublicacion.yaEnRipley(scopeOf(req), lista);
+        // `sinComprobar`: no se pudo saber (Ripley limitó las peticiones); no significa que no existan.
+        return { consultados: lista.length, ...r };
     }
 
     @Post('ripley/products/:id/link-offer')

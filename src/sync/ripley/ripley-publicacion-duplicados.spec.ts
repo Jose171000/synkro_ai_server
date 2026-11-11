@@ -27,6 +27,7 @@ function construir() {
     };
     const ecommerce: any = { authOf: jest.fn(() => ({ site: 'x', token: 'k' })) };
     const ripley: any = {
+        ofertaPorSku: jest.fn(async () => { throw new Error('Ripley no tiene una oferta con el SKU «X» en esta cuenta.'); }),
         importarProductosYOfertas: jest.fn(async () => ({ importId: 77, productImportId: 88 })),
         estadoDeImportacion: jest.fn(async () => ({ status: 'COMPLETE', lines_read: 1, lines_in_success: 1, lines_in_error: 0 })),
         estadoDeProductos: jest.fn(async () => ({ import_status: 'COMPLETE', transform_lines_read: 1, transform_lines_in_success: 1, transform_lines_in_error: 0 })),
@@ -141,14 +142,39 @@ describe('SKU que ya existen en Ripley (el envío los actualizaría)', () => {
         ripley.ofertaPorSku = jest.fn(async () => oferta);
         const v = await service.vistaPrevia(SCOPE, 'p1');
         expect(v.yaEnRipley).toEqual([{ sku: 'BP000007', offerId: 5803478, productSku: 'PMP20000884134-2', titulo: 'CANGURO EPIFANIA CASUAL' }]);
+        expect(v.sinComprobar).toEqual([]);
         expect(v.productos[0].avisos.join(' ')).toContain('ya está en Ripley');
     });
 
-    it('si el SKU no existe en Ripley (o Ripley no responde), no avisa nada', async () => {
+    it('si Ripley dice expresamente que el SKU no existe, queda libre', async () => {
         encender();
         const { service, ripley } = construir();
-        ripley.ofertaPorSku = jest.fn(async () => { throw new Error('Ripley no tiene una oferta con el SKU'); });
+        ripley.ofertaPorSku = jest.fn(async () => { throw new Error('Ripley no tiene una oferta con el SKU «BP000007» en esta cuenta.'); });
         const v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.yaEnRipley).toEqual([]);
+        expect(v.sinComprobar).toEqual([]);
+    });
+
+    it('si Ripley limita las peticiones, el SKU NO se da por libre: queda sin comprobar y el envío se rechaza', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn(async () => { throw new Error('Ripley limitó las peticiones. Inténtalo de nuevo en unos segundos.'); });
+        const v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.yaEnRipley).toEqual([]);
+        expect(v.sinComprobar).toEqual(['BP000007']);
+        expect(ripley.ofertaPorSku).toHaveBeenCalledTimes(3); // se reintentó antes de rendirse
+        await expect(service.publicar(SCOPE, 'p1', { confirmar: true, confirmarActualizacion: true })).rejects.toThrow('No se pudo comprobar');
+        expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+    });
+
+    it('un fallo pasajero se reintenta y, si luego responde, se usa su respuesta', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn()
+            .mockRejectedValueOnce(new Error('Ripley limitó las peticiones. Inténtalo de nuevo en unos segundos.'))
+            .mockRejectedValue(new Error('Ripley no tiene una oferta con el SKU «BP000007» en esta cuenta.'));
+        const v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.sinComprobar).toEqual([]);
         expect(v.yaEnRipley).toEqual([]);
     });
 

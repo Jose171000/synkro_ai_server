@@ -36,6 +36,7 @@ function construir(opts: { familia?: any[]; campos?: any[]; path?: string; marca
     };
     const ecommerce: any = { authOf: jest.fn(() => ({ site: 'x', token: 'k' })) };
     const ripley: any = {
+        ofertaPorSku: jest.fn(async () => { throw new Error('Ripley no tiene una oferta con el SKU «X» en esta cuenta.'); }),
         importarProductosYOfertas: jest.fn(async () => ({ importId: 77, productImportId: 88 })),
         estadoDeImportacion: jest.fn(async () => ({ status: 'COMPLETE', lines_read: 1, lines_in_success: 1, lines_in_error: 0 })),
         estadoDeProductos: jest.fn(async () => ({ import_status: 'COMPLETE', transform_lines_read: 1, transform_lines_in_success: 1, transform_lines_in_error: 0 })),

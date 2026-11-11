@@ -15,6 +15,8 @@ import { tituloDeVariante } from '../../products/titulos-de-variante';
 const publicacionEncendida = () => process.env.RIPLEY_PUBLISH_ENABLED === 'true';
 /** Tope de productos por envío: un piloto o una familia, nunca el catálogo entero de golpe. */
 const MAX_PRODUCTOS_POR_ENVIO = 50;
+/** Espera entre reintentos al consultar si un SKU ya existe en Ripley (su límite de peticiones es bajo). */
+const LIMITE_ESPERA_MS = process.env.NODE_ENV === 'test' ? 1 : 1200;
 
 export interface VistaPreviaDeRipley {
     categoria: { id: string; ruta: string } | null;
@@ -24,6 +26,8 @@ export interface VistaPreviaDeRipley {
     productos: { sku: string; nombre: string; precio: number | null; stock: number | null; errores: string[]; avisos: string[] }[];
     /** SKU que YA existen como oferta en Ripley: enviarlos actualizaría esas fichas en vez de crear nuevas. */
     yaEnRipley: { sku: string; offerId: string | number | null; productSku: string | null; titulo: string | null }[];
+    /** SKU para los que no se pudo comprobar si ya existen en Ripley (límite de peticiones, red): hay que reintentar antes de enviar. */
+    sinComprobar: string[];
     /** Problemas generales (sin categoría, demasiados productos…). */
     errores: string[];
     puedeEnviar: boolean;
@@ -56,7 +60,7 @@ export class RipleyPublicacionService {
 
     /** Lo que se enviaría, con sus problemas y el CSV. NO envía nada ni escribe en ningún sitio. */
     async vistaPrevia(scope: SyncScope, productId: string, opciones: { alGrupo?: boolean } = {}): Promise<VistaPreviaDeRipley> {
-        const base = { categoria: null, publicaComo: 'sola' as const, avisosDeVariantes: [] as string[], productos: [], yaEnRipley: [] as VistaPreviaDeRipley['yaEnRipley'], puedeEnviar: false, envioEncendido: publicacionEncendida(), skusNoPermitidos: [] as string[], columnas: 0, csv: '', bloqueo: null };
+        const base = { categoria: null, publicaComo: 'sola' as const, avisosDeVariantes: [] as string[], productos: [], yaEnRipley: [] as VistaPreviaDeRipley['yaEnRipley'], sinComprobar: [] as string[], puedeEnviar: false, envioEncendido: publicacionEncendida(), skusNoPermitidos: [] as string[], columnas: 0, csv: '', bloqueo: null };
         const familia: any[] = opciones.alGrupo ? await this.sync.familiaDe(scope, productId) : [await this.sync.findScopedProduct(scope, productId)];
         const grupo = familia.length > 1 ? (familia[0] as any).group ?? null : null;
 
@@ -139,7 +143,7 @@ export class RipleyPublicacionService {
         // la función tomaría por defecto la lista del envío de stock (RIPLEY_PUSH_SKUS, que puede ser «*») y abriría la publicación a todos.
         const skusNoPermitidos = familia.map((p) => p.sku).filter((sku) => !skuPermitidoParaRipley(sku, process.env.RIPLEY_PUBLISH_SKUS ?? ''));
         // ¿Alguno de estos SKU ya existe en Ripley? Entonces el envío actualizaría esa ficha (no crearía una nueva): se avisa antes.
-        const yaEnRipley = await this.yaEnRipley(scope, familia.map((p) => p.sku));
+        const { yaEnRipley, sinComprobar } = await this.yaEnRipley(scope, familia.map((p) => p.sku));
         for (const e of yaEnRipley) {
             productos.find((x) => x.sku === e.sku)?.avisos.push(`Este SKU ya está en Ripley (oferta ${e.offerId ?? '—'}${e.titulo ? ` · «${e.titulo}»` : ''}): enviarlo actualizaría esa ficha en vez de crear una nueva.`);
         }
@@ -149,6 +153,7 @@ export class RipleyPublicacionService {
             avisosDeVariantes,
             productos,
             yaEnRipley,
+            sinComprobar,
             errores: [],
             puedeEnviar: productos.every((x) => x.errores.length === 0),
             envioEncendido: publicacionEncendida(),
@@ -159,21 +164,32 @@ export class RipleyPublicacionService {
         };
     }
 
-    /** SKU de la lista que ya existen como oferta en Ripley. Solo consulta; si Ripley no responde, no inventa nada. */
-    async yaEnRipley(scope: SyncScope, skus: string[]): Promise<VistaPreviaDeRipley['yaEnRipley']> {
+    /**
+     * SKU de la lista que ya existen como oferta en Ripley. Solo consulta. «No existe» solo se afirma cuando Ripley lo dice
+     * expresamente; cualquier otro fallo (límite de peticiones, red caída) deja el SKU en `sinComprobar`, nunca como «libre».
+     */
+    async yaEnRipley(scope: SyncScope, skus: string[]): Promise<{ yaEnRipley: VistaPreviaDeRipley['yaEnRipley']; sinComprobar: string[] }> {
         let auth;
-        try { auth = this.ecommerce.authOf(await this.sync.resolveConnection(scope.storeId, 'ripley')); } catch { return []; }
-        const encontrados: VistaPreviaDeRipley['yaEnRipley'] = [];
-        for (let i = 0; i < skus.length; i += 5) {
-            const lote = await Promise.all(skus.slice(i, i + 5).map(async (sku) => {
+        try { auth = this.ecommerce.authOf(await this.sync.resolveConnection(scope.storeId, 'ripley')); } catch { return { yaEnRipley: [], sinComprobar: [...skus] }; }
+        const esperar = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+        const yaEnRipley: VistaPreviaDeRipley['yaEnRipley'] = [];
+        const sinComprobar: string[] = [];
+        for (const sku of skus) {
+            let resuelto = false;
+            for (let intento = 0; intento < 3 && !resuelto; intento++) {
                 try {
                     const o = await this.ripley.ofertaPorSku(auth, sku);
-                    return { sku, offerId: o?.offer_id ?? null, productSku: o?.product_sku ?? null, titulo: o?.product_title ?? null };
-                } catch { return null; }
-            }));
-            encontrados.push(...lote.filter((x): x is NonNullable<typeof x> => !!x));
+                    yaEnRipley.push({ sku, offerId: o?.offer_id ?? null, productSku: o?.product_sku ?? null, titulo: o?.product_title ?? null });
+                    resuelto = true;
+                } catch (e: any) {
+                    const mensaje = String(e?.message ?? '');
+                    if (/no tiene una oferta/i.test(mensaje)) resuelto = true; // Ripley dijo expresamente que no existe
+                    else if (intento < 2) await esperar(LIMITE_ESPERA_MS * (intento + 1)); // límite de peticiones o fallo pasajero: se reintenta
+                }
+            }
+            if (!resuelto) sinComprobar.push(sku);
         }
-        return encontrados;
+        return { yaEnRipley, sinComprobar };
     }
 
     /** El primer producto de la lista que ya se envió a Ripley y no se puede reenviar (pendiente o ya procesado), o null. */
@@ -222,6 +238,10 @@ export class RipleyPublicacionService {
         if (!vista.envioEncendido) throw new BadRequestException('La publicación en Ripley está apagada en el servidor (RIPLEY_PUBLISH_ENABLED). Revisa el envío con la vista previa; para enviar hay que encenderla.');
         if (vista.errores.length) throw new BadRequestException(vista.errores.join(' '));
         if (vista.skusNoPermitidos.length) throw new BadRequestException(`Estos SKU no están en la lista de publicación permitida (RIPLEY_PUBLISH_SKUS): ${vista.skusNoPermitidos.join(', ')}.`);
+        // Si no se pudo comprobar si ya existen (Ripley limitó las peticiones…), no se envía a ciegas: podría duplicar o pisar fichas.
+        if (vista.sinComprobar.length) {
+            throw new BadRequestException(`No se pudo comprobar si estos SKU ya existen en Ripley (${vista.sinComprobar.slice(0, 5).join(', ')}${vista.sinComprobar.length > 5 ? '…' : ''}). Vuelve a revisar el envío en unos segundos.`);
+        }
         // SKU que ya están en Ripley: el envío actualizaría esas fichas existentes. Hace falta una confirmación aparte, expresa.
         if (vista.yaEnRipley.length && opciones.confirmarActualizacion !== true) {
             throw new BadRequestException(`Estos SKU ya existen en Ripley (${vista.yaEnRipley.map((e) => e.sku).join(', ')}): enviarlos actualizaría esas fichas en vez de crear nuevas. Si es lo que quieres, confirma la actualización.`);
