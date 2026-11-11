@@ -44,6 +44,8 @@ export interface ResultadoDeCompatibilidad {
     ejesNoPermitidos: string[];
     /** Datos de variante del canal que ningún eje del producto está usando (con el nombre limpio, sin «variant»): a qué se podría renombrar un eje no aceptado. */
     ejesDisponibles: string[];
+    /** Renombres que la IA recomienda (uno por eje no aceptado): la persona solo confirma. Nada se cambia solo. */
+    renombresSugeridos?: { eje: string; a: string }[];
     ejesQueFaltan: string[];
     valoresSinEquivalente: { eje: string; valores: string[] }[];
     /** Frases para mostrar a la persona (en español). */

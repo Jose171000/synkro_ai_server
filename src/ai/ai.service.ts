@@ -675,6 +675,40 @@ Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde s
   }
 
   /**
+   * Un canal no acepta un eje con el nombre que tiene («Talla») y ofrece otros datos de variante («Color», «Tamaño cama»). Elige a cuál de
+   * esos datos corresponde el eje mirando SUS VALORES («2 plazas», «King» son tamaños de cama). Devuelve el nombre exacto de una de las
+   * opciones, o null si no hay certeza: nunca inventa un nombre fuera de la lista.
+   */
+  public async sugerirRenombreDeEje(entrada: { producto: string; eje: string; valores: string[]; opciones: string[] }): Promise<string | null> {
+    const opciones = [...new Set(entrada.opciones.map((o) => String(o ?? '').trim()).filter(Boolean))];
+    if (!opciones.length || !entrada.valores.length) return null;
+    try {
+      const r = await this.openai.chat.completions.create({
+        model: modeloDeepseek(),
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
+          {
+            role: 'user',
+            content: `Un producto de e-commerce tiene una variación llamada «${entrada.eje}» con estos valores: ${entrada.valores.slice(0, 12).map((v) => `«${v}»`).join(', ')}.
+Producto: ${entrada.producto.slice(0, 200)}.
+El marketplace no acepta el nombre «${entrada.eje}» y ofrece estos datos de variante: ${opciones.map((o) => `«${o}»`).join(', ')}.
+Elige a CUÁL de ellos corresponde la variación, según lo que significan los VALORES (no el nombre). Si ninguno corresponde con certeza, devuelve null. No inventes un nombre fuera de la lista.
+Responde solo un JSON: { "opcion": "<uno de la lista o null>", "motivo": "…" }`,
+          },
+        ],
+      });
+      const j = JSON.parse(r.choices[0]?.message?.content || '{}');
+      const elegida = String(j.opcion ?? '').trim().toLowerCase();
+      return opciones.find((o) => o.toLowerCase() === elegida) ?? null;
+    } catch (error: any) {
+      console.warn(`[AI] No se pudo sugerir el nombre del eje: ${error?.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Frases cortas, de lo que ES el producto (sin marca ni color), con las que buscar su categoría en Mercado Libre cuando
    * el título solo no la encuentra: «desmenuzador de pollo» → «utensilio para desmenuzar carne», «pinzas de cocina»…
    */

@@ -104,3 +104,32 @@ describe('compatibilidad de variantes por canal', () => {
         expect(r.map((x) => x.canal)).toEqual(['ripley']);
     });
 });
+
+describe('renombre recomendado de un eje que el canal no acepta', () => {
+    const falabella = (sugiere: string | null, producto = 'Duvet hotelero') => {
+        const { service, sync, ai } = construir({ guardadas: { falabella_category_id: 'F1' } });
+        sync.falabellaCategoryVariants = jest.fn(async () => ({
+            admiteVariantes: true, porTallaYColor: false,
+            camposDeVariacion: [{ name: 'ColorVariant', label: 'Color variant', required: false }, { name: 'TamanoCamaVariant', label: 'Tamaño cama variant', required: false }],
+        }));
+        ai.sugerirRenombreDeEje = jest.fn(async () => sugiere);
+        (service as any).grupos.obtener = jest.fn(async () => ({ name: producto, axes: [{ name: 'Talla', values: ['2 plazas', 'King'] }] }));
+        return { service, ai };
+    };
+
+    it('recomienda el dato del canal al que corresponde el eje (la IA lo elige por sus valores) y no cambia nada', async () => {
+        const { service, ai } = falabella('Tamaño cama');
+        const [r] = await service.revisar('g-duvet', [{ marketplace: 'falabella' }], AMBITO);
+        expect(r.publicaComo).toBe('separadas');
+        expect(r.ejesDisponibles).toEqual(['Color', 'Tamaño cama']);
+        expect(r.renombresSugeridos).toEqual([{ eje: 'Talla', a: 'Tamaño cama' }]);
+        expect(ai.sugerirRenombreDeEje).toHaveBeenCalledWith({ producto: 'Duvet hotelero', eje: 'Talla', valores: ['2 plazas', 'King'], opciones: ['Color', 'Tamaño cama'] });
+    });
+
+    it('si la IA no está segura, no recomienda nada (la pantalla deja elegir de la lista)', async () => {
+        const { service } = falabella(null, 'Otro duvet sin certeza');
+        const [r] = await service.revisar('g-duvet2', [{ marketplace: 'falabella' }], AMBITO);
+        expect(r.renombresSugeridos).toEqual([]);
+        expect(r.ejesDisponibles).toEqual(['Color', 'Tamaño cama']);
+    });
+});

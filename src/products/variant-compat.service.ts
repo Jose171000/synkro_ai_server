@@ -17,6 +17,10 @@ const MAX_VERIFICACIONES = 4;
 /** Shopify admite hasta 3 opciones de variante por producto. */
 const MAX_EJES_SHOPIFY = 3;
 
+/** Recomendaciones de renombre ya calculadas (la pantalla vuelve a pedir la revisión): no se repite la consulta a la IA durante una hora. */
+const CACHE_DE_RENOMBRES = new Map<string, { a: string | null; hasta: number }>();
+const UNA_HORA = 3600_000;
+
 export interface PedidoDeCompatibilidad { marketplace: string; categoryId?: string }
 
 /**
@@ -58,7 +62,32 @@ export class VariantCompatService {
                     return null;
                 });
             }
+            if (r.ejesNoPermitidos.length && r.ejesDisponibles.length) r.renombresSugeridos = await this.sugerirRenombres(vista.name, vista.axes as EjeSynkro[], r);
             salida.push(r);
+        }
+        return salida;
+    }
+
+    /**
+     * Para cada eje que el canal no acepta, a qué dato libre del canal corresponde (la IA mira los valores). Solo recomienda; la persona confirma.
+     * Si la IA no está segura o falla, no recomienda nada y la pantalla deja elegir de la lista.
+     */
+    private async sugerirRenombres(producto: string, ejes: EjeSynkro[], r: ResultadoDeCompatibilidad): Promise<{ eje: string; a: string }[]> {
+        const salida: { eje: string; a: string }[] = [];
+        const usadas = new Set<string>();
+        for (const nombre of r.ejesNoPermitidos) {
+            const eje = ejes.find((e) => e.name === nombre);
+            const opciones = r.ejesDisponibles.filter((o) => !usadas.has(o.toLowerCase()));
+            if (!eje || !opciones.length) continue;
+            const clave = JSON.stringify([producto, nombre, eje.values, opciones]);
+            let a: string | null;
+            const guardada = CACHE_DE_RENOMBRES.get(clave);
+            if (guardada && guardada.hasta > Date.now()) a = guardada.a;
+            else {
+                a = await Promise.resolve(this.ai.sugerirRenombreDeEje({ producto, eje: nombre, valores: eje.values, opciones })).catch(() => null);
+                CACHE_DE_RENOMBRES.set(clave, { a, hasta: Date.now() + UNA_HORA });
+            }
+            if (a) { salida.push({ eje: nombre, a }); usadas.add(a.toLowerCase()); }
         }
         return salida;
     }
