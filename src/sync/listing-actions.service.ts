@@ -302,7 +302,11 @@ export class ListingActionsService {
         await this.ecommerce.accionSobreOfertaDeRipley(enlace, accion);
         this.marcar(enlace, accion);
         if (accion === 'pause') enlace.lastStockSynced = 0;
-        else if (accion === 'resume') enlace.lastStockSynced = Math.max(0, Number(enlace.product?.stock) || 0);
+        else if (accion === 'resume') {
+            enlace.lastStockSynced = Math.max(0, Number(enlace.product?.stock) || 0);
+            // Reanudar devuelve el stock real: sin stock, la oferta sigue inactiva en Ripley, así que no se anota como publicada.
+            if (enlace.lastStockSynced === 0) enlace.syncStatus = 'paused';
+        }
         await this.listingLinkRepository.save(enlace);
     }
 

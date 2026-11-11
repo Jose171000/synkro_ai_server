@@ -264,6 +264,14 @@ describe('ListingActionsService · Ripley', () => {
         expect(l.lastStockSynced).toBe(4);
     });
 
+    it('reanudar un producto sin stock no lo anota como publicado: la oferta sigue inactiva en Ripley', async () => {
+        const l = delRipley({ syncStatus: 'paused', pausedByUser: true, lastStockSynced: 0, product: { id: 'p1', sku: 'BP000007', stock: 0 } });
+        const { servicio } = armar([l]);
+        await servicio.ejecutar(ambito, 'p1', 'resume');
+        expect(l.pausedByUser).toBe(false);
+        expect(l.syncStatus).toBe('paused');
+    });
+
     it('quitar borra la oferta y la publicación queda como quitada', async () => {
         const l = delRipley();
         const { servicio, ecommerce } = armar([l]);
