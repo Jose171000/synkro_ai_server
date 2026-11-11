@@ -850,6 +850,25 @@ export class SyncController {
         return this.listingActions.ejecutar(scopeOf(req), id, action, dto.linkIds);
     }
 
+    @Post('products/:id/channels-group/:action')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Pausa, reanuda o quita TODAS las variantes de un producto en un canal',
+        description: 'action = pause | resume | remove. El id puede ser el de cualquier variante del grupo. Con connectionId actúa solo en esa cuenta; sin él, en todas. Quitar exige confirm: true.',
+    })
+    async channelActionGroup(@Param('id') id: string, @Param('action') action: string, @Body() dto: ChannelActionDto & { connectionId?: string }, @Req() req) {
+        if (action !== 'pause' && action !== 'resume' && action !== 'remove') {
+            throw new BadRequestException('La acción debe ser pause, resume o remove.');
+        }
+        if (action === 'remove' && dto.confirm !== true) {
+            throw new BadRequestException('Quitar un producto de un canal necesita confirmación expresa (confirm: true).');
+        }
+        return this.listingActions.ejecutarGrupo(scopeOf(req), id, action, (dto as any).connectionId);
+    }
+
     @Patch('products/:id/promo')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

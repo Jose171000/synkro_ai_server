@@ -197,3 +197,13 @@ describe('RipleyApiService.setInventory', () => {
         expect(post).not.toHaveBeenCalled();
     });
 });
+
+describe('armarOfertaParaBorrar', () => {
+    const { armarOfertaParaBorrar } = require('./ripley-oferta');
+    const actual = { shop_sku: '23090102', state_code: '11', price: 89.9, quantity: 4, offer_id: 10 };
+
+    it('es la oferta de hoy marcada para borrar (OF24: update_delete = delete)', () => {
+        const o = armarOfertaParaBorrar(actual);
+        expect(o).toMatchObject({ shop_sku: '23090102', update_delete: 'delete', price: 89.9, quantity: 4 });
+    });
+});

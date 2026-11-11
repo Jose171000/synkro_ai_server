@@ -9,7 +9,7 @@ import {
     ChannelOrdersQuery,
     ChannelOrdersResult,
 } from '../channels/channel-types';
-import { armarOfertaParaEnviar } from './ripley-oferta';
+import { armarOfertaParaBorrar, armarOfertaParaEnviar } from './ripley-oferta';
 import { motivosDelReporte } from './ripley-publicacion';
 import type { AtributoRipley, JerarquiaRipley, ListaRipley } from './ripley-categorias';
 import { filaDeOfertaRipley, fotosDeRespuestaP11, normalizarClaveDeRipley, normalizarHostDeRipley, normalizarPedidoRipley } from './ripley-mapping';
@@ -433,6 +433,33 @@ export class RipleyApiService implements ChannelClient {
      * cambios (OF24 reemplaza la oferta entera) y comprueba cómo terminó la importación. Si algo no cuadra, lanza y no envía.
      * Quien llama (EcommerceSyncService) ya comprobó el interruptor y la lista de SKU permitidos.
      */
+    /**
+     * QUITA una oferta de Ripley (OF24 con update_delete = delete). El producto del catálogo no se toca. Lee la oferta enlazada, comprueba
+     * que es la misma, la envía marcada para borrar y comprueba cómo terminó la importación. Quien llama ya comprobó SKU permitido y confirmación.
+     */
+    async quitarOferta(auth: ChannelAuth, target: { externalId: string; sku?: string }): Promise<void> {
+        const sku = target.sku;
+        if (!sku) throw new BadRequestException('Falta el SKU para quitar la oferta de Ripley.');
+        const actual = await this.ofertaPorSku(auth, sku);
+        if (target.externalId && String(actual.offer_id) !== String(target.externalId)) {
+            throw new BadRequestException(`El SKU «${sku}» ahora apunta a otra oferta de Ripley que la enlazada. No se quitó nada.`);
+        }
+        let oferta: Record<string, any>;
+        try { oferta = armarOfertaParaBorrar(actual); }
+        catch (error: any) { throw new BadRequestException(error?.message ?? 'No se pudo preparar la baja de la oferta en Ripley.'); }
+        const r = await this.post<any>(auth, '/api/offers', { offers: [oferta] });
+        const importId = r?.import_id;
+        if (importId === undefined || importId === null) throw new BadRequestException('Ripley recibió el pedido pero no dio el número de importación.');
+        this.logger.log(`Ripley ${sku}: oferta ${actual.offer_id} enviada para quitar (importación ${importId}).`);
+        await new Promise((resolve) => setTimeout(resolve, 8000));
+        let estado: any;
+        try { estado = await this.estadoDeImportacion(auth, importId); } catch { return; }
+        if (estado?.status === 'FAILED' || Number(estado?.lines_in_error) > 0) {
+            const detalle = estado?.has_error_report ? await this.erroresDeImportacion(auth, importId) : '';
+            throw new BadRequestException(`Ripley rechazó quitar la oferta de ${sku} (importación ${importId})${detalle ? `: ${detalle}` : ''}.`);
+        }
+    }
+
     async setInventory(
         auth: ChannelAuth,
         target: { externalId: string; variationId: string | null; sku?: string },

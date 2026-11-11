@@ -99,6 +99,7 @@ const TABLA: Record<string, string> = {
     'Sync POST /sync/channels/verify': 'canales.conectar',
     'Sync POST /sync/mercadolibre/duplicates/:action': 'canales.conectar',
     'Sync POST /sync/products/:id/channels/:action': 'canales.publicar',
+    'Sync POST /sync/products/:id/channels-group/:action': 'canales.publicar',
     'Sync PATCH /sync/products/:id/promo': 'inventario.editar',
     'Sync PATCH /sync/products/:id/web-price': 'inventario.editar',
     'Sync GET /sync/change-requests': 'canales.ver',

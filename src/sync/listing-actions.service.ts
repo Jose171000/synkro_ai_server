@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { ListingLink } from './entities/listing-link.entity';
 import { MeliApiService } from './meli/meli-api.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
+import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { SyncScope, SyncService } from './sync.service';
 import { detectarDuplicados, elegirDuplicadasAfectables } from './meli/duplicados-meli';
 import { filasDeItemMeli } from './meli/meli-listings';
@@ -35,7 +36,8 @@ const ESTADOS_QUE_ADMITEN: Record<AccionDeCanal, ListingLink['syncStatus'][]> = 
  *
  * Mercado Libre: pausa y reactivación con el estado de la publicación; quitar la cierra (definitivo).
  * Falabella: pausar es dejar el stock en 0 (la ficha sigue ahí, sin poder venderse); reanudar vuelve a enviar el stock
- * real; quitar da de baja la ficha (ProductRemove). Los demás canales aún no se pueden controlar desde aquí y se avisa.
+ * real; quitar da de baja la ficha (ProductRemove). Ripley: pausar deja el stock de la oferta en 0, reanudar lo restaura y quitar borra
+ * la oferta (el producto sigue en su catálogo). Los demás canales aún no se pueden controlar desde aquí y se avisa.
  */
 @Injectable()
 export class ListingActionsService {
@@ -46,6 +48,7 @@ export class ListingActionsService {
         private readonly sync: SyncService,
         private readonly meliApi: MeliApiService,
         private readonly falabellaApi: FalabellaApiService,
+        @Optional() private readonly ecommerce?: EcommerceSyncService,
     ) { }
 
     /**
@@ -63,7 +66,26 @@ export class ListingActionsService {
             },
             relations: { product: true, connection: true },
         });
+        return this.aplicarAEnlaces(enlaces, accion);
+    }
 
+    /**
+     * Lo mismo para TODAS las variantes de un producto con variantes en un canal (una cuenta): pausar, reanudar o quitar el producto completo de una
+     * vez. Se pide con el id de cualquiera de sus variantes; sin `connectionId` actúa en todas las cuentas donde estén publicadas.
+     */
+    async ejecutarGrupo(scope: SyncScope, productId: string, accion: AccionDeCanal, connectionId?: string): Promise<{ results: ResultadoDeCanal[]; message: string }> {
+        const familia = await this.sync.familiaDe(scope, productId);
+        const enlaces = await this.listingLinkRepository.find({
+            where: {
+                product: { id: In(familia.map((p) => p.id)) },
+                connection: { store: { id: scope.storeId }, ...(connectionId ? { id: connectionId } : {}) },
+            },
+            relations: { product: true, connection: true },
+        });
+        return this.aplicarAEnlaces(enlaces, accion);
+    }
+
+    private async aplicarAEnlaces(enlaces: ListingLink[], accion: AccionDeCanal): Promise<{ results: ResultadoDeCanal[]; message: string }> {
         const resultados: ResultadoDeCanal[] = [];
         let aplicables = 0;
         for (const enlace of enlaces) {
@@ -207,6 +229,7 @@ export class ListingActionsService {
             if (!enlace.connection) throw new Error('La cuenta del canal está desconectada.');
             if (enlace.marketplace === 'mercadolibre') await this.enMercadoLibre(enlace, accion);
             else if (enlace.marketplace === 'falabella') await this.enFalabella(enlace, accion);
+            else if (enlace.marketplace === 'ripley') await this.enRipley(enlace, accion);
             else return { ...base, ok: false, message: 'Este canal todavía no se puede controlar desde Synkro.' };
             return { ...base, ok: true, message: 'Listo' };
         } catch (error: any) {
@@ -270,6 +293,17 @@ export class ListingActionsService {
         await this.listingLinkRepository.save(enlace);
 
         if (accion === 'resume') await this.sync.pushInventoryToFalabella(enlace.product.id, enlace.connection!.id);
+    }
+
+    // ── Ripley ────────────────────────────────────────────────────
+
+    private async enRipley(enlace: ListingLink, accion: AccionDeCanal): Promise<void> {
+        if (!this.ecommerce) throw new Error('Ripley no está disponible en este momento.');
+        await this.ecommerce.accionSobreOfertaDeRipley(enlace, accion);
+        this.marcar(enlace, accion);
+        if (accion === 'pause') enlace.lastStockSynced = 0;
+        else if (accion === 'resume') enlace.lastStockSynced = Math.max(0, Number(enlace.product?.stock) || 0);
+        await this.listingLinkRepository.save(enlace);
     }
 
     private async duenoDeLaCuenta(enlace: ListingLink): Promise<string> {

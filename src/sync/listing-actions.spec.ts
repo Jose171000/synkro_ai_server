@@ -233,3 +233,85 @@ describe('quitar una publicación que el canal todavía está revisando', () => 
         expect(e.syncStatus).toBe('removed');
     });
 });
+
+describe('ListingActionsService · Ripley', () => {
+    const delRipley = (over: any = {}) => enlace({ marketplace: 'ripley', externalId: '10407700', product: { id: 'p1', sku: 'BP000007', stock: 4 }, ...over });
+    const armar = (enlaces: any[], fallo?: string) => {
+        const base = construir(enlaces);
+        const ecommerce: any = { accionSobreOfertaDeRipley: jest.fn(async () => { if (fallo) throw new BadRequestException(fallo); }) };
+        const servicio = new ListingActionsService((base as any).repo, (base as any).sync, (base as any).meli, (base as any).fala, ecommerce);
+        return { servicio, ecommerce };
+    };
+
+    it('pausar deja la oferta con stock 0 y queda pausada por la persona', async () => {
+        const l = delRipley();
+        const { servicio, ecommerce } = armar([l]);
+        const r = await servicio.ejecutar(ambito, 'p1', 'pause');
+        expect(ecommerce.accionSobreOfertaDeRipley).toHaveBeenCalledWith(l, 'pause');
+        expect(l.syncStatus).toBe('paused');
+        expect(l.pausedByUser).toBe(true);
+        expect(l.lastStockSynced).toBe(0);
+        expect(r.results[0].ok).toBe(true);
+    });
+
+    it('reanudar restaura el stock real y quita la marca de pausa', async () => {
+        const l = delRipley({ syncStatus: 'paused', pausedByUser: true, lastStockSynced: 0 });
+        const { servicio, ecommerce } = armar([l]);
+        await servicio.ejecutar(ambito, 'p1', 'resume');
+        expect(ecommerce.accionSobreOfertaDeRipley).toHaveBeenCalledWith(l, 'resume');
+        expect(l.syncStatus).toBe('published');
+        expect(l.pausedByUser).toBe(false);
+        expect(l.lastStockSynced).toBe(4);
+    });
+
+    it('quitar borra la oferta y la publicación queda como quitada', async () => {
+        const l = delRipley();
+        const { servicio, ecommerce } = armar([l]);
+        await servicio.ejecutar(ambito, 'p1', 'remove');
+        expect(ecommerce.accionSobreOfertaDeRipley).toHaveBeenCalledWith(l, 'remove');
+        expect(l.syncStatus).toBe('removed');
+    });
+
+    it('si Ripley o el SKU no lo permiten, no se cambia nada en Synkro y se dice por qué', async () => {
+        const l = delRipley();
+        const { servicio } = armar([l], 'El SKU BP000007 todavía no está habilitado para controlarlo desde Synkro en Ripley (piloto).');
+        const r = await servicio.ejecutar(ambito, 'p1', 'pause');
+        expect(r.results[0].ok).toBe(false);
+        expect(r.results[0].message).toContain('no está habilitado');
+        expect(l.syncStatus).toBe('published');
+        expect(l.pausedByUser).toBe(false);
+    });
+});
+
+describe('ListingActionsService · todas las variantes', () => {
+    const variante = (id: string, over: any = {}) => enlace({ id, marketplace: 'ripley', externalId: 'O-' + id, product: { id: 'v-' + id, sku: 'SKU-' + id, stock: 3 }, ...over });
+    const armar = (enlaces: any[]) => {
+        const base: any = construir(enlaces);
+        base.sync.familiaDe = jest.fn(async () => [{ id: 'v-a' }, { id: 'v-b' }, { id: 'v-c' }]);
+        base.repo.find = jest.fn(async () => enlaces);
+        const ecommerce: any = { accionSobreOfertaDeRipley: jest.fn(async () => undefined) };
+        return { servicio: new ListingActionsService(base.repo, base.sync, base.meli, base.fala, ecommerce), ecommerce, repo: base.repo, sync: base.sync };
+    };
+
+    it('pausa de una vez todas las variantes del producto en el canal', async () => {
+        const ls = [variante('a'), variante('b'), variante('c')];
+        const { servicio, ecommerce, repo } = armar(ls);
+        const r = await servicio.ejecutarGrupo(ambito, 'v-a', 'pause', 'c-a');
+        expect(ecommerce.accionSobreOfertaDeRipley).toHaveBeenCalledTimes(3);
+        expect(ls.every((l) => l.syncStatus === 'paused' && l.pausedByUser)).toBe(true);
+        expect(r.results).toHaveLength(3);
+        // busca entre las variantes del grupo y solo en esa cuenta
+        const donde = repo.find.mock.calls[0][0].where;
+        expect(donde.connection.id).toBe('c-a');
+    });
+
+    it('solo toca las variantes que admiten la acción y avisa de las que fallan sin tumbar a las demás', async () => {
+        const ls = [variante('a'), variante('b', { syncStatus: 'paused', pausedByUser: true }), variante('c')];
+        const { servicio, ecommerce } = armar(ls);
+        ecommerce.accionSobreOfertaDeRipley.mockImplementationOnce(async () => { throw new BadRequestException('Ripley no respondió'); });
+        const r = await servicio.ejecutarGrupo(ambito, 'v-a', 'pause');
+        expect(r.results).toHaveLength(2); // la ya pausada se omite
+        expect(r.results.filter((x) => x.ok)).toHaveLength(1);
+        expect(r.message).toContain('Ripley no respondió');
+    });
+});

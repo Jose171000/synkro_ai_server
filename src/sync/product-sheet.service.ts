@@ -22,6 +22,9 @@ const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
 const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley'];
 
 export interface SheetChannel {
+    /** La publicación (para pausarla, reanudarla o quitarla) y si la pausó la persona (no es lo mismo que «sin stock»). */
+    linkId: string;
+    pausedByUser: boolean;
     marketplace: string;
     connectionId: string;
     account: string;
@@ -109,6 +112,8 @@ export class ProductSheetService {
                 stock: { synkro: product.stock, channel: enlace.lastStockSynced ?? null },
             });
             const base = {
+                linkId: enlace.id,
+                pausedByUser: !!enlace.pausedByUser,
                 marketplace: enlace.marketplace,
                 connectionId: cuenta.id,
                 account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,

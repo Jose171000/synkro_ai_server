@@ -13,4 +13,9 @@ export class ChannelActionDto {
     @IsOptional()
     @IsBoolean()
     confirm?: boolean;
+
+    @ApiPropertyOptional({ description: 'Solo con todas las variantes: la cuenta del canal donde actuar (sin ella, todas las cuentas).' })
+    @IsOptional()
+    @IsUUID()
+    connectionId?: string;
 }

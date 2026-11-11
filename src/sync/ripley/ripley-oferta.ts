@@ -146,6 +146,15 @@ export function armarOfertaParaEnviar(actual: any, cambios: CambiosDeOferta): Re
     });
 }
 
+/**
+ * La oferta tal como está hoy, marcada para BORRAR (OF24: update_delete = delete). Solo se quita la oferta de la tienda; el producto
+ * sigue en el catálogo de Ripley y se puede volver a ofertar. Pasa por las mismas comprobaciones que un cambio de stock.
+ */
+export function armarOfertaParaBorrar(actual: any): Record<string, any> {
+    const oferta = armarOfertaParaEnviar(actual, { stock: null });
+    return { ...oferta, update_delete: 'delete' };
+}
+
 /** Qué cambiaría entre la oferta actual y la que se enviaría (solo precio y stock; el resto debe quedar igual). */
 export function resumenDeCambios(actual: any, enviar: Record<string, any>) {
     return {

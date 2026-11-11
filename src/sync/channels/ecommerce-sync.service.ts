@@ -543,6 +543,26 @@ export class EcommerceSyncService implements OnModuleInit {
         await this.links.save(link);
     }
 
+    /**
+     * Pausar, reanudar o quitar UNA oferta de Ripley desde Synkro. Pausar deja el stock en 0 (la oferta queda inactiva); reanudar vuelve a
+     * mandar el stock real; quitar borra la oferta (el producto sigue en el catálogo de Ripley). Solo para SKU habilitados (RIPLEY_PUSH_SKUS).
+     */
+    async accionSobreOfertaDeRipley(enlace: ListingLink, accion: 'pause' | 'resume' | 'remove'): Promise<void> {
+        const product = enlace.product;
+        if (!product || !enlace.connection) throw new BadRequestException('Falta el producto o la cuenta de Ripley.');
+        if (!skuPermitidoParaRipley(product.sku)) {
+            throw new BadRequestException(`El SKU ${product.sku} todavía no está habilitado para controlarlo desde Synkro en Ripley (piloto).`);
+        }
+        if (!enlace.externalId) throw new BadRequestException('Esta publicación todavía no tiene su oferta enlazada en Ripley.');
+        const connection = await this.sync.getValidConnectionById(enlace.connection.id);
+        const auth = this.authOf(connection);
+        const cliente = this.clientOf('ripley') as RipleyApiService;
+        const destino = { externalId: enlace.externalId, variationId: null, sku: product.sku };
+        if (accion === 'pause') await cliente.setInventory(auth, destino, { stock: 0 });
+        else if (accion === 'resume') await cliente.setInventory(auth, destino, { stock: Math.max(0, Number(product.stock) || 0) });
+        else await cliente.quitarOferta(auth, destino);
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Ventas
     // ─────────────────────────────────────────────────────────────
