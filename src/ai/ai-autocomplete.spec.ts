@@ -133,11 +133,11 @@ describe('medidas del paquete y modo masivo', () => {
         expect(r.packageEstimate).toEqual({ width: 30, length: 40, height: 10, weight: 2, fromClient: false });
     });
 
-    it('en modo normal no estima atributos y sin Falabella no calcula el paquete', async () => {
+    it('en modo normal no estima atributos, pero el paquete se estima siempre (no solo para Falabella)', async () => {
         const { service, prompts } = construir();
         const r = await service.generateProductContent({ name: 'Sábanas bamboo queen', description: 'sábanas', targetMarketplaces: ['mercadolibre'] });
         expect(prompts.some((p) => p.includes('ESTIMA el valor más probable'))).toBe(false);
-        expect(r.packageEstimate).toBeNull();
+        expect(r.packageEstimate).toEqual({ width: 30, length: 40, height: 10, weight: 2, fromClient: false });
     });
 });
 

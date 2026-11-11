@@ -72,3 +72,27 @@ describe('ficha HTML estándar de la agencia', () => {
         expect(normalizarContenido({ title: 'x' }, 'N')).toBeNull();
     });
 });
+
+describe('opciones del grupo en la ficha (medidas, colores)', () => {
+    const base = { title: 'T', intro1: 'Hola', intro2: '', benefits: [], why: [], specs: [] };
+    const ejes = [{ name: 'Tamaño cama', values: ['1.5 plazas', '2 plazas'] }, { name: 'Color', values: ['Beige', 'Vino'] }];
+
+    it('arma las opciones desde los ejes y pone lo que incluye solo donde el cliente lo dijo', () => {
+        const c = normalizarContenido({ ...base, options: [{ value: '2 plazas', includes: '1 sábana, 2 fundas' }, { value: 'Inventado', includes: 'x' }] }, 'N', ejes)!;
+        expect(c.opciones).toEqual([
+            { eje: 'Tamaño cama', valores: [{ valor: '1.5 plazas', incluye: '' }, { valor: '2 plazas', incluye: '1 sábana, 2 fundas' }] },
+            { eje: 'Color', valores: [{ valor: 'Beige', incluye: '' }, { valor: 'Vino', incluye: '' }] },
+        ]);
+        const html = renderDescripcionHtml(c, []);
+        expect(html).toContain('Tamaño cama disponibles');
+        expect(html).toContain('<b>2 plazas</b>: 1 sábana, 2 fundas');
+        expect(html).toContain('Beige · Vino');
+        expect(html).not.toContain('Inventado');
+    });
+
+    it('sin ejes (producto simple) no agrega ninguna sección', () => {
+        const c = normalizarContenido({ ...base, benefits: [{ subtitle: 'a', text: 'b' }] }, 'N')!;
+        expect(c.opciones).toBeUndefined();
+        expect(renderDescripcionHtml(c, [])).not.toContain('disponibles');
+    });
+});

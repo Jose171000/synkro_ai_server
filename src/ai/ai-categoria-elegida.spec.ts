@@ -36,8 +36,8 @@ describe('la categoría ya elegida no se cambia al generar con IA', () => {
         expect(canales.predecirCategoriaMeli).not.toHaveBeenCalled();
         expect(busqueda.findSimilarCategories).not.toHaveBeenCalled();
         expect(canales.requisitos).toHaveBeenCalledWith('mercadolibre', 'MPE-ELEGIDA', 'u1', expect.anything());
-        // Solo se hizo la llamada de generación (con las reglas de los canales), no la de clasificación.
-        expect(create).toHaveBeenCalledTimes(1);
+        // Solo se hizo la llamada de generación (con las reglas de los canales) y la del paquete, no la de clasificación.
+        expect(create).toHaveBeenCalledTimes(2);
         expect((create.mock.calls[0][0].messages[1].content as string)).toContain('REGLAS ESTRICTAS');
     });
 
@@ -48,7 +48,7 @@ describe('la categoría ya elegida no se cambia al generar con IA', () => {
         expect(busqueda.findSimilarCategories).toHaveBeenCalled();
         expect(canales.predecirCategoriaMeli).toHaveBeenCalled();
         expect(r.categorizedAs.mercadolibre_category_id).toBe('MPE-OTRA');
-        expect(create).toHaveBeenCalledTimes(2);
+        expect(create).toHaveBeenCalledTimes(3);
     });
 
     it('es por canal: con la categoría de Mercado Libre elegida y la de otro canal sin elegir, solo se busca la que falta', async () => {

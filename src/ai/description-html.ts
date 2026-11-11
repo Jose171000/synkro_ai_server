@@ -16,6 +16,27 @@ export interface DescripcionContenido {
     why: { feature: string; benefit: string }[];
     /** Hasta 8 datos técnicos: nombre y valor. */
     specs: { label: string; value: string }[];
+    /** Opciones de la publicación (medidas, colores…): cada valor con lo que incluye, si el cliente lo dijo. */
+    opciones?: { eje: string; valores: { valor: string; incluye: string }[] }[];
+}
+
+export interface EjeDeFicha { name: string; values: string[] }
+
+/**
+ * Las opciones del grupo (medidas, colores…) con lo que incluye cada una. Los valores salen de los ejes; lo que incluye cada uno,
+ * solo de lo que devolvió la IA a partir de lo escrito por el cliente (nunca se inventa: sin dato, queda vacío).
+ */
+export function opcionesDeFicha(ejes: EjeDeFicha[] | null | undefined, crudo: any): NonNullable<DescripcionContenido['opciones']> {
+    const t = (v: any) => (typeof v === 'string' ? v.trim() : '');
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+    const incluye = new Map<string, string>();
+    for (const o of Array.isArray(crudo) ? crudo : []) {
+        const v = t(o?.value ?? o?.valor), i = t(o?.includes ?? o?.incluye);
+        if (v && i) incluye.set(norm(v), i);
+    }
+    return (ejes ?? [])
+        .map((e) => ({ eje: t(e?.name), valores: [...new Set((e?.values ?? []).map((v) => t(v)).filter(Boolean))].map((valor) => ({ valor, incluye: incluye.get(norm(valor)) ?? '' })) }))
+        .filter((e) => e.eje && e.valores.length);
 }
 
 export function escaparHtml(texto: unknown): string {
@@ -59,7 +80,7 @@ export function elegirImagenes(delCliente: string[], delProducto: string[], cant
 }
 
 /** Normaliza lo que devuelva el modelo: textos limpios y listas con el largo que pide la plantilla. */
-export function normalizarContenido(crudo: any, nombre: string): DescripcionContenido | null {
+export function normalizarContenido(crudo: any, nombre: string, ejes?: EjeDeFicha[] | null): DescripcionContenido | null {
     if (!crudo || typeof crudo !== 'object') return null;
     const t = (v: any) => (typeof v === 'string' ? v.trim() : '');
     const lista = (v: any): any[] => (Array.isArray(v) ? v : []);
@@ -77,6 +98,7 @@ export function normalizarContenido(crudo: any, nombre: string): DescripcionCont
         benefits: benefits.map((b) => ({ ...b, alt: b.alt || b.subtitle })),
         why: lista(crudo.why).map((w) => ({ feature: t(w?.feature), benefit: t(w?.benefit) })).filter((w) => w.feature && w.benefit).slice(0, 6),
         specs: lista(crudo.specs).map((s) => ({ label: t(s?.label), value: t(s?.value) })).filter((s) => s.label && s.value).slice(0, 8),
+        ...(ejes?.length ? { opciones: opcionesDeFicha(ejes, crudo.options) } : {}),
     };
 }
 
@@ -88,6 +110,9 @@ export function textoPlanoDeContenido(c: DescripcionContenido): string {
     const partes = [c.intro1, c.intro2].filter(Boolean);
     if (c.benefits.length) partes.push(c.benefits.map((b) => `- ${b.subtitle}: ${b.text}`).join('\n'));
     if (c.specs.length) partes.push(`Datos técnicos:\n${c.specs.map((s) => `- ${s.label}: ${s.value}`).join('\n')}`);
+    for (const o of c.opciones ?? []) {
+        partes.push(`${o.eje}:\n${o.valores.map((v) => `- ${v.valor}${v.incluye ? `: ${v.incluye}` : ''}`).join('\n')}`);
+    }
     return partes.join('\n\n').trim();
 }
 
@@ -147,6 +172,19 @@ export function renderDescripcionHtml(c: DescripcionContenido, imagenes: string[
     </table>
   </div>` : '';
 
+    // Opciones del grupo: una lista por eje. Si algún valor trae lo que incluye, va uno por línea; si no, una sola línea con todos.
+    const bloqueOpciones = (c.opciones ?? []).filter((o) => o.valores.length).map((o) => {
+        const conDetalle = o.valores.some((v) => v.incluye);
+        const cuerpo = conDetalle
+            ? `<ul style="margin: 0; padding-left: 20px; font-size: 15px; color: #555;">${o.valores.map((v) => `<li style="margin-bottom: 10px;"><b>${escaparHtml(v.valor)}</b>${v.incluye ? `: ${escaparHtml(v.incluye)}` : ''}</li>`).join('')}</ul>`
+            : `<p style="margin: 0; font-size: 15px; color: #555; text-align: center;">${o.valores.map((v) => escaparHtml(v.valor)).join(' · ')}</p>`;
+        return `
+  <div style="margin-bottom: 40px;">
+    <h3 style="text-align: center; font-size: 24px; margin-bottom: 20px; color: #333;">${escaparHtml(o.eje)} disponibles</h3>
+    ${cuerpo}
+  </div>`;
+    }).join('');
+
     return `<div style="max-width: 1000px; margin: 0 auto; font-family: Arial, sans-serif; line-height: 1.5; color: #444; box-sizing: border-box;">
 
   <div style="text-align: center; margin-bottom: 40px;">
@@ -160,6 +198,7 @@ export function renderDescripcionHtml(c: DescripcionContenido, imagenes: string[
   </div>
 ${filasBeneficios}
 ${bloquePorQue}
+${bloqueOpciones}
 ${bloqueEspecificaciones}
 
 </div>`;

@@ -270,14 +270,14 @@ export class AiService {
             atributos: atributosParaFicha,
             imagenesDelProducto: dto.imageUrls ?? [],
             urlsDelCliente,
+            ejes: dto.ejes,
           })
         : null;
       const htmlDescription = ficha?.html ?? null;
 
       // Falabella calcula el envío con las medidas del paquete: se estiman si el cliente no las dio.
-      const packageEstimate = dto.targetMarketplaces.map(m => m.toLowerCase()).includes('falabella')
-        ? await this.estimarPaquete(textoDelCliente, enriquecido.name, vision)
-        : null;
+      // Se estiman siempre: Ripley y Mercado Libre también las usan, y quien edita las revisa marcadas como estimadas.
+      const packageEstimate = await this.estimarPaquete(textoDelCliente, enriquecido.name, vision);
 
       // Las medidas obligatorias de la categoría de Mercado Libre que la IA dejó vacías (p. ej. la profundidad) salen de las del paquete.
       const requisitosMeli = categoryRequirements['mercadolibre'] ?? [];
@@ -339,7 +339,7 @@ export class AiService {
    * Medidas del paquete ya embalado (cm) y peso (kg). Si el cliente las dio en su texto se respetan
    * tal cual; si no, se estiman con lo que se sabe del producto. Devuelve null si no se pudo.
    */
-  public async estimarPaquete(textoDelCliente: string, nombre: string, vision: ProductVision | null) {
+  public async estimarPaquete(textoDelCliente: string, nombre: string, vision: ProductVision | null, opcion?: string) {
     try {
       const respuesta = await this.openai.chat.completions.create({
         model: modeloDeepseek(),
@@ -350,7 +350,7 @@ export class AiService {
             role: 'user',
             content: `Eres un experto en logística de e-commerce. Estima las dimensiones del PAQUETE ya embalado y listo para enviar de este producto.
 
-Producto: ${nombre}
+Producto: ${nombre}${opcion ? `\nMedida o variante concreta de este paquete: ${opcion} (estima SOLO el paquete de esa; si el texto dice qué incluye, úsalo)` : ''}
 Tipo: ${vision?.productType ?? 'no indicado'} · Material: ${vision?.material ?? 'no indicado'}
 Texto escrito por el cliente: "${textoDelCliente || '(nada)'}"
 
@@ -378,9 +378,12 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
    */
   public async generarDescripcionHtml(datos: {
     nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
-    imagenesDelProducto: string[]; urlsDelCliente: string[];
+    imagenesDelProducto: string[]; urlsDelCliente: string[]; ejes?: EjeParaIA[];
   }): Promise<{ html: string; title: string; texto: string } | null> {
     try {
+      const conOpciones = !!datos.ejes?.some((e) => e.values?.length);
+      const opcionesDelPrompt = conOpciones ? ',\n  "options": [ { "value": "valor exacto de una opción", "includes": "qué incluye o trae esa opción, SOLO si el cliente lo dijo" } ]' : '';
+      const reglaDeOpciones = conOpciones ? '\n"options": una entrada por cada valor de las opciones disponibles que tenga detalle en la información del cliente (por ejemplo qué piezas trae cada medida). Copia el detalle fiel, sin inventar; si de un valor no hay detalle, no lo pongas.' : '';
       const respuesta = await this.openai.chat.completions.create({
         model: modeloDeepseek(),
         response_format: { type: 'json_object' },
@@ -410,13 +413,13 @@ Responde únicamente este JSON:
   "intro2": "párrafo 2: detalle sobre la experiencia de uso o el beneficio principal",
   "benefits": [ { "subtitle": "beneficio", "text": "descripción corta e impactante", "alt": "texto alternativo SEO de la imagen" } ],
   "why": [ { "feature": "característica", "benefit": "beneficio que aporta" } ],
-  "specs": [ { "label": "dato técnico", "value": "valor" } ]
+  "specs": [ { "label": "dato técnico", "value": "valor" } ]${opcionesDelPrompt}
 }
-"benefits" debe tener exactamente 4 elementos, "why" hasta 6 y "specs" hasta 8.`,
+"benefits" debe tener exactamente 4 elementos, "why" hasta 6 y "specs" hasta 8.${reglaDeOpciones}`,
           },
         ],
       });
-      const contenido = normalizarContenido(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), datos.nombre);
+      const contenido = normalizarContenido(JSON.parse(respuesta.choices[0]?.message?.content || '{}'), datos.nombre, datos.ejes);
       if (!contenido) return null;
       return { html: renderDescripcionHtml(contenido, elegirImagenes(datos.urlsDelCliente, datos.imagenesDelProducto)), title: contenido.title, texto: textoPlanoDeContenido(contenido) };
     } catch (error) {
