@@ -602,7 +602,7 @@ export class SyncController {
         description: 'Escribe en el catálogo real de la tienda. Exige a la vez: confirmar=true, el interruptor RIPLEY_PUBLISH_ENABLED encendido, el SKU en RIPLEY_PUBLISH_SKUS y cero errores en la vista previa. Devuelve los números de importación para seguirla.',
     })
     ripleyPublish(@Param('id') id: string, @Body() dto: PublishRipleyDto, @Req() req) {
-        return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, connectionId: dto?.connectionId });
+        return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, confirmarActualizacion: dto?.confirmarActualizacion === true, connectionId: dto?.connectionId });
     }
 
     @Post('ripley/products/:id/link-offer')

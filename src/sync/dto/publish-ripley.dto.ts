@@ -12,6 +12,11 @@ export class PublishRipleyDto {
     @IsBoolean()
     confirmar?: boolean;
 
+    @ApiPropertyOptional({ description: 'Confirmación EXPRESA de que el envío ACTUALIZARÁ fichas que ya existen en Ripley (los SKU ya están allí). Sin ella, esos envíos se rechazan.' })
+    @IsOptional()
+    @IsBoolean()
+    confirmarActualizacion?: boolean;
+
     @ApiPropertyOptional({ description: 'Solo al anotar un envío anterior: número de la importación de ofertas de Ripley.' })
     @IsOptional()
     @IsString()

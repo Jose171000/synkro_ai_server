@@ -131,3 +131,40 @@ describe('no reenviar un producto ya enviado (evita duplicados)', () => {
         expect(p.aiAttributes.ripley_envio).toBeUndefined();
     });
 });
+
+describe('SKU que ya existen en Ripley (el envío los actualizaría)', () => {
+    const oferta = { offer_id: 5803478, product_sku: 'PMP20000884134-2', product_title: 'CANGURO EPIFANIA CASUAL' };
+
+    it('la vista previa lo avisa, lo lista y la ficha de ese producto lleva el aviso', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        const v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.yaEnRipley).toEqual([{ sku: 'BP000007', offerId: 5803478, productSku: 'PMP20000884134-2', titulo: 'CANGURO EPIFANIA CASUAL' }]);
+        expect(v.productos[0].avisos.join(' ')).toContain('ya está en Ripley');
+    });
+
+    it('si el SKU no existe en Ripley (o Ripley no responde), no avisa nada', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn(async () => { throw new Error('Ripley no tiene una oferta con el SKU'); });
+        const v = await service.vistaPrevia(SCOPE, 'p1');
+        expect(v.yaEnRipley).toEqual([]);
+    });
+
+    it('enviar un SKU que ya está en Ripley exige la confirmación de actualización: sin ella no llama a Ripley', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        await expect(service.publicar(SCOPE, 'p1', { confirmar: true })).rejects.toThrow('ya existen en Ripley');
+        expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+    });
+
+    it('con la confirmación de actualización sí se envía', async () => {
+        encender();
+        const { service, ripley } = construir();
+        ripley.ofertaPorSku = jest.fn(async () => oferta);
+        await service.publicar(SCOPE, 'p1', { confirmar: true, confirmarActualizacion: true });
+        expect(ripley.importarProductosYOfertas).toHaveBeenCalledTimes(1);
+    });
+});
