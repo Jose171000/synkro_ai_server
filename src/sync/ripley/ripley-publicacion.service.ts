@@ -129,7 +129,9 @@ export class RipleyPublicacionService {
         }
 
         const { csv, columnas } = armarCsv(filas, atributosDeColumna);
-        const skusNoPermitidos = familia.map((p) => p.sku).filter((sku) => !skuPermitidoParaRipley(sku, process.env.RIPLEY_PUBLISH_SKUS));
+        // La lista de publicación es SU PROPIA variable: sin ella no se permite ninguno. Se pasa '' y no `undefined`, porque con `undefined`
+        // la función tomaría por defecto la lista del envío de stock (RIPLEY_PUSH_SKUS, que puede ser «*») y abriría la publicación a todos.
+        const skusNoPermitidos = familia.map((p) => p.sku).filter((sku) => !skuPermitidoParaRipley(sku, process.env.RIPLEY_PUBLISH_SKUS ?? ''));
         return {
             categoria: { id: categoryId, ruta },
             publicaComo: grupo ? publicaComo : 'sola',

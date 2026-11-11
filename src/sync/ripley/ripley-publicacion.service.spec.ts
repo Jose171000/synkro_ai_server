@@ -84,6 +84,20 @@ describe('vista previa de la publicación en Ripley (no envía nada)', () => {
         expect(v.productos[0].errores.join(' ')).toContain('«TIGO» no está en el catálogo aprobado de Ripley');
     });
 
+    it('la lista de SKU del ENVÍO de stock (RIPLEY_PUSH_SKUS=*) no abre la publicación: la publicación tiene su propia lista', async () => {
+        process.env.RIPLEY_PUSH_SKUS = '*';
+        process.env.RIPLEY_PUBLISH_ENABLED = 'true';
+        try {
+            const { service, ripley } = construir();
+            const v = await service.vistaPrevia(SCOPE, 'p1');
+            expect(v.skusNoPermitidos).toEqual(['BP000007']);
+            await expect(service.publicar(SCOPE, 'p1', { confirmar: true })).rejects.toThrow('RIPLEY_PUBLISH_SKUS');
+            expect(ripley.importarProductosYOfertas).not.toHaveBeenCalled();
+        } finally {
+            delete process.env.RIPLEY_PUSH_SKUS;
+        }
+    });
+
     it('sin interruptor y sin SKU permitido lo informa, para que se vea antes de intentar enviar', async () => {
         const { service } = construir();
         const v = await service.vistaPrevia(SCOPE, 'p1');
