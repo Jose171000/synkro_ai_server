@@ -1,4 +1,4 @@
-import { armarCsv, columnasDeAtributos, COLUMNAS_ANTES, COLUMNAS_DESPUES, ESTADO_NUEVO, filaDeRipley, MAX_NOMBRE, motivosDelReporte, ProductoParaRipley, rutaParaCsv, validarProductoParaRipley } from './ripley-publicacion';
+import { armarCsv, columnasDeAtributos, COLUMNAS_ANTES, COLUMNAS_DESPUES, decidirReenvio, ESTADO_NUEVO, filaDeRipley, MAX_NOMBRE, motivosDelReporte, ProductoParaRipley, rutaParaCsv, validarProductoParaRipley } from './ripley-publicacion';
 
 const CAMPOS = [
     { name: 'tipo_product', label: 'Tipo de producto', required: true },
@@ -163,5 +163,41 @@ describe('motivosDelReporte (el reporte de errores de Ripley)', () => {
     it('respeta el máximo', () => {
         const filas = Array.from({ length: 20 }, (_, i) => `"x";"d";"d";"n";"${i + 2}";"motivo ${i}"`);
         expect(motivosDelReporte(['"a";"b";"c";"d";"error-line";"error-message"', ...filas].join('\r\n'), 3)).toHaveLength(3);
+    });
+});
+
+describe('decidirReenvio (evitar duplicados)', () => {
+    const envio = { importId: 6896687, productImportId: 1307683, enviadoEn: '2026-11-11T01:05:00.000Z' };
+    const ahora = new Date('2026-11-11T03:00:00.000Z');
+
+    it('un producto que nunca se envió se puede enviar', () => {
+        expect(decidirReenvio(null, null, ahora)).toEqual({ bloqueado: false, situacion: 'libre', motivo: null });
+    });
+
+    it('pendiente de aprobación en Ripley: NO se puede reenviar, y el aviso dice la importación', () => {
+        const r = decidirReenvio(envio, { resumen: 'en-curso' }, ahora);
+        expect(r).toMatchObject({ bloqueado: true, situacion: 'pendiente' });
+        expect(r.motivo).toContain('pendiente de aprobación');
+        expect(r.motivo).toContain('6896687');
+    });
+
+    it('ya procesado sin errores: tampoco se reenvía (lo duplicaría)', () => {
+        const r = decidirReenvio(envio, { resumen: 'listo' }, ahora);
+        expect(r).toMatchObject({ bloqueado: true, situacion: 'procesado' });
+        expect(r.motivo).toContain('duplicarlo');
+    });
+
+    it('si Ripley lo rechazó con errores, sí se puede corregir y reenviar', () => {
+        expect(decidirReenvio(envio, { resumen: 'con-errores' }, ahora)).toMatchObject({ bloqueado: false, situacion: 'libre' });
+    });
+
+    it('si no se puede comprobar el estado, se da por pendiente durante 24 horas y después se libera', () => {
+        expect(decidirReenvio(envio, null, ahora)).toMatchObject({ bloqueado: true, situacion: 'pendiente' });
+        expect(decidirReenvio(envio, null, new Date('2026-11-12T01:04:59.000Z')).bloqueado).toBe(true);
+        expect(decidirReenvio(envio, null, new Date('2026-11-12T01:05:01.000Z')).bloqueado).toBe(false);
+    });
+
+    it('una fecha de envío ilegible no bloquea para siempre', () => {
+        expect(decidirReenvio({ ...envio, enviadoEn: 'ayer' }, null, ahora).bloqueado).toBe(false);
     });
 });

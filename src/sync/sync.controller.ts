@@ -605,6 +605,20 @@ export class SyncController {
         return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, connectionId: dto?.connectionId });
     }
 
+    @Post('ripley/products/:id/register-sent')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Anota un envío a Ripley ya hecho para que el producto no se pueda reenviar (evita duplicados)',
+        description: 'Comprueba que la importación existe en Ripley y la deja registrada en el producto. No envía nada.',
+    })
+    ripleyRegisterSent(@Param('id') id: string, @Body() dto: PublishRipleyDto, @Req() req) {
+        if (!dto?.importId) throw new BadRequestException('Indica el número de la importación (importId).');
+        return this.ripleyPublicacion.registrarEnvio(scopeOf(req), id, { importId: dto.importId, productImportId: dto.productImportId, alGrupo: dto.alGrupo === true });
+    }
+
     @Get('ripley/imports/:importId')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

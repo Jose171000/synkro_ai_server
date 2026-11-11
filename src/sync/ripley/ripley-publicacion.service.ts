@@ -5,7 +5,7 @@ import { RipleyApiService } from './ripley-api.service';
 import { RipleyCatalogoService } from './ripley-catalogo.service';
 import { RipleyMarcasService } from './ripley-marcas.service';
 import { skuPermitidoParaRipley } from './ripley-oferta';
-import { armarCsv, columnasDeAtributos, filaDeRipley, MAX_NOMBRE, ProductoParaRipley, validarProductoParaRipley } from './ripley-publicacion';
+import { armarCsv, columnasDeAtributos, decidirReenvio, EnvioARipley, filaDeRipley, MAX_NOMBRE, ProductoParaRipley, SituacionDeEnvio, validarProductoParaRipley } from './ripley-publicacion';
 import { ajustarAUnaLista } from '../../ai/ripley-atributos';
 import { EjeSynkro, InfoVariantesDeCategoria, revisarCompatibilidad } from '../../products/compatibilidad-variantes';
 import { etiquetaDe } from '../../products/variantes';
@@ -29,6 +29,8 @@ export interface VistaPreviaDeRipley {
     skusNoPermitidos: string[];
     columnas: number;
     csv: string;
+    /** El producto ya se envió a Ripley y está pendiente o ya procesado: no se puede reenviar (evita duplicados). */
+    bloqueo: { situacion: SituacionDeEnvio; motivo: string; importId: string | number; productImportId: string | number | null } | null;
 }
 
 /**
@@ -39,6 +41,8 @@ export interface VistaPreviaDeRipley {
 @Injectable()
 export class RipleyPublicacionService {
     private readonly logger = new Logger('RipleyPublicacion');
+    /** SKU que se están enviando AHORA: un segundo clic (o una segunda petición) del mismo producto no puede mandarlo dos veces. */
+    private readonly enVuelo = new Set<string>();
 
     constructor(
         private readonly sync: SyncService,
@@ -50,7 +54,7 @@ export class RipleyPublicacionService {
 
     /** Lo que se enviaría, con sus problemas y el CSV. NO envía nada ni escribe en ningún sitio. */
     async vistaPrevia(scope: SyncScope, productId: string, opciones: { alGrupo?: boolean } = {}): Promise<VistaPreviaDeRipley> {
-        const base = { categoria: null, publicaComo: 'sola' as const, avisosDeVariantes: [] as string[], productos: [], puedeEnviar: false, envioEncendido: publicacionEncendida(), skusNoPermitidos: [] as string[], columnas: 0, csv: '' };
+        const base = { categoria: null, publicaComo: 'sola' as const, avisosDeVariantes: [] as string[], productos: [], puedeEnviar: false, envioEncendido: publicacionEncendida(), skusNoPermitidos: [] as string[], columnas: 0, csv: '', bloqueo: null };
         const familia: any[] = opciones.alGrupo ? await this.sync.familiaDe(scope, productId) : [await this.sync.findScopedProduct(scope, productId)];
         const grupo = familia.length > 1 ? (familia[0] as any).group ?? null : null;
 
@@ -143,7 +147,44 @@ export class RipleyPublicacionService {
             skusNoPermitidos,
             columnas: columnas.length,
             csv,
+            bloqueo: await this.bloqueoDe(scope, familia),
         };
+    }
+
+    /** El primer producto de la lista que ya se envió a Ripley y no se puede reenviar (pendiente o ya procesado), o null. */
+    private async bloqueoDe(scope: SyncScope, familia: any[]): Promise<VistaPreviaDeRipley['bloqueo']> {
+        const estados = new Map<string, Awaited<ReturnType<RipleyPublicacionService['estado']>> | null>();
+        for (const p of familia) {
+            const envio = (((p.aiAttributes as any) || {}) as Record<string, any>).ripley_envio as EnvioARipley | undefined;
+            if (!envio?.importId) continue;
+            const clave = `${envio.importId}|${envio.productImportId ?? ''}`;
+            if (!estados.has(clave)) {
+                // Se pregunta a Ripley cómo va ESE envío; si no responde, se decide con la hora del envío.
+                estados.set(clave, await this.estado(scope, String(envio.importId), envio.productImportId ? String(envio.productImportId) : undefined).catch(() => null));
+            }
+            const d = decidirReenvio(envio, estados.get(clave) ?? null);
+            if (d.bloqueado) return { situacion: d.situacion, motivo: d.motivo!, importId: envio.importId, productImportId: envio.productImportId };
+        }
+        return null;
+    }
+
+    /** Deja anotado en cada producto el envío a Ripley: de ahí sale el bloqueo de reenvíos. */
+    private async anotarEnvio(familia: any[], envio: EnvioARipley) {
+        for (const p of familia) {
+            p.aiAttributes = { ...(((p.aiAttributes as any) || {}) as Record<string, any>), ripley_envio: envio } as any;
+            await this.sync.saveProduct(p);
+        }
+    }
+
+    /**
+     * Anota un envío que se hizo antes de que Synkro lo recordara (o fuera de Synkro) para que no se pueda duplicar. Comprueba que la
+     * importación existe en Ripley. No envía nada.
+     */
+    async registrarEnvio(scope: SyncScope, productId: string, datos: { importId: string; productImportId?: string; alGrupo?: boolean }) {
+        await this.estado(scope, datos.importId, datos.productImportId); // si Ripley no la conoce, falla aquí
+        const familia: any[] = datos.alGrupo ? await this.sync.familiaDe(scope, productId) : [await this.sync.findScopedProduct(scope, productId)];
+        await this.anotarEnvio(familia, { importId: datos.importId, productImportId: datos.productImportId ?? null, enviadoEn: new Date().toISOString() });
+        return { registrados: familia.map((p) => p.sku) };
     }
 
     /**
@@ -156,12 +197,26 @@ export class RipleyPublicacionService {
         if (!vista.envioEncendido) throw new BadRequestException('La publicación en Ripley está apagada en el servidor (RIPLEY_PUBLISH_ENABLED). Revisa el envío con la vista previa; para enviar hay que encenderla.');
         if (vista.errores.length) throw new BadRequestException(vista.errores.join(' '));
         if (vista.skusNoPermitidos.length) throw new BadRequestException(`Estos SKU no están en la lista de publicación permitida (RIPLEY_PUBLISH_SKUS): ${vista.skusNoPermitidos.join(', ')}.`);
+        // Un producto ya enviado y pendiente de aprobación (o ya procesado) no se reenvía: crearía un duplicado.
+        if (vista.bloqueo) throw new BadRequestException(vista.bloqueo.motivo);
         if (!vista.puedeEnviar) {
             const primeros = vista.productos.flatMap((p) => p.errores.map((e) => `${p.sku}: ${e}`)).slice(0, 5);
             throw new BadRequestException(`Hay datos por corregir antes de enviar. ${primeros.join(' · ')}`);
         }
-        const conexion = await this.sync.resolveConnection(scope.storeId, 'ripley', opciones.connectionId);
-        const r = await this.ripley.importarProductosYOfertas(this.ecommerce.authOf(conexion), vista.csv);
+        // Cerrojo: si estos SKU ya se están enviando en este mismo momento (doble clic), no se manda otra vez.
+        const skus = vista.productos.map((p) => p.sku);
+        if (skus.some((s) => this.enVuelo.has(s))) throw new BadRequestException('Este producto ya se está enviando a Ripley en este momento. Espera a que termine.');
+        skus.forEach((s) => this.enVuelo.add(s));
+        let r;
+        try {
+            const conexion = await this.sync.resolveConnection(scope.storeId, 'ripley', opciones.connectionId);
+            r = await this.ripley.importarProductosYOfertas(this.ecommerce.authOf(conexion), vista.csv);
+            // Se anota en el producto ANTES de soltar el cerrojo: desde este instante cualquier reenvío queda bloqueado.
+            const familia: any[] = opciones.alGrupo ? await this.sync.familiaDe(scope, productId) : [await this.sync.findScopedProduct(scope, productId)];
+            await this.anotarEnvio(familia, { importId: r.importId, productImportId: r.productImportId, enviadoEn: new Date().toISOString() });
+        } finally {
+            skus.forEach((s) => this.enVuelo.delete(s));
+        }
         this.logger.log(`Ripley: se enviaron ${vista.productos.length} producto(s) (${vista.productos.map((p) => p.sku).join(', ')}) → importación ${r.importId}.`);
         return { ...r, enviados: vista.productos.map((p) => p.sku), publicaComo: vista.publicaComo };
     }
@@ -178,7 +233,7 @@ export class RipleyPublicacionService {
         const enCurso = !terminado(ofertas?.status) || (productos ? !terminado(productos?.import_status ?? productos?.status) : false);
         const hayErrores = erroresDeOfertas.length > 0 || erroresDeProductos.length > 0 || String(ofertas?.status).toUpperCase() === 'FAILED';
         return {
-            resumen: enCurso ? 'en-curso' : hayErrores ? 'con-errores' : 'listo',
+            resumen: (enCurso ? 'en-curso' : hayErrores ? 'con-errores' : 'listo') as 'en-curso' | 'con-errores' | 'listo',
             ofertas: { estado: ofertas?.status ?? null, leidas: ofertas?.lines_read ?? null, correctas: ofertas?.lines_in_success ?? null, conError: ofertas?.lines_in_error ?? null },
             productos: productos ? { estado: productos?.import_status ?? productos?.status ?? null, leidas: productos?.transform_lines_read ?? null, correctas: productos?.transform_lines_in_success ?? null, conError: productos?.transform_lines_in_error ?? null } : null,
             errores: { ofertas: erroresDeOfertas, productos: erroresDeProductos },

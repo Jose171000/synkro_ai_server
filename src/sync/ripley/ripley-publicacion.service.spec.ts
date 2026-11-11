@@ -32,6 +32,7 @@ function construir(opts: { familia?: any[]; campos?: any[]; path?: string; marca
         findScopedProduct: jest.fn(async () => p),
         familiaDe: jest.fn(async () => opts.familia ?? [p]),
         resolveConnection: jest.fn(async () => ({ id: 'c1' })),
+        saveProduct: jest.fn(async (x: any) => x),
     };
     const ecommerce: any = { authOf: jest.fn(() => ({ site: 'x', token: 'k' })) };
     const ripley: any = {

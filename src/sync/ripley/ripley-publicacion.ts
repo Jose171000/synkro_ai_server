@@ -209,3 +209,56 @@ export function armarCsv(filas: Record<string, string>[], atributos: string[]): 
     const lineas = [columnas.join(';'), ...filas.map((f) => columnas.map((c) => celda(f[c] ?? '')).join(';'))];
     return { csv: `${lineas.join('\r\n')}\r\n`, columnas };
 }
+
+// ─────────────────────────────────────────────────────────────
+// Evitar duplicados: un producto ya enviado a Ripley no se reenvía mientras esté pendiente ni cuando ya se procesó
+// ─────────────────────────────────────────────────────────────
+
+/** Lo que Synkro recuerda de un envío a Ripley (se guarda en el producto, en `aiAttributes.ripley_envio`). */
+export interface EnvioARipley {
+    importId: string | number;
+    productImportId: string | number | null;
+    /** ISO: cuándo se envió. */
+    enviadoEn: string;
+}
+
+export type SituacionDeEnvio = 'libre' | 'pendiente' | 'procesado';
+
+/** Pasadas estas horas sin poder comprobar el estado en Ripley, se deja volver a enviar (para no bloquear para siempre). */
+export const HORAS_SIN_VERIFICAR = 24;
+
+/**
+ * ¿Se puede enviar de nuevo este producto? Un envío anterior bloquea mientras Ripley no haya terminado (pendiente de aprobación) y
+ * también cuando ya lo procesó sin errores (ya existe: reenviarlo lo duplicaría). Solo se libera si Ripley lo rechazó con errores
+ * (hay que corregir y reenviar) o si hace más de un día que no se puede comprobar.
+ */
+export function decidirReenvio(
+    envio: EnvioARipley | null | undefined,
+    estado: { resumen: 'en-curso' | 'listo' | 'con-errores' } | null,
+    ahora: Date = new Date(),
+): { bloqueado: boolean; situacion: SituacionDeEnvio; motivo: string | null } {
+    if (!envio) return { bloqueado: false, situacion: 'libre', motivo: null };
+    const numero = `importación ${envio.importId}`;
+    if (estado?.resumen === 'con-errores') return { bloqueado: false, situacion: 'libre', motivo: null };
+    if (estado?.resumen === 'listo') {
+        return {
+            bloqueado: true, situacion: 'procesado',
+            motivo: `Este producto ya se envió a Ripley y se procesó sin errores (${numero}). No se vuelve a enviar para no duplicarlo; el stock y el precio se sincronizan aparte.`,
+        };
+    }
+    if (estado?.resumen === 'en-curso') {
+        return {
+            bloqueado: true, situacion: 'pendiente',
+            motivo: `Este producto ya se envió a Ripley (${numero}) y sigue pendiente de aprobación en el canal. Espera a que termine antes de volver a enviarlo, para no crear duplicados.`,
+        };
+    }
+    // No se pudo comprobar: se da por pendiente durante un tiempo prudente.
+    const horas = (ahora.getTime() - new Date(envio.enviadoEn).getTime()) / 3_600_000;
+    if (Number.isFinite(horas) && horas < HORAS_SIN_VERIFICAR) {
+        return {
+            bloqueado: true, situacion: 'pendiente',
+            motivo: `Este producto ya se envió a Ripley (${numero}) y no se pudo comprobar cómo terminó. Se considera pendiente: no se reenvía hasta confirmarlo, para no crear duplicados.`,
+        };
+    }
+    return { bloqueado: false, situacion: 'libre', motivo: null };
+}

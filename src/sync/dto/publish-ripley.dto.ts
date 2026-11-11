@@ -12,6 +12,16 @@ export class PublishRipleyDto {
     @IsBoolean()
     confirmar?: boolean;
 
+    @ApiPropertyOptional({ description: 'Solo al anotar un envío anterior: número de la importación de ofertas de Ripley.' })
+    @IsOptional()
+    @IsString()
+    importId?: string;
+
+    @ApiPropertyOptional({ description: 'Solo al anotar un envío anterior: número de la importación de productos de Ripley.' })
+    @IsOptional()
+    @IsString()
+    productImportId?: string;
+
     @ApiPropertyOptional({ description: 'Cuenta de Ripley, si la tienda tiene varias.' })
     @IsOptional()
     @IsString()
