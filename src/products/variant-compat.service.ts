@@ -13,6 +13,7 @@ import { categoriasElegidas } from '../ai/categorias-elegidas';
 import { EjeSynkro, InfoVariantesDeCategoria, NOMBRE_DE_CANAL, ResultadoDeCompatibilidad, claseDeEje, revisarCompatibilidad } from './compatibilidad-variantes';
 import { ajustesDe, guardarAjustes, opcionDeLaLista } from './ajustes-de-canal';
 import { opcionCercana } from '../common/opcion-cercana';
+import { ejesQueSeparanFamilias } from '../sync/falabella/falabella-fields';
 
 /** Valores de un dato del canal (color, talla, tamaño) que no encajan, con lo que la IA propone para cada uno. La persona confirma antes de aplicar. */
 export interface SugerenciaDeAjustes {
@@ -73,6 +74,11 @@ export class VariantCompatService {
                     return null;
                 });
             }
+            // Falabella guarda el tamaño una sola vez por familia: si la categoría no lo admite como variación, cada tamaño sale como familia propia.
+            if (canal === 'falabella' && !info.libre) {
+                const aparte = ejesQueSeparanFamilias(vista.axes as EjeSynkro[], info.ejes.map((e) => ({ name: e.id, label: e.label })));
+                if (aparte.length) r.avisos.push(`En Falabella «${aparte.join(', ')}» no es un dato de variación de esta categoría: cada valor se publicará como una familia propia (con sus colores dentro), para que cada ficha lleve el tamaño correcto.`);
+            }
             if (r.ejesNoPermitidos.length && r.ejesDisponibles.length) r.renombresSugeridos = await this.sugerirRenombres(vista.name, vista.axes as EjeSynkro[], r);
             salida.push(r);
         }
@@ -113,7 +119,7 @@ export class VariantCompatService {
         for (const v of variantes) {
             for (const [clase, valores] of Object.entries(ajustesDe(v.aiAttributes as any, canal))) ajustes[clase] = { ...(ajustes[clase] ?? {}), ...valores };
         }
-        return { ...info, ajustes, ...(canal === 'falabella' ? { automatico: (valor: string, opciones: string[]) => opcionCercana(valor, opciones) } : {}) };
+        return { ...info, ajustes, ...(canal === 'falabella' || canal === 'mercadolibre' ? { automatico: (valor: string, opciones: string[]) => opcionCercana(valor, opciones) } : {}) };
     }
 
     /**

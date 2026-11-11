@@ -33,6 +33,24 @@ export class SyncProcessor extends WorkerHost {
                     const link = await this.syncService.publishToMeli(productId, userId, connectionId);
                     return { status: 'published', externalId: link.externalId };
                 }
+                if (marketplace === 'falabella' && Array.isArray(job.data.productIds) && job.data.productIds.length > 1) {
+                    // Un grupo entero en un solo envío.
+                    const ids: string[] = job.data.productIds;
+                    try {
+                        const resultado = await this.syncService.publicarFamiliaEnFalabella({ userId, storeId }, connectionId, ids);
+                        if (resultado.enviados === 0) {
+                            if (/^ya (est[aá] publicado|exist[ií]a)/.test(resultado.rechazados[0]?.motivo ?? '')) return { status: 'ya-publicado' };
+                            throw new UnrecoverableError(resultado.rechazados[0]?.motivo || 'Ninguna variante cumple los requisitos de Falabella.');
+                        }
+                        return { status: 'enviado', feeds: resultado.lotes.map((l) => l.feedId), enviados: resultado.enviados };
+                    } catch (error: any) {
+                        const ultimo = error instanceof UnrecoverableError || job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+                        if (ultimo && !(error instanceof UnrecoverableError)) {
+                            for (const id of ids) await this.syncService.marcarPublicacionFallida(id, connectionId, userId, error?.message ?? 'error desconocido');
+                        }
+                        throw error;
+                    }
+                }
                 if (marketplace === 'falabella') {
                     // Publicar de a uno pasa por el mismo camino que el lote:
                     // así hay una sola forma de hablar con Falabella, y un

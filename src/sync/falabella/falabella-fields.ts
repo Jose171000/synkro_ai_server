@@ -1,3 +1,4 @@
+import { claseDeEje } from '../../products/compatibilidad-variantes';
 /**
  * Campos que Falabella lista entre los atributos de una categoría pero que NO son datos del producto que
  * se completen a mano o con IA: los pone la plataforma por su cuenta, o son del sistema (identificadores,
@@ -186,4 +187,31 @@ export function esCategoriaEquivocada(mensaje: string | null | undefined): boole
     if (!/categor/i.test(m)) return false;
     return /(entre|between)\s+[\d.,]+\s*(kg|g|cm|mm|m|l)\b/i.test(m)
         || /(no (corresponde|pertenece|es v[aá]lid[oa])|does not belong|not allowed|no permitid)/i.test(m);
+}
+
+/**
+ * Los ejes de TAMAÑO del grupo (tamaño de cama, plazas, medida) que la categoría de Falabella NO admite como variación (cuando solo varía el color básico).
+ * Falabella guarda esos datos una sola vez por familia: si dos tamaños comparten familia, uno de los dos queda con el dato del otro.
+ * Por eso cada valor de esos ejes sale como una familia propia (su propio ParentSku), con sus colores dentro.
+ * Una categoría sin variantes (cada ficha suelta) no separa nada. Un eje con un solo valor no distingue fichas: tampoco.
+ */
+export function ejesQueSeparanFamilias(
+    ejes: { name: string; values: string[] }[] | null | undefined,
+    atributos: { feedName?: string; name?: string; label?: string }[] | null | undefined,
+): string[] {
+    const campos = camposDeVariacion(atributos);
+    const aceptadas: string[] = campos.length
+        ? campos.map((c) => claseDeEje((c as any).label || c.name || c.feedName))
+        : variacionPorTallaYColor(atributos) ? ['color', 'talla'] : [];
+    if (!aceptadas.length) return [];
+    return (ejes ?? [])
+        .filter((e) => e?.name && new Set((e.values ?? []).map((v) => String(v).trim().toLowerCase())).size > 1)
+        .filter((e) => ['tamano', 'plazas', 'plaza', 'medida', 'medidas'].includes(claseDeEje(e.name)))
+        .filter((e) => !aceptadas.includes(claseDeEje(e.name)))
+        .map((e) => e.name);
+}
+
+/** «1.5 plazas» → «15PLAZAS»: la parte del código padre que distingue a la familia de un tamaño. */
+export function sufijoDeFamilia(etiqueta: string): string {
+    return String(etiqueta ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 14);
 }

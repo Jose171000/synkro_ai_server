@@ -20,6 +20,8 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
+import { ejesQueSeparanFamilias, sufijoDeFamilia } from './falabella/falabella-fields';
+import { opcionCercana as opcionCercanaDeLista } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, variacionPorTallaYColor, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -1203,9 +1205,22 @@ export class SyncService implements OnModuleInit {
 
         let encoladas = 0;
         let ultimoError: unknown = null;
-        for (const miembro of familia) {
+        // Falabella: todas las variantes en UN solo envío. De a una, 32 altas (más sus fotos) pasan el límite de llamadas de Falabella y
+        // varias altas a la vez de la misma familia pueden terminar en familias separadas.
+        const aparte = marketplaces.includes('falabella');
+        const resto = marketplaces.filter((m) => m !== 'falabella');
+        if (aparte) {
             try {
-                await this.enqueuePublish(scope, miembro.id, marketplaces, connectionIds);
+                const n = await this.encolarFamiliaEnFalabella(scope, familia, connectionIds['falabella']);
+                encoladas = Math.max(encoladas, n);
+            } catch (error) {
+                ultimoError = error;
+            }
+        }
+        for (const miembro of familia) {
+            if (!resto.length) break;
+            try {
+                await this.enqueuePublish(scope, miembro.id, resto, connectionIds);
                 encoladas++;
             } catch (error) {
                 ultimoError = error;
@@ -1213,6 +1228,55 @@ export class SyncService implements OnModuleInit {
         }
         if (!encoladas) throw ultimoError;
         return { message: `Publicación encolada para ${encoladas} de ${familia.length} variantes en: ${marketplaces.join(', ')}.` };
+    }
+
+    /**
+     * Encola UN trabajo que publica en Falabella todas las variantes de una familia que aún no están publicadas ni en proceso.
+     * Devuelve cuántas variantes entraron. Si queda una sola, sale como siempre.
+     */
+    private async encolarFamiliaEnFalabella(scope: SyncScope, familia: Product[], connectionId?: string): Promise<number> {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const pendientes: Product[] = [];
+        for (const miembro of familia) {
+            if (miembro.price === null || miembro.price === undefined) continue;
+            const enlace = await this.listingLinkRepository.findOne({
+                where: { product: { id: miembro.id }, connection: { id: connection.id } },
+                select: { id: true, syncStatus: true, updatedAt: true },
+            });
+            if (enlace?.syncStatus === 'published') continue;
+            if (enlace?.syncStatus === 'pending' && Date.now() - new Date(enlace.updatedAt).getTime() < 15 * 60_000) continue;
+            pendientes.push(miembro);
+        }
+        if (!pendientes.length) throw new BadRequestException('Las variantes ya están publicadas o en proceso en Falabella.');
+        if (pendientes.length === 1) {
+            await this.enqueuePublish(scope, pendientes[0].id, ['falabella'], { falabella: connection.id });
+            return 1;
+        }
+        await this.syncQueue.add('publish', {
+            productId: pendientes[0].id,
+            productIds: pendientes.map((p) => p.id),
+            userId: scope.userId,
+            storeId: scope.storeId,
+            marketplace: 'falabella',
+            connectionId: connection.id,
+        }, { attempts: 5, backoff: { type: 'exponential', delay: 120_000 } });
+        return pendientes.length;
+    }
+
+    /**
+     * Publica en Falabella, en un solo envío, varias variantes de una familia. Las que Falabella rechaza por lo que le falta
+     * (medidas, datos de categoría…) quedan marcadas con su motivo; las demás siguen. Lo que ya existía en Falabella no es un fallo.
+     */
+    async publicarFamiliaEnFalabella(scope: SyncScope, connectionId: string, productIds: string[]) {
+        const resultado = await this.publishBatchToFalabella(scope, connectionId, productIds);
+        const productos = await this.productRepository.find({ where: { id: In(productIds) }, select: { id: true, sku: true } as any });
+        const idDe = new Map(productos.map((p) => [p.sku, p.id]));
+        for (const r of resultado.rechazados) {
+            if (/^ya (est[aá] publicado|exist[ií]a)/.test(r.motivo)) continue;
+            const id = idDe.get(r.sku);
+            if (id) await this.marcarPublicacionFallida(id, connectionId, scope.userId, r.motivo);
+        }
+        return resultado;
     }
 
     /** El producto y, si es una variante, todas las de su grupo: en un canal se lanzan juntas. Sin grupo, solo él. */
@@ -1263,6 +1327,7 @@ export class SyncService implements OnModuleInit {
             } else {
                 const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
                 const payload = this.buildMeliItemPayload(product, categoryId, await this.variantesVanSeparadasEnMeli(product, categoryId));
+                payload.attributes = await this.llevarAListasDeMeli(product, categoryId, payload.attributes);
                 const created = await this.meliApi.createItem(connection.accessToken, payload);
 
                 // El ítem ya existe en Mercado Libre: se anota ya, para que un fallo posterior no lo deje huérfano (un reintento lo duplicaría).
@@ -1473,6 +1538,26 @@ export class SyncService implements OnModuleInit {
         return this.productRepository.save(product);
     }
 
+    /**
+     * Mercado Libre solo acepta, en un atributo de lista (color principal…), una de las opciones de su lista: «Verde Olivo» se rechaza con
+     * «item values [(null:Verde Olivo)]». Se lleva cada valor a la opción válida: primero el ajuste que la persona confirmó, si no la más cercana.
+     * Si no hay ninguna, se deja como está (el canal dirá qué falta). Si Mercado Libre no responde, se envía tal cual.
+     */
+    private async llevarAListasDeMeli(product: Product, categoryId: string, atributos: { id: string; value_name: string }[]) {
+        let definiciones: any[];
+        try { definiciones = await this.meliApi.getCategoryAttributes(categoryId); } catch { return atributos; }
+        return atributos.map((a) => {
+            const d = (definiciones ?? []).find((x: any) => String(x?.id) === a.id);
+            const opciones = (Array.isArray(d?.values) ? d.values : []).map((v: any) => String(v?.name ?? '')).filter(Boolean);
+            if (!d || d.value_type !== 'list' || !opciones.length) return a;
+            const valor = valorConAjuste({
+                canal: 'mercadolibre', atributos: product.aiAttributes as any, atributo: String(d.name ?? a.id), valor: a.value_name, opciones,
+                automatico: (v, o) => opcionCercanaDeLista(v, o),
+            });
+            return valor ? { ...a, value_name: valor } : a;
+        });
+    }
+
     /** Atributos que se envían a Mercado Libre para un producto: marca, modelo y los que completó la IA. */
     atributosParaMeli(product: Product): { id: string; value_name: string }[] {
         const brand = (product.aiAttributes as any)?.brand || 'Genérica';
@@ -1603,6 +1688,9 @@ export class SyncService implements OnModuleInit {
 
         const familia = await this.familiaDe(scope, productId);
         const miembros = familia.length > 1 ? familia : [product];
+        // Con un eje que separa familias (el tamaño), solo las hermanas con el mismo código padre que el pedido son de su familia.
+        const delMismoPadre: { sku: string; input: any }[] = [];
+        let padreDelPedido: string | undefined;
         const atributosPorCategoria = new Map<string, any[]>();
         const entradas: any[] = [];
         const skus: string[] = [];
@@ -1624,8 +1712,13 @@ export class SyncService implements OnModuleInit {
                 if (esElPedido) throw new BadRequestException(`No se puede actualizar la ficha: todavía ${resultado.reason}.`);
                 continue; // una hermana incompleta no frena a las demás
             }
-            entradas.push(resultado.input);
-            skus.push(miembro.sku);
+            if (esElPedido) padreDelPedido = resultado.input.parentSku;
+            delMismoPadre.push({ sku: miembro.sku, input: resultado.input });
+        }
+        for (const x of delMismoPadre) {
+            if (x.input.parentSku !== padreDelPedido) continue; // otra familia (otro tamaño): no se mezcla
+            entradas.push(x.input);
+            skus.push(x.sku);
         }
 
         const feedId = await this.falabellaApi.updateProductContent(credentials, entradas, this.falabellaOperatorCode);
@@ -2053,9 +2146,17 @@ export class SyncService implements OnModuleInit {
         // todas las variantes que salen bajo el mismo código padre llevan el MISMO nombre, sin color ni tamaño.
         const conCodigoPadre = !!grupoDelProducto && !noAplican.has('parentsku')
             && (categoriaAdmiteVariantes(categoryAttributes) || variacionPorTallaYColor(categoryAttributes));
+        // Si la categoría no admite uno de los ejes (el tamaño de cama) como variación, cada valor de ese eje es una familia propia: su propio
+        // código padre y su propio nombre con el tamaño. Así cada ficha lleva el tamaño correcto y los colores van dentro de cada familia.
+        const ejesSeparados = conCodigoPadre ? ejesQueSeparanFamilias(grupoDelProducto.axes ?? [], categoryAttributes) : [];
+        const etiquetaDeFamilia = ejesSeparados.map((e) => (product.variantValues as any)?.[e]).filter(Boolean).join(' · ');
+        const valoresDelGrupoFa = (grupoDelProducto?.axes ?? []).flatMap((e: any) => e.values);
         const nombreComun = (agrupaPorTallaYColor || conCodigoPadre)
-            ? nombreDeFamilia(grupoDelProducto.name || product.aiTitle || product.name, (grupoDelProducto.axes ?? []).flatMap((e: any) => e.values), 100)
+            ? (etiquetaDeFamilia
+                ? tituloDeVariante(grupoDelProducto.name || product.aiTitle || product.name, etiquetaDeFamilia, valoresDelGrupoFa, 100)
+                : nombreDeFamilia(grupoDelProducto.name || product.aiTitle || product.name, valoresDelGrupoFa, 100))
             : undefined;
+        const codigoPadre = ((product as any).group?.parentSku ?? product.sku) + (etiquetaDeFamilia ? '-' + sufijoDeFamilia(etiquetaDeFamilia) : '');
 
         return {
             input: {
@@ -2096,7 +2197,7 @@ export class SyncService implements OnModuleInit {
                 // de esas categorías sale como antes. Si Falabella responde que ParentSku no aplica, `noAplican` lo apaga solo.
                 parentSku: noAplican.has('parentsku')
                     || !(categoriaAdmiteVariantes(categoryAttributes) || (!!(product as any).group && variacionPorTallaYColor(categoryAttributes))) ? undefined
-                    : (product as any).group?.parentSku ?? product.sku,
+                    : codigoPadre,
                 extraAttributes: propios,
             },
         };
