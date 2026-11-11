@@ -17,6 +17,7 @@ export function textoDeEjes(ejes?: EjeParaIA[] | null): string {
     return [
         'Este producto se vende como UNA sola publicación con varias opciones (variantes). Opciones disponibles:',
         ...lineas,
-        'El título, la descripción y los atributos son GENERALES para todas las variantes: no los limites a un solo valor de estas opciones. Puedes mencionar qué opciones existen.',
+        'El título, la descripción y los atributos son GENERALES para todas las variantes: no los limites a un solo valor de estas opciones.',
+        'El título y la descripción corta son GENERALES: NUNCA escribas en ellos estas opciones (colores, tallas, etc.), ni con frases como «disponible en…»; son lo que elige el comprador y se muestran aparte como variantes. Las opciones sí pueden mencionarse en la descripción larga (HTML).',
     ].join('\n');
 }

@@ -65,3 +65,26 @@ export function atributosConVariante(atributos: Record<string, any>, valores?: R
     }
     return salida;
 }
+
+const PALABRAS_SUELTAS = new Set(['disponible', 'disponibles', 'en', 'y', 'e', 'o', 'con', 'de', 'en colores']);
+const aLaxo = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+').replace(/[aáàä]/gi, '[aáàä]').replace(/[eéèë]/gi, '[eéèë]').replace(/[ií]/gi, '[ií]').replace(/[oóòö]/gi, '[oóòö]').replace(/[uúü]/gi, '[uúü]').replace(/[nñ]/gi, '[nñ]');
+
+/**
+ * Quita de un título o de una descripción corta las OPCIONES de las variantes («… DISPONIBLE EN ROSADO, NEGRO, ROJO Y CREMA»).
+ * El título describe el producto en general; el color o la talla los elige el comprador entre las variantes, así que no se escriben ahí.
+ * Solo quita las frases «disponible en / en <valores del grupo>» y lo que sobre al final; no toca el resto del texto.
+ */
+export function sinOpcionesDeVariantes(texto: string, valoresDelGrupo: string[] = []): string {
+    const valores = [...new Set(valoresDelGrupo.map((v) => String(v ?? '').trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+    const original = String(texto ?? '').replace(/\s+/g, ' ').trim();
+    if (!valores.length || !original) return original;
+    const lista = `(?:${valores.map(aLaxo).join('|')})`;
+    const union = '(?:\\s*(?:,|;|/|\\by\\b|\\be\\b|\\bo\\b)\\s*)';
+    const frase = new RegExp(`\\s*[,.;-]?\\s*\\b(?:disponibles?\\s+)?en\\s+(?:(?:los\\s+)?colou?res?\\s*:?\\s*)?${lista}(?:${union}${lista})*(?=[\\s.,;]|$)[.,;]?`, 'gi');
+    let salida = original.replace(frase, ' ').replace(/\s+/g, ' ').trim();
+    // Lo que quede colgando al final («… BOLSILLOS DISPONIBLE», «… Y»).
+    const palabras = salida.split(' ').filter(Boolean);
+    while (palabras.length > 1 && PALABRAS_SUELTAS.has(normalizar(palabras[palabras.length - 1].replace(/[.,;:]+$/, '')))) palabras.pop();
+    salida = palabras.join(' ').replace(/[\s,;:-]+$/, '');
+    return salida || original;
+}

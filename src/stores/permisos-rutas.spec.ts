@@ -86,6 +86,7 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/ripley/imports/:importId': 'canales.publicar',
     'Sync POST /sync/ripley/products/:id/register-sent': 'canales.publicar',
     'Sync POST /sync/ripley/products/:id/link-offer': 'canales.publicar',
+    'Sync GET /sync/ripley/skus-en-ripley': 'canales.publicar',
     'Sync PATCH /sync/ripley/products/:id/preparation': 'canales.publicar',
     'Sync GET /sync/ripley/categories': 'canales.publicar',
     'Sync GET /sync/ripley/categories/:id/fields': 'canales.publicar',

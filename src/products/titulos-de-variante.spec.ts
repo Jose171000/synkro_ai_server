@@ -1,4 +1,4 @@
-import { atributosConVariante, nombreDeFamilia, recortarEnPalabra, sinValoresAlFinal, tituloDeVariante } from './titulos-de-variante';
+import { atributosConVariante, nombreDeFamilia, recortarEnPalabra, sinValoresAlFinal, tituloDeVariante, sinOpcionesDeVariantes } from './titulos-de-variante';
 
 describe('títulos de variante', () => {
     const base = 'Perchero Elegante Multifuncional Kasari Metal Negro Azul';
@@ -49,5 +49,34 @@ describe('atributos de una variante', () => {
 
     it('sin valores de variante deja todo igual', () => {
         expect(atributosConVariante({ color: 'Azul' }, null)).toEqual({ color: 'Azul' });
+    });
+});
+
+describe('sinOpcionesDeVariantes', () => {
+    const colores = ['Rosado', 'Negro', 'Rojo', 'Crema', 'Rosado Bebé'];
+
+    it('quita «disponible en <colores>» del final del título', () => {
+        expect(sinOpcionesDeVariantes('CANGURO DE POLIÉSTER UNISEX CON 2 BOLSILLOS DISPONIBLE EN ROSADO, NEGRO, ROJO Y CREMA', colores)).toBe('CANGURO DE POLIÉSTER UNISEX CON 2 BOLSILLOS');
+    });
+
+    it('quita la frase de la descripción corta sin tocar el resto', () => {
+        expect(sinOpcionesDeVariantes('Bolso canguro unisex de poliéster con diseño práctico y dos bolsillos. Disponible en rosado, negro, rojo y crema para llevar tus esenciales con comodidad.', colores))
+            .toBe('Bolso canguro unisex de poliéster con diseño práctico y dos bolsillos para llevar tus esenciales con comodidad.');
+    });
+
+    it('no toca un texto que no menciona las opciones', () => {
+        expect(sinOpcionesDeVariantes('Almohada de viaje inflable con bomba de aire', colores)).toBe('Almohada de viaje inflable con bomba de aire');
+    });
+
+    it('funciona con tildes distintas y con colores compuestos', () => {
+        expect(sinOpcionesDeVariantes('ALMOHADA INFLABLE EN ROSADO BEBE Y NEGRO', colores)).toBe('ALMOHADA INFLABLE');
+    });
+
+    it('sin valores de variantes (producto simple) deja el texto igual', () => {
+        expect(sinOpcionesDeVariantes('CANGURO DISPONIBLE EN ROJO', [])).toBe('CANGURO DISPONIBLE EN ROJO');
+    });
+
+    it('si quitaría todo el texto, lo deja como estaba', () => {
+        expect(sinOpcionesDeVariantes('EN ROJO', colores)).toBe('EN ROJO');
     });
 });

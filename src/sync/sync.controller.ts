@@ -605,6 +605,20 @@ export class SyncController {
         return this.ripleyPublicacion.publicar(scopeOf(req), id, { alGrupo: dto?.alGrupo === true, confirmar: dto?.confirmar === true, confirmarActualizacion: dto?.confirmarActualizacion === true, connectionId: dto?.connectionId });
     }
 
+    @Get('ripley/skus-en-ripley')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Cuáles de estos SKU ya existen como oferta en Ripley (solo consulta)',
+        description: 'Sirve para elegir un producto que NO esté en Ripley antes de un piloto de publicación. Máximo 60 SKU separados por coma. No escribe nada.',
+    })
+    async ripleySkusEnRipley(@Query('skus') skus: string, @Req() req) {
+        const lista = [...new Set(String(skus ?? '').split(',').map((s) => s.trim()).filter(Boolean))].slice(0, 60);
+        if (!lista.length) throw new BadRequestException('Indica al menos un SKU.');
+        return { consultados: lista.length, yaEnRipley: await this.ripleyPublicacion.yaEnRipley(scopeOf(req), lista) };
+    }
+
     @Post('ripley/products/:id/link-offer')
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()

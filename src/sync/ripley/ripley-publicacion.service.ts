@@ -160,7 +160,7 @@ export class RipleyPublicacionService {
     }
 
     /** SKU de la lista que ya existen como oferta en Ripley. Solo consulta; si Ripley no responde, no inventa nada. */
-    private async yaEnRipley(scope: SyncScope, skus: string[]): Promise<VistaPreviaDeRipley['yaEnRipley']> {
+    async yaEnRipley(scope: SyncScope, skus: string[]): Promise<VistaPreviaDeRipley['yaEnRipley']> {
         let auth;
         try { auth = this.ecommerce.authOf(await this.sync.resolveConnection(scope.storeId, 'ripley')); } catch { return []; }
         const encontrados: VistaPreviaDeRipley['yaEnRipley'] = [];

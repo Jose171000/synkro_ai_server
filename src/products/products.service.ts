@@ -20,6 +20,7 @@ import { MAX_IMAGES } from '../ai/product-vision.service';
 import { RipleyMarcasService } from '../sync/ripley/ripley-marcas.service';
 import { huellaDeFotos } from '../ai/vision-fotos';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
+import { sinOpcionesDeVariantes } from './titulos-de-variante';
 
 /**
  * Dónde debe ser único un SKU: dentro de una tienda. Un producto que todavía no tiene tienda (los de antes de las tiendas)
@@ -380,6 +381,12 @@ export class ProductsService {
         const contenido = completos({
             name: ripley.name, shortDescription: ripley.shortDescription, description: html || ripley.description, brand: ripley.brand,
         });
+        // El título y la descripción corta son del producto en general: las opciones de las variantes (colores, tallas) no van ahí.
+        if (ejes?.length) {
+            const opciones = ejes.flatMap((e) => e.values ?? []);
+            if (contenido.name) contenido.name = sinOpcionesDeVariantes(String(contenido.name), opciones);
+            if (contenido.shortDescription) contenido.shortDescription = sinOpcionesDeVariantes(String(contenido.shortDescription), opciones);
+        }
         const descripcionEsHtml = !!html;
         const faltantes: { name: string; description: string; options?: string[] }[] = [...(aiContent?.missingAttributes?.ripley ?? [])];
 
