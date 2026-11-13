@@ -19,6 +19,21 @@ export interface EjeDeCanal {
     required?: boolean;
 }
 
+/** Cómo llega un valor de Synkro a la lista de un canal: igual, aproximado por la regla del canal, ajustado (IA / persona) o sin equivalente. */
+export type EstadoDeValor = 'exacto' | 'aproximado' | 'ajustado' | 'sin';
+
+/** Lo que se enviará al canal por cada valor de un eje, en UN dato del canal (un eje de color puede tener varios: «Color» y «Color básico»). */
+export interface DetalleDeEje {
+    eje: string;
+    /** El dato del canal (etiqueta limpia). */
+    atributo: string;
+    atributoId: string;
+    /** Dato de la misma clase que el principal (Color básico): su opción se deduce de la del principal, no se elige aparte. */
+    derivado: boolean;
+    opciones: string[];
+    items: { valor: string; opcion: string | null; estado: EstadoDeValor }[];
+}
+
 export interface InfoVariantesDeCategoria {
     canal: string;
     categoryId: string | null;
@@ -26,6 +41,8 @@ export interface InfoVariantesDeCategoria {
     /** La categoría admite agrupar variantes en una sola publicación. */
     admite: boolean;
     ejes: EjeDeCanal[];
+    /** Otros datos con lista cerrada de la misma clase que un eje (Falabella: «Color básico» además de «Color»). Solo para mostrar qué saldrá. */
+    extras?: EjeDeCanal[];
     /** El canal acepta cualquier eje (sin depender de la categoría), hasta este máximo. */
     libre?: boolean;
     maxEjes?: number;
@@ -52,6 +69,8 @@ export interface ResultadoDeCompatibilidad {
     renombresSugeridos?: { eje: string; a: string }[];
     ejesQueFaltan: string[];
     valoresSinEquivalente: { eje: string; valores: string[] }[];
+    /** Qué saldrá en el canal por cada valor de cada eje (aunque todo esté bien): la pantalla lo muestra siempre. */
+    detalle: DetalleDeEje[];
     /** Valores distintos que el canal llevaría a la MISMA opción («Celeste» y «Turquesa» → «Azul»): dos variantes quedarían con el mismo dato. */
     colisiones: { eje: string; atributo: string; opcion: string; valores: string[] }[];
     /** Frases para mostrar a la persona (en español). */
@@ -86,7 +105,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const nombreDelCanal = NOMBRE_DE_CANAL[info.canal] ?? info.canal;
     const base: ResultadoDeCompatibilidad = {
         canal: info.canal, nombreDelCanal, categoryId: info.categoryId, ruta: info.ruta ?? null,
-        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesDisponibles: [], ejesQueFaltan: [], valoresSinEquivalente: [], colisiones: [], avisos: [],
+        publicaComo: 'una', mapeo: [], ejesNoPermitidos: [], ejesDisponibles: [], ejesQueFaltan: [], valoresSinEquivalente: [], detalle: [], colisiones: [], avisos: [],
     };
     const donde = info.ruta ? `La categoría «${info.ruta}» de ${nombreDelCanal}` : `La categoría elegida en ${nombreDelCanal}`;
     const separadas = (motivo: string): ResultadoDeCompatibilidad => ({
@@ -133,20 +152,39 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const sinEquivalente: { eje: string; valores: string[] }[] = [];
     const colisiones: { eje: string; atributo: string; opcion: string; valores: string[] }[] = [];
     const automatico = info.automatico ?? ((v: string, o: string[]) => ajustarAUnaLista(v, o));
+    const detalle: DetalleDeEje[] = [];
     for (const par of mapeo) {
         const atributo = info.ejes.find((a) => a.id === par.atributo);
         if (!atributo?.options?.length) continue;
         const valores = ejesDelProducto.find((e) => e.name === par.eje)?.values ?? [];
         const guardados = info.ajustes?.[claseDeEje(par.eje)] ?? {};
-        const opcionDe = (v: string): string | null => {
+        // La misma regla que usa el canal al publicar (valorConAjuste): el ajuste de la persona si es válido en esta lista, el ajuste llevado
+        // a la opción más cercana de esta lista, y si no, el valor tal cual o su opción más cercana.
+        const resolver = (v: string, opciones: string[]): { opcion: string | null; estado: EstadoDeValor } => {
             const g = guardados[normalizar(v)];
-            const valida = g ? atributo.options!.find((o) => normalizar(o) === normalizar(g)) : undefined;
-            return valida ?? automatico(v, atributo.options!) ?? null;
+            if (g) {
+                const valida = opciones.find((o) => normalizar(o) === normalizar(g));
+                if (valida) return { opcion: valida, estado: 'ajustado' };
+                const desdeElAjuste = automatico(g, opciones);
+                if (desdeElAjuste) return { opcion: desdeElAjuste, estado: 'ajustado' };
+            }
+            const exacta = opciones.find((o) => normalizar(o) === normalizar(v));
+            if (exacta) return { opcion: exacta, estado: 'exacto' };
+            const cercana = automatico(v, opciones);
+            return cercana ? { opcion: cercana, estado: 'aproximado' } : { opcion: null, estado: 'sin' };
         };
+        const opcionDe = (v: string): string | null => resolver(v, atributo.options!).opcion;
+        const limpio = (e: EjeDeCanal) => String(e.label || e.id).replace(/s*variant$/i, '').trim();
+        const unicos = [...new Set(valores.map((x) => String(x).trim()).filter(Boolean))];
+        detalle.push({ eje: par.eje, atributo: limpio(atributo), atributoId: atributo.id, derivado: false, opciones: atributo.options, items: unicos.map((v) => ({ valor: v, ...resolver(v, atributo.options!) })) });
+        for (const extra of (info.extras ?? []).filter((x) => x.id !== atributo.id && x.options?.length && claseDeEje(x.label || x.id) === claseDeEje(par.eje))) {
+            detalle.push({ eje: par.eje, atributo: limpio(extra), atributoId: extra.id, derivado: true, opciones: extra.options!, items: unicos.map((v) => ({ valor: v, ...resolver(v, extra.options!) })) });
+        }
+
         const malos = valores.filter((v) => opcionDe(v) === null);
         if (malos.length) sinEquivalente.push({ eje: par.eje, valores: malos });
         const porOpcion = new Map<string, string[]>();
-        for (const v of [...new Set(valores.map((x) => String(x).trim()).filter(Boolean))]) {
+        for (const v of unicos) {
             const o = opcionDe(v);
             if (o !== null) porOpcion.set(o, [...(porOpcion.get(o) ?? []), v]);
         }
@@ -155,7 +193,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
 
     // Solo se ofrece renombrar cuando hay un eje que el canal NO acepta tal como está; si todo encaja, no hay nada que cambiar.
     const disponibles = noPermitidos.length ? info.ejes.filter((a) => !usados.has(a.id)).map((a) => String(a.label).replace(/\s*variant$/i, '').trim()).filter(Boolean) : [];
-    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesDisponibles: disponibles, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente, colisiones };
+    const resultado: ResultadoDeCompatibilidad = { ...base, mapeo, ejesNoPermitidos: noPermitidos, ejesDisponibles: disponibles, ejesQueFaltan: faltan, valoresSinEquivalente: sinEquivalente, detalle, colisiones };
     if (faltan.length) resultado.avisos.push(`${donde} también pide ${lista(faltan)} como dato de variante y el producto no tiene ese eje.`);
     for (const s of sinEquivalente) resultado.avisos.push(`En ${nombreDelCanal} no existen estos valores de «${s.eje}»: ${lista(s.valores)}. Se ajustarán al más cercano o habrá que cambiarlos.`);
 

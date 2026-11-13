@@ -203,7 +203,7 @@ export class VariantCompatService {
      * categoría. Se devuelven CON sus listas, para que la revisión avise de los valores que Falabella no tiene (un color «Leopardo») y la
      * persona pueda elegir a qué opción corresponde. Sin la lista no se podía comprobar nada y la pantalla no ofrecía opciones.
      */
-    private async ejesDeTallaYColor(ambito: AmbitoDeGrupo, categoryId: string): Promise<{ id: string; label: string; options?: string[] }[]> {
+    private async ejesDeTallaYColor(ambito: AmbitoDeGrupo, categoryId: string): Promise<{ ejes: { id: string; label: string; options?: string[] }[]; extras: { id: string; label: string; options: string[] }[] }> {
         let campos: { name: string; label: string; options?: string[] }[] = [];
         try { campos = await this.sync.getFalabellaCategoryFields(ambito, categoryId); } catch { /* sin lista: se revisa sin comprobar valores */ }
         const lista = (clase: string, exacto: string) => {
@@ -212,7 +212,12 @@ export class VariantCompatService {
         };
         const color = lista('color', 'color');
         const talla = lista('talla', 'talla');
-        return [{ id: 'Color', label: 'Color', ...(color?.length ? { options: color } : {}) }, { id: 'Talla', label: 'Talla', ...(talla?.length ? { options: talla } : {}) }];
+        const ejes = [{ id: 'Color', label: 'Color', ...(color?.length ? { options: color } : {}) }, { id: 'Talla', label: 'Talla', ...(talla?.length ? { options: talla } : {}) }];
+        // Otros datos de color o talla con lista cerrada («Color básico»): no se eligen aparte, pero se muestra qué saldrá en cada uno.
+        const extras = campos
+            .filter((c) => c.options?.length && ['color', 'talla'].includes(claseDeEje(c.label || c.name)) && normalizar(c.name) !== 'color' && normalizar(c.name) !== 'talla')
+            .map((c) => ({ id: c.name, label: c.label || c.name, options: c.options! }));
+        return { ejes, extras };
     }
 
     /** Lo que admite la categoría del canal; null si no se puede saber (sin categoría, sin cuenta conectada o el canal no responde). */
@@ -233,10 +238,11 @@ export class VariantCompatService {
             }
             if (canal === 'falabella') {
                 const r = await this.sync.falabellaCategoryVariants(ambito, categoryId);
+                const tallaYColor = !r.camposDeVariacion.length && r.porTallaYColor ? await this.ejesDeTallaYColor(ambito, categoryId) : null;
                 const ejes = r.camposDeVariacion.length
                     ? r.camposDeVariacion.map((c) => ({ id: c.name, label: c.label, required: !!c.required, ...(c.options?.length ? { options: c.options } : {}) }))
-                    : r.porTallaYColor ? await this.ejesDeTallaYColor(ambito, categoryId) : [];
-                return { canal, categoryId, admite: r.admiteVariantes, ejes };
+                    : tallaYColor?.ejes ?? [];
+                return { canal, categoryId, admite: r.admiteVariantes, ejes, ...(tallaYColor?.extras.length ? { extras: tallaYColor.extras } : {}) };
             }
             if (canal === 'mercadolibre') {
                 const ejes = await this.sync.ejesDeVariacionMeli(categoryId);

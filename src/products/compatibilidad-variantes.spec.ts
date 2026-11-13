@@ -1,4 +1,5 @@
 import { claseDeEje, InfoVariantesDeCategoria, revisarCompatibilidad } from './compatibilidad-variantes';
+import { opcionCercana } from '../common/opcion-cercana';
 
 const COLORES_RIPLEY = ['Beige', 'Marrón', 'Negro', 'Rosado'];
 const ripley = (over: Partial<InfoVariantesDeCategoria> = {}): InfoVariantesDeCategoria => ({
@@ -139,5 +140,44 @@ describe('revisarCompatibilidad', () => {
         const r = revisarCompatibilidad([{ name: 'Color', values: ['Rojo'] }], fb);
         expect(r.publicaComo).toBe('una');
         expect(r.mapeo).toEqual([{ eje: 'Color', atributo: 'ColorVariant' }]);
+    });
+});
+
+describe('revisarCompatibilidad: detalle de lo que saldrá en el canal', () => {
+    const cercana = (v: string, o: string[]) => opcionCercana(v, o);
+    const info = (ajustes?: any): InfoVariantesDeCategoria => ({
+        canal: 'falabella', categoryId: '4', admite: true,
+        ejes: [{ id: 'Color', label: 'Color', options: ['Beige', 'Burdeos', 'Café', 'Café Oscuro'] }, { id: 'Talla', label: 'Talla', options: ['35', '36'] }],
+        extras: [{ id: 'color_basico', label: 'Color básico', options: ['Beige', 'Café'] }],
+        automatico: cercana, ...(ajustes ? { ajustes } : {}),
+    });
+    const ejes = [{ name: 'Color', values: ['Beige', 'Vino', 'Leopardo'] }, { name: 'Talla', values: ['35', '36'] }];
+
+    it('siempre dice qué opción lleva cada valor y cómo se llegó a ella, aunque no haya problemas', () => {
+        const r = revisarCompatibilidad([ejes[0]], info({ color: { leopardo: 'Café Oscuro' } }));
+        const color = r.detalle.find((d) => d.eje === 'Color' && !d.derivado)!;
+        expect(color.items).toEqual([
+            { valor: 'Beige', opcion: 'Beige', estado: 'exacto' },
+            { valor: 'Vino', opcion: 'Burdeos', estado: 'aproximado' },
+            { valor: 'Leopardo', opcion: 'Café Oscuro', estado: 'ajustado' },
+        ]);
+    });
+
+    it('el dato de la misma clase con otra lista («Color básico») recibe la opción más cercana de SU lista', () => {
+        const r = revisarCompatibilidad([ejes[0]], info({ color: { leopardo: 'Café Oscuro' } }));
+        const basico = r.detalle.find((d) => d.derivado)!;
+        expect(basico.atributo).toBe('Color básico');
+        expect(basico.items.find((i) => i.valor === 'Leopardo')).toMatchObject({ opcion: expect.any(String), estado: 'ajustado' });
+    });
+
+    it('un valor sin equivalente sale como «sin» y entra en valoresSinEquivalente', () => {
+        const r = revisarCompatibilidad([ejes[0]], info());
+        expect(r.detalle[0].items.find((i) => i.valor === 'Leopardo')).toEqual({ valor: 'Leopardo', opcion: null, estado: 'sin' });
+        expect(r.valoresSinEquivalente).toEqual([{ eje: 'Color', valores: ['Leopardo'] }]);
+    });
+
+    it('las tallas también se detallan', () => {
+        const r = revisarCompatibilidad([ejes[1]], info());
+        expect(r.detalle[0].items).toEqual([{ valor: '35', opcion: '35', estado: 'exacto' }, { valor: '36', opcion: '36', estado: 'exacto' }]);
     });
 });
