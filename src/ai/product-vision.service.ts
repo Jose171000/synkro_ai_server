@@ -293,8 +293,9 @@ export class ProductVisionService {
                 messages: [
                     { role: 'system', content: `Eres un revisor de catálogo. Cada foto es una versión de un mismo producto («${entrada.producto}»). La persona escribió un valor para el dato «${entrada.dato}» que el canal de venta no tiene en su lista.
 Mira la foto, identifica el ${entrada.dato.toLowerCase()} real y elige UNA opción de la lista que mejor lo represente.
+Cómo decidir: usa el nombre que escribió la persona (puede ser un estampado o un nombre comercial: «Leopardo», «Vaca», «Nude») junto con el color que realmente se ve en la foto, y elige el color de la lista más parecido a lo que se ve. Para un estampado, elige el color predominante.
 Reglas estrictas:
-- La opción debe ser EXACTAMENTE una de la lista dada; nunca inventes una.
+- Solo puedes elegir entre las opciones de la lista dada. La opción debe ser EXACTAMENTE una de ellas, escrita igual; nunca inventes ni adaptes una.
 - Si ninguna representa razonablemente lo que ves, devuelve null.
 - Si dos fotos son de tonos distintos y la lista tiene opciones distintas que los distinguen, usa opciones distintas.
 - "motivo": una frase corta en español.

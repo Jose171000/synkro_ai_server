@@ -69,6 +69,13 @@ export function valorConAjuste(args: {
     const guardado = ajustesDe(atributos, canal)[claseDeEje(atributo)]?.[claveDeValor(valor)];
     const valido = guardado ? opcionDeLaLista(guardado, opciones) : null;
     if (valido) return valido;
+    // Un canal puede tener VARIOS datos de la misma clase con listas distintas (Falabella: «Color» con 95 opciones y «Color básico» con 27).
+    // El ajuste se eligió para uno; si no está en la lista de ESTE dato («Café Oscuro» no está en los colores básicos), se lleva a la opción más
+    // cercana de esta lista («Café»). Nunca se devuelve algo que no esté en la lista.
+    if (guardado) {
+        const desdeElAjuste = automatico(guardado, opciones);
+        if (desdeElAjuste) return desdeElAjuste;
+    }
     return automatico(valor, opciones) ?? undefined;
 }
 

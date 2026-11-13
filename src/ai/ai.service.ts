@@ -458,9 +458,9 @@ ${JSON.stringify(entrada.opciones)}
 Producto: ${entrada.producto}
 Valores que escribió la persona y que no están en la lista: ${JSON.stringify(entrada.valores.map((v) => v.valor))}
 
-Para cada valor elige la opción de la lista que mejor lo represente (por ejemplo un tono específico → su color básico más cercano).
+Para cada valor elige la opción de la lista que mejor lo represente (por ejemplo un tono específico → su color básico más cercano). El valor puede ser un estampado o un nombre comercial («Leopardo», «Vaca», «Nude»): úsalo con lo que sabes del producto y elige el color de la lista más parecido.
 Reglas estrictas:
-- La opción debe ser EXACTAMENTE una de la lista; nunca inventes una.
+- Solo puedes elegir entre las opciones de esa lista. La opción debe ser EXACTAMENTE una de ellas, escrita igual; nunca inventes ni adaptes una.
 - Si ninguna lo representa razonablemente, devuelve null.
 - "motivo": una frase corta en español.
 Responde únicamente: { "resultados": [ { "valor": "…", "opcion": "…" o null, "motivo": "…" } ] }`,
