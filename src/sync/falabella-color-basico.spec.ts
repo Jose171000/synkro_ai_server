@@ -7,24 +7,30 @@ const CATEGORIA = [
     campo('color', { label: 'Color', options: ['Beige', 'Negro', 'Leopardo', 'Multicolor'] }),
 ];
 
-describe('Falabella: el color de la variante no vale para un campo de colores básicos que no lo tiene', () => {
+describe('Falabella: un color sin opción en «Color básico» no se rellena distinto en cada talla', () => {
     const servicio: any = Object.create(SyncService.prototype);
-    const ficha = (aiAttributes: any, color: string) => ({
-        sku: 'BAL-37', name: 'Ballerinas', aiTitle: 'Ballerinas', price: 250, stock: 1, images: [{ url: 'https://i/1.jpg' }], description: 'Ballerinas de cuero',
+    // Cada talla trae SU color básico guardado (la IA los llenó por separado y no coinciden): no debe usarse.
+    const ficha = (aiAttributes: any, color: string, talla: string) => ({
+        sku: `BAL-${talla}`, name: 'Ballerinas', aiTitle: 'Ballerinas', price: 250, stock: 1, images: [{ url: 'https://i/1.jpg' }], description: 'Ballerinas de cuero',
         packageWidth: 18, packageLength: 29, packageHeight: 9, packageWeight: 1, marketplaceIds: { falabella_category_id: '4' },
-        aiAttributes: { brand: 'JOLI JOLI', ...aiAttributes }, variantValues: { Color: color, Talla: '37' },
+        aiAttributes: { brand: 'JOLI JOLI', ...aiAttributes }, variantValues: { Color: color, Talla: talla },
     });
 
-    it('«Leopardo» queda en «Color» y el color básico usa la opción válida que ya tenía el producto', () => {
-        const r: any = servicio.toFalabellaInput(ficha({ color_basico: 'Beige', color: 'Beige' }, 'Leopardo'), 'active', CATEGORIA);
-        expect('reason' in r).toBe(false);
-        expect(r.input.extraAttributes.color).toBe('Leopardo');
-        expect(r.input.extraAttributes.color_basico).toBe('Beige');
+    it('sin una opción confirmada para ese color, el dato queda pendiente (no se usa lo guardado de cada talla)', () => {
+        for (const guardado of ['Beige', 'Café']) {
+            const r: any = servicio.toFalabellaInput(ficha({ color_basico: guardado, color: guardado }, 'Leopardo', '35'), 'active', CATEGORIA);
+            expect(r.reason).toContain('Color básico (valor no válido)');
+        }
     });
 
-    it('sin una opción válida de respaldo sigue pidiendo el dato en vez de inventarlo', () => {
-        const r: any = servicio.toFalabellaInput(ficha({}, 'Leopardo'), 'active', CATEGORIA);
-        expect(r.reason).toMatch(/Color básico/);
+    it('con la opción confirmada para ese dato, todas las tallas del color salen con la MISMA opción', () => {
+        const ajustes = { falabella: { 'color@color basico': { leopardo: 'Beige' } } };
+        const a: any = servicio.toFalabellaInput(ficha({ color_basico: 'Beige', color: 'Beige', _ajustes: ajustes }, 'Leopardo', '35'), 'active', CATEGORIA);
+        const b: any = servicio.toFalabellaInput(ficha({ color_basico: 'Café', color: 'Café', _ajustes: ajustes }, 'Leopardo', '36'), 'active', CATEGORIA);
+        expect('reason' in a).toBe(false);
+        expect(a.input.extraAttributes.color_basico).toBe('Beige');
+        expect(b.input.extraAttributes.color_basico).toBe('Beige');
+        expect(a.input.extraAttributes.color).toBe(b.input.extraAttributes.color);
     });
 });
 

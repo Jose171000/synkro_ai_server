@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
 
 export class SugerirAjustesDto {
     @ApiProperty({ description: 'Canal cuyas listas cerradas se revisan.', example: 'falabella' })
@@ -20,6 +20,10 @@ export class CambioDeAjusteDto {
     @ApiProperty({ description: 'Opción válida del canal a la que corresponde.', example: 'Gris' })
     @IsString() @MinLength(1) @MaxLength(200)
     opcion: string;
+
+    @ApiProperty({ required: false, description: 'Dato concreto del canal al que se aplica el ajuste cuando el eje tiene varios con listas distintas («Color básico»).', example: 'Color básico' })
+    @IsOptional() @IsString() @MaxLength(120)
+    atributo?: string;
 }
 
 export class AplicarAjustesDto {

@@ -23,6 +23,8 @@ export interface SugerenciaDeAjustes {
     atributo: string;
     opciones: string[];
     items: { valor: string; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | 'actual' | null; conflicto: boolean }[];
+    /** Dato de la misma clase que el principal (Falabella: «Color básico»): su ajuste es propio, solo vale para ese dato. */
+    derivado?: boolean;
 }
 
 /** Cuántas categorías parecidas se verifican con la IA al buscar una recomendación (cada verificación es una consulta). */
@@ -166,6 +168,28 @@ export class VariantCompatService {
                 }),
             });
         }
+        // Los datos de la misma clase con otra lista («Color básico») que quedaron sin opción: la IA elige UNA vez por valor, mirando el nombre y la
+        // foto, y solo entre las opciones de ESA lista. Así todas las tallas de un color salen con lo mismo.
+        for (const d of r.detalle.filter((x) => x.derivado)) {
+            const objetivo = d.items.filter((i) => i.estado === 'sin').map((i) => i.valor);
+            if (!objetivo.length) continue;
+            const imagenDe = (valor: string) => variantes.find((v) => (v.variantValues as any)?.[d.eje] === valor)?.images?.find((i) => i.url)?.url ?? null;
+            const sugeridas = await this.ai.sugerirOpcionesDeLista({
+                canal: NOMBRE_DE_CANAL[canal] ?? canal, producto: vista.name, dato: d.atributo, opciones: d.opciones,
+                valores: objetivo.map((valor) => ({ valor, imagen: imagenDe(valor) })),
+            });
+            salida.push({
+                eje: d.eje, atributo: d.atributo, opciones: d.opciones, derivado: true,
+                items: objetivo.map((valor) => {
+                    const s = sugeridas.find((x) => x.valor === valor);
+                    return {
+                        valor, conflicto: false, opcion: s?.opcion ?? null,
+                        motivo: s?.opcion ? s.motivo : 'La IA no encontró una opción clara: elige una de la lista.',
+                        origen: s?.opcion ? s.origen : null,
+                    };
+                }),
+            });
+        }
         return salida;
     }
 
@@ -173,7 +197,7 @@ export class VariantCompatService {
      * Guarda, para ese canal, a qué opción válida corresponde cada valor que la persona confirmó. Se guarda en todas las variantes del grupo
      * (el valor no cambia en Synkro ni en los demás canales). Solo acepta opciones que existan en la lista del canal.
      */
-    async aplicarAjustes(grupoId: string, marketplace: string, cambios: { eje: string; valor: string; opcion: string }[], ambito: AmbitoDeGrupo): Promise<{ aplicados: number; variantes: number }> {
+    async aplicarAjustes(grupoId: string, marketplace: string, cambios: { eje: string; valor: string; opcion: string; atributo?: string }[], ambito: AmbitoDeGrupo): Promise<{ aplicados: number; variantes: number }> {
         const canal = String(marketplace ?? '').toLowerCase();
         const vista = await this.grupos.obtener(grupoId, ambito);
         const variantes = await this.productos.find({ where: { group: { id: grupoId } } });
@@ -185,10 +209,14 @@ export class VariantCompatService {
         const validos: { clase: string; valor: string; opcion: string }[] = [];
         for (const c of cambios ?? []) {
             const par = r.mapeo.find((m) => m.eje === c.eje);
-            const opciones = info.ejes.find((a) => a.id === par?.atributo)?.options ?? [];
+            // Con `atributo`: el ajuste es de ese dato concreto (p. ej. «Color básico»), con su propia lista; sin él, del dato principal del eje.
+            const derivado = c.atributo ? r.detalle.find((d) => d.derivado && d.eje === c.eje && normalizar(d.atributo) === normalizar(c.atributo!)) : undefined;
+            if (c.atributo && !derivado) throw new BadRequestException(`«${c.atributo}» no es un dato de ${NOMBRE_DE_CANAL[canal] ?? canal} que se pueda ajustar para «${c.eje}».`);
+            const opciones = derivado ? derivado.opciones : info.ejes.find((a) => a.id === par?.atributo)?.options ?? [];
             const opcion = opcionDeLaLista(c.opcion, opciones);
-            if (!par || !opcion) throw new BadRequestException(`«${c.opcion}» no es una opción válida de ${NOMBRE_DE_CANAL[canal] ?? canal} para «${c.eje}».`);
-            validos.push({ clase: claseDeEje(c.eje), valor: c.valor, opcion });
+            if (!par || !opcion) throw new BadRequestException(`«${c.opcion}» no es una opción válida de ${NOMBRE_DE_CANAL[canal] ?? canal} para «${c.atributo ?? c.eje}».`);
+            const claseDelAjuste = derivado?.claveDeAjuste ?? claseDeEje(c.eje);
+            validos.push({ clase: claseDelAjuste, valor: c.valor, opcion });
         }
         if (!validos.length) return { aplicados: 0, variantes: 0 };
         for (const v of variantes) {

@@ -23,6 +23,12 @@ export interface CambioDeAjuste { clase: string; valor: string; opcion: string }
 /** El mismo valor escrito con otras mayúsculas, tildes o espacios es el mismo valor. */
 export const claveDeValor = (valor: unknown): string => normalizar(valor);
 
+/**
+ * Clave de los ajustes de UN dato concreto del canal. Un canal puede tener varios datos de la misma clase con listas distintas (Falabella:
+ * «Color» y «Color básico»): el ajuste general (`color`) vale para todos, y el específico (`color@color basico`) manda en ese dato.
+ */
+export const claveDeAjusteEspecifico = (clase: string, atributo: string): string => `${clase}@${claveDeValor(atributo)}`;
+
 /** Los ajustes ya guardados para un canal (vacío si no hay). */
 export function ajustesDe(atributos: Record<string, any> | null | undefined, canal: string): AjustesDeCanal {
     const todos = (atributos ?? {})[CLAVE_DE_AJUSTES];
@@ -66,6 +72,10 @@ export function valorConAjuste(args: {
     automatico: (valor: string, opciones: string[]) => string | null | undefined;
 }): string | undefined {
     const { canal, atributos, atributo, valor, opciones, automatico } = args;
+    // 0) El ajuste confirmado para ESTE dato (p. ej. «Color básico»): manda sobre todo lo demás si sigue siendo una opción de su lista.
+    const especifico = ajustesDe(atributos, canal)[claveDeAjusteEspecifico(claseDeEje(atributo), atributo)]?.[claveDeValor(valor)];
+    const validoEspecifico = especifico ? opcionDeLaLista(especifico, opciones) : null;
+    if (validoEspecifico) return validoEspecifico;
     const guardado = ajustesDe(atributos, canal)[claseDeEje(atributo)]?.[claveDeValor(valor)];
     const valido = guardado ? opcionDeLaLista(guardado, opciones) : null;
     if (valido) return valido;

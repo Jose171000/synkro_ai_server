@@ -30,6 +30,8 @@ export interface DetalleDeEje {
     atributoId: string;
     /** Dato de la misma clase que el principal (Color básico): su opción se deduce de la del principal, no se elige aparte. */
     derivado: boolean;
+    /** Clave con la que se guarda el ajuste de este dato (solo en los derivados). */
+    claveDeAjuste?: string;
     opciones: string[];
     items: { valor: string; opcion: string | null; estado: EstadoDeValor }[];
 }
@@ -153,6 +155,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const colisiones: { eje: string; atributo: string; opcion: string; valores: string[] }[] = [];
     const automatico = info.automatico ?? ((v: string, o: string[]) => ajustarAUnaLista(v, o));
     const detalle: DetalleDeEje[] = [];
+    const derivadosSinOpcion: string[] = [];
     for (const par of mapeo) {
         const atributo = info.ejes.find((a) => a.id === par.atributo);
         if (!atributo?.options?.length) continue;
@@ -160,7 +163,10 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
         const guardados = info.ajustes?.[claseDeEje(par.eje)] ?? {};
         // La misma regla que usa el canal al publicar (valorConAjuste): el ajuste de la persona si es válido en esta lista, el ajuste llevado
         // a la opción más cercana de esta lista, y si no, el valor tal cual o su opción más cercana.
-        const resolver = (v: string, opciones: string[]): { opcion: string | null; estado: EstadoDeValor } => {
+        const resolver = (v: string, opciones: string[], especificos?: Record<string, string>): { opcion: string | null; estado: EstadoDeValor } => {
+            const e = especificos?.[normalizar(v)];
+            const delDato = e ? opciones.find((o) => normalizar(o) === normalizar(e)) : undefined;
+            if (delDato) return { opcion: delDato, estado: 'ajustado' };
             const g = guardados[normalizar(v)];
             if (g) {
                 const valida = opciones.find((o) => normalizar(o) === normalizar(g));
@@ -178,7 +184,12 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
         const unicos = [...new Set(valores.map((x) => String(x).trim()).filter(Boolean))];
         detalle.push({ eje: par.eje, atributo: limpio(atributo), atributoId: atributo.id, derivado: false, opciones: atributo.options, items: unicos.map((v) => ({ valor: v, ...resolver(v, atributo.options!) })) });
         for (const extra of (info.extras ?? []).filter((x) => x.id !== atributo.id && x.options?.length && claseDeEje(x.label || x.id) === claseDeEje(par.eje))) {
-            detalle.push({ eje: par.eje, atributo: limpio(extra), atributoId: extra.id, derivado: true, opciones: extra.options!, items: unicos.map((v) => ({ valor: v, ...resolver(v, extra.options!) })) });
+            const especificos = info.ajustes?.[`${claseDeEje(par.eje)}@${normalizar(extra.label || extra.id)}`];
+            const items = unicos.map((v) => ({ valor: v, ...resolver(v, extra.options!, especificos) }));
+            detalle.push({ eje: par.eje, atributo: limpio(extra), atributoId: extra.id, derivado: true, claveDeAjuste: `${claseDeEje(par.eje)}@${normalizar(extra.label || extra.id)}`, opciones: extra.options!, items });
+            // Sin opción en este dato: cada talla usaría un valor distinto y Falabella partiría un mismo color en varias variantes. Hay que resolverlo una vez.
+            const sinOpcion = items.filter((i) => i.estado === 'sin').map((i) => i.valor);
+            if (sinOpcion.length) derivadosSinOpcion.push(`En ${nombreDelCanal}, «${limpio(extra)}» no tiene opción para ${lista(sinOpcion)} (${par.eje}). Elígela una vez para que todas las tallas de ese color salgan iguales.`);
         }
 
         const malos = valores.filter((v) => opcionDe(v) === null);
@@ -197,6 +208,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     if (faltan.length) resultado.avisos.push(`${donde} también pide ${lista(faltan)} como dato de variante y el producto no tiene ese eje.`);
     for (const s of sinEquivalente) resultado.avisos.push(`En ${nombreDelCanal} no existen estos valores de «${s.eje}»: ${lista(s.valores)}. Se ajustarán al más cercano o habrá que cambiarlos.`);
 
+    resultado.avisos.push(...derivadosSinOpcion);
     for (const c of colisiones) resultado.avisos.push(`En ${nombreDelCanal} estos valores de «${c.eje}» quedarían como «${c.opcion}»: ${lista(c.valores)}. Dos variantes no deberían llevar la misma opción.`);
 
     if (noPermitidos.length) {

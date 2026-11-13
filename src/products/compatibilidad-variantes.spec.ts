@@ -180,4 +180,19 @@ describe('revisarCompatibilidad: detalle de lo que saldrá en el canal', () => {
         const r = revisarCompatibilidad([ejes[1]], info());
         expect(r.detalle[0].items).toEqual([{ valor: '35', opcion: '35', estado: 'exacto' }, { valor: '36', opcion: '36', estado: 'exacto' }]);
     });
+
+    it('un color sin opción en el segundo dato («Color básico») se marca y avisa; con el ajuste de ese dato queda resuelto', () => {
+        const base = info({ color: { camello: 'Café Oscuro' } });
+        const sinResolver = revisarCompatibilidad([{ name: 'Color', values: ['Camello'] }], { ...base, extras: [{ id: 'color_basico', label: 'Color básico', options: ['Beige', 'Negro'] }] });
+        const d = sinResolver.detalle.find((x) => x.derivado)!;
+        expect(d.items[0]).toMatchObject({ valor: 'Camello', opcion: null, estado: 'sin' });
+        expect(sinResolver.avisos.join(' ')).toMatch(/«Color básico» no tiene opción para «Camello»/);
+
+        const resuelto = revisarCompatibilidad([{ name: 'Color', values: ['Camello'] }], {
+            ...base, extras: [{ id: 'color_basico', label: 'Color básico', options: ['Beige', 'Negro'] }],
+            ajustes: { color: { camello: 'Café Oscuro' }, 'color@color basico': { camello: 'Beige' } },
+        });
+        expect(resuelto.detalle.find((x) => x.derivado)!.items[0]).toEqual({ valor: 'Camello', opcion: 'Beige', estado: 'ajustado' });
+        expect(resuelto.avisos.join(' ')).not.toMatch(/no tiene opción/);
+    });
 });
