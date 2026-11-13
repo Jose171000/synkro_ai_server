@@ -1,3 +1,5 @@
+import { valorConAjuste } from '../products/ajustes-de-canal';
+import { opcionCercana } from '../common/opcion-cercana';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -240,13 +242,21 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         if (categoryId) {
             // Todos los atributos de la categoría: los obligatorios y los que suben la calidad del contenido.
             const requisitos = await this.canales.requisitos('falabella', String(categoryId), undefined, { titulo: nombre, palabras: [] }, creds, { todos: true });
-            const faltantes = (requisitos ?? []).filter((a) => {
+            // Vacío, o con un valor que no está en la lista cerrada de Falabella (un color «Nude» cuando su lista no lo tiene):
+            // en ambos casos la IA elige una opción válida mirando el producto y las fotos. Si la persona ya confirmó el ajuste, se respeta.
+            const sinValorValido = (a: { name: string; label?: string; options?: string[] }) => {
                 const v = this.sync.buscarAtributo(attrs, a.name);
-                return v === null || v === undefined || String(v).trim() === '';
-            });
+                if (v === null || v === undefined || String(v).trim() === '') return true;
+                if (!a.options?.length) return false;
+                return valorConAjuste({ canal: 'falabella', atributos: attrs, atributo: a.label || a.name, valor: String(v), opciones: a.options, automatico: (x, o) => opcionCercana(x.trim(), o) }) === undefined;
+            };
+            const faltantes = (requisitos ?? []).filter((a) => sinValorValido(a as any));
             if (faltantes.length) {
                 const r = await this.ai.completarAtributos(nombre, [descripcion, textoEjes].filter(Boolean).join('\n\n'), faltantes, { marca: attrs.brand, color: attrs.color }, this.contextoDe(product, attrs, vision));
-                attrs = { ...attrs, ...r.values };
+                // Si ya había una clave equivalente (color / Color) con un valor inválido, el valor nuevo la reemplaza (no se queda la vieja).
+                const clave = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const nuevas = new Set(Object.keys(r.values).map(clave));
+                attrs = { ...Object.fromEntries(Object.entries(attrs).filter(([k]) => !nuevas.has(clave(k)))), ...r.values };
                 estimadosAhora = r.estimated;
                 estimated.attributes.falabella = [...new Set([...(estimated.attributes.falabella ?? []), ...r.estimated])];
             }
@@ -399,7 +409,14 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             { marca: attrs.brand, color: attrs.color },
             this.contextoDe(product, attrs, vision),
         );
-        return { values: { ...actuales, ...r.values }, estimated: r.estimated, filled: Object.keys(r.values).length, total: definiciones.length };
+        return {
+            values: { ...actuales, ...r.values },
+            estimated: r.estimated,
+            filled: Object.keys(r.values).length,
+            total: definiciones.length,
+            /** Si la IA falló o no devolvió nada, el motivo: la pantalla lo muestra en vez de un «0 de N» sin explicación. */
+            iaError: faltantes.length ? r.error : undefined,
+        };
     }
 
     /**

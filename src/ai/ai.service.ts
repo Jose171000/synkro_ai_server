@@ -814,7 +814,7 @@ Responde solo un JSON: { "consultas": ["...", "..."] }`,
     contexto: { textoCliente?: string; vision?: any; medidas?: string; sku?: string } = {},
   ) {
     // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
-    if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[] };
+    if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[], error: undefined as string | undefined };
     try {
       const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ${a.options.length > 120 ? 'LISTA CERRADA (algunas opciones): ' + a.options.slice(0, 120).join(' | ') + ' … Escribe el valor más cercano; se ajustará a la lista.' : 'ELIGE EXACTAMENTE UNO DE: ' + a.options.join(' | ')}` : ''}`).join('\n');
       const r = await this.openai.chat.completions.create({
@@ -868,10 +868,13 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
           values[a.name] = String(v);
         }
       }
-      return { values, estimated };
-    } catch (error) {
+      // Cero datos de una lista que tenía obligatorios no es normal: se avisa para que no parezca que «no había nada que completar».
+      if (!Object.keys(values).length) return { values, estimated, error: 'La IA respondió sin ningún dato.' as string | undefined };
+      return { values, estimated, error: undefined as string | undefined };
+    } catch (error: any) {
       console.warn('[AiService] No se pudieron completar los atributos:', error);
-      return { values: {} as Record<string, string>, estimated: [] as string[] };
+      const motivo = String(error?.message ?? error ?? '').slice(0, 160);
+      return { values: {} as Record<string, string>, estimated: [] as string[], error: (motivo || 'La IA no respondió.') as string | undefined };
     }
   }
 
