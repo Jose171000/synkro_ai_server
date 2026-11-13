@@ -46,6 +46,17 @@ describe('actualizar el contenido de una variante en Falabella', () => {
         expect(r.skus).toEqual(['UVT-K']);
     });
 
+    it('una hermana «pendiente» (enviada, aún sin confirmar por Falabella) sí se manda con las demás', async () => {
+        const s = construir({ familia: [F, K], enlaces: { a: { syncStatus: 'pending' }, b: { syncStatus: 'pending' } } });
+        const r = await s.updateFalabellaContent(SCOPE, 'b');
+        expect(r.skus).toEqual(['UVT-F', 'UVT-K']);
+    });
+
+    it('una hermana en error o sin enlace no se manda', async () => {
+        const s = construir({ familia: [F, K], enlaces: { a: { syncStatus: 'error' }, b: publicado } });
+        expect((await s.updateFalabellaContent(SCOPE, 'b')).skus).toEqual(['UVT-K']);
+    });
+
     it('una hermana incompleta no frena a las demás, pero si la pedida está incompleta, se avisa', async () => {
         const s = construir({ familia: [F, K], enlaces: { a: publicado, b: publicado }, razon: { a: 'le faltan medidas' } });
         expect((await s.updateFalabellaContent(SCOPE, 'b')).skus).toEqual(['UVT-K']);

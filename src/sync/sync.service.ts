@@ -1701,8 +1701,9 @@ export class SyncService implements OnModuleInit {
             const enlace = await this.listingLinkRepository.findOne({
                 where: { product: { id: miembro.id }, connection: { id: connection.id }, marketplace: 'falabella' },
             });
-            // Una hermana que no está publicada en esta cuenta no se manda.
-            if (!esElPedido && (!enlace || !['published', 'paused'].includes(enlace.syncStatus))) continue;
+            // Una hermana que no está publicada en esta cuenta no se manda. «Pendiente» cuenta: ya se envió y Falabella aún no lo confirmó
+            // (la ficha ya existe allí); si se dejara fuera, la actualización saldría con una sola variante y la familia quedaría partida.
+            if (!esElPedido && (!enlace || !['published', 'paused', 'pending'].includes(enlace.syncStatus))) continue;
 
             const categoria = this.categoriaFalabella(miembro);
             if (categoria && !atributosPorCategoria.has(String(categoria))) {
