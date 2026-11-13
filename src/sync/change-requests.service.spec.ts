@@ -9,7 +9,7 @@ import { ChangeRequestsService } from './change-requests.service';
  */
 const SCOPE = { userId: 'u1', storeId: 't1' };
 
-function construir(over: { solicitud?: any; producto?: any; claimed?: number } = {}) {
+function construir(over: { solicitud?: any; producto?: any; claimed?: number; enlace?: any } = {}) {
     const guardadas: any[] = [];
     const repo = {
         update: jest.fn().mockResolvedValue({ affected: over.claimed ?? 1 }),
@@ -24,8 +24,9 @@ function construir(over: { solicitud?: any; producto?: any; claimed?: number } =
     };
     const tiendas = { findOne: jest.fn(), update: jest.fn() };
     const cola = { add: jest.fn() };
-    const service = new ChangeRequestsService(repo as any, productos as any, tiendas as any, cola as any);
-    return { service, repo, productos, tiendas, cola, guardadas };
+    const enlaces = { findOne: jest.fn().mockResolvedValue(over.enlace ?? null), save: jest.fn(async (e: any) => e) };
+    const service = new ChangeRequestsService(repo as any, productos as any, tiendas as any, cola as any, enlaces as any);
+    return { service, repo, productos, tiendas, cola, guardadas, enlaces };
 }
 
 const producto = { id: 'p1', price: 100, stock: 10 } as any;
@@ -143,6 +144,44 @@ describe('aprobar y rechazar', () => {
         await expect(b.service.approve('r7', SCOPE)).rejects.toThrow(/no es válido/);
         expect(b.cola.add).not.toHaveBeenCalled();
         expect(b.repo.update).toHaveBeenLastCalledWith({ id: 'r7' }, expect.objectContaining({ status: 'error' }));
+    });
+
+    describe('descuentos de Falabella', () => {
+        const promoFa = (extra: any) => ({ id: 'f1', field: 'promo', marketplace: 'falabella', status: 'pending', product: { id: 'p1' }, connection: { id: 'c1' }, newValue: '70|2026-08-02|2026-12-01', ...extra });
+
+        it('el descuento de una cuenta se guarda en SU publicación (no en el producto) y se manda a esa cuenta', async () => {
+            const enlace: any = { id: 'l1' };
+            const { service, productos, enlaces, cola } = construir({ solicitud: promoFa({}), producto: { ...producto }, enlace });
+            await service.approve('f1', SCOPE);
+            expect(productos.save).not.toHaveBeenCalled();
+            expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: 70, saleStartOverride: '2026-08-02', saleEndOverride: '2026-12-01' }));
+            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'falabella', connectionId: 'c1', changeRequestId: 'f1' }));
+        });
+
+        it('el descuento general (marca «|g») se guarda en el producto', async () => {
+            const { service, productos, enlaces, cola } = construir({ solicitud: promoFa({ newValue: '70|2026-08-02|2026-12-01|g' }), producto: { ...producto } });
+            await service.approve('f1', SCOPE);
+            expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ salePrice: 70, saleStartDate: '2026-08-02', saleEndDate: '2026-12-01' }));
+            expect(enlaces.save).not.toHaveBeenCalled();
+            expect(cola.add).toHaveBeenCalledTimes(1);
+        });
+
+        it('quitar un descuento lo borra de Synkro y no manda nada: la solicitud queda como «No enviado» con el aviso del Seller Center', async () => {
+            const enlace: any = { id: 'l1', salePriceOverride: 70 };
+            const { service, enlaces, cola, repo } = construir({ solicitud: promoFa({ newValue: 'quitar' }), producto: { ...producto }, enlace });
+            const r = await service.approve('f1', SCOPE);
+            expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: null, saleStartOverride: null, saleEndOverride: null }));
+            expect(cola.add).not.toHaveBeenCalled();
+            expect(r.message).toMatch(/Seller Center/);
+            expect(repo.update).toHaveBeenLastCalledWith({ id: 'f1' }, expect.objectContaining({ status: 'skipped' }));
+        });
+
+        it('si la cuenta ya no tiene esa publicación, la solicitud queda con error y no se envía', async () => {
+            const { service, cola, repo } = construir({ solicitud: promoFa({}), producto: { ...producto }, enlace: null });
+            await expect(service.approve('f1', SCOPE)).rejects.toThrow(/publicación/);
+            expect(cola.add).not.toHaveBeenCalled();
+            expect(repo.update).toHaveBeenLastCalledWith({ id: 'f1' }, expect.objectContaining({ status: 'error' }));
+        });
     });
 
     it('crear una solicitud de descuento reemplaza a otra pendiente de lo mismo', async () => {

@@ -927,8 +927,22 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
             await expect((await armarPromo()).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/todavía no está habilitado/);
         });
 
-        it('Falabella: guarda el descuento propio de la cuenta y lo manda al instante; quitarlo solo lo quita de Synkro', async () => {
-            const t = await armarPromo({ marketplace: 'falabella', regularPrice: 120, salePrice: 79 });
+        it('Falabella: con el modo revisión el descuento de la cuenta espera aprobación y no se guarda ni se manda todavía', async () => {
+            const t = await armarPromo({ marketplace: 'falabella', regularPrice: 120, salePrice: 79, salePriceOverride: 90 });
+            const guardados: any[] = [];
+            (t.repoEnlaces as any).save = jest.fn(async (l: any) => { guardados.push({ ...l }); return l; });
+            const r = await t.service.setListingPromo(scope, 'l1', { salePrice: 79, saleStart: '2026-11-09', saleEnd: '2027-09-30' });
+            expect(r.pending).toBe(1);
+            expect(t.changeRequests.createPromoRequest).toHaveBeenCalledWith(scope, expect.objectContaining({ id: 'p1' }), { marketplace: 'falabella', connectionId: 'c1', previous: '90', next: '79|2026-11-09|2027-09-30' });
+            expect(guardados).toHaveLength(0);
+            expect(t.trabajos).toHaveLength(0);
+            const q = await t.service.setListingPromo(scope, 'l1', { salePrice: null });
+            expect(q.pending).toBe(1);
+            expect(t.changeRequests.createPromoRequest).toHaveBeenLastCalledWith(scope, expect.anything(), expect.objectContaining({ next: 'quitar' }));
+        });
+
+        it('Falabella: sin modo revisión guarda el descuento propio de la cuenta y lo manda al instante; quitarlo solo lo quita de Synkro', async () => {
+            const t = await armarPromo({ marketplace: 'falabella', regularPrice: 120, salePrice: 79 }, false);
             const guardados: any[] = [];
             (t.repoEnlaces as any).save = jest.fn(async (l: any) => { guardados.push({ ...l }); return l; });
             const r = await t.service.setListingPromo(scope, 'l1', { salePrice: 79, saleStart: '2026-11-09', saleEnd: '2027-09-30' });

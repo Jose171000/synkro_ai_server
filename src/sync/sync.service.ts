@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
 import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './ripley/ripley-oferta';
+import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
@@ -2902,7 +2903,8 @@ export class SyncService implements OnModuleInit {
     /**
      * El descuento de UNA cuenta (Falabella o Ripley). Cada canal guarda sus precios a su manera, así que el descuento es por cuenta:
      * lo que se pone aquí sustituye, solo para esa cuenta, al descuento general del producto.
-     *  - Falabella: se guarda y se manda al instante, como el descuento general. Quitarlo se hace en el Seller Center.
+     *  - Falabella: con el modo revisión espera aprobación (aprobarlo lo guarda en esa cuenta y lo manda); sin él se guarda y se manda
+     *    al instante. Quitarlo de Falabella se hace en el Seller Center.
      *  - Ripley: espera aprobación en Revisión (o sale al instante con el modo revisión apagado). Solo cambia el descuento: el stock y
      *    el precio de lista no se tocan, y el descuento debe ser menor que la lista. Sin precio, lo quita.
      */
@@ -2933,6 +2935,21 @@ export class SyncService implements OnModuleInit {
             const base = link.priceOverride != null && Number(link.priceOverride) > 0 ? Number(link.priceOverride) : Number(product.price);
             if (precio !== null && !(precio > 0 && precio < base)) {
                 throw new BadRequestException(`El descuento debe ser mayor que 0 y menor que el precio regular en Falabella (${base.toFixed(2)}).`);
+            }
+            // Con el modo revisión el descuento espera aprobación: aprobarlo lo guarda en esta cuenta y lo manda a Falabella.
+            if (await this.changeRequests.isReviewMode(scope.storeId)) {
+                await this.changeRequests.createPromoRequest(scope, product, {
+                    marketplace: 'falabella',
+                    connectionId: link.connection.id,
+                    previous: link.salePriceOverride != null ? String(Number(link.salePriceOverride)) : '',
+                    next: valorDeDescuento(precio === null ? { precio: null } : { precio, desde: inicio, hasta: fin }),
+                });
+                return {
+                    pending: 1,
+                    message: precio === null
+                        ? 'Quitar el descuento de esta cuenta quedó en revisión: apruébalo en el Tablero (o en Revisión).'
+                        : `Descuento ${precio} en revisión: apruébalo en el Tablero (o en Revisión) para mandarlo a Falabella.`,
+                };
             }
             link.salePriceOverride = precio as any;
             link.saleStartOverride = inicio as any;
@@ -5041,10 +5058,49 @@ export class SyncService implements OnModuleInit {
 
     /**
      * Fija el precio con descuento y sus fechas, y los manda a Falabella. Sin precio (null) se borran de Synkro:
-     * quitar una promoción ya enviada se hace en el Seller Center. No pasa por la cola de revisión.
+     * quitar una promoción ya enviada se hace en el Seller Center. Con el modo revisión espera aprobación (una solicitud por cuenta de
+     * Falabella donde esté publicado); aprobarla lo guarda en el producto y lo manda.
      */
-    async setPromo(scope: SyncScope, productId: string, dto: { salePrice: number | null; saleStartDate?: string | null; saleEndDate?: string | null }) {
+    async setPromo(scope: SyncScope, productId: string, dto: { salePrice: number | null; saleStartDate?: string | null; saleEndDate?: string | null }): Promise<{ productId: string; message: string; pending?: number }> {
         const product = await this.findScopedProduct(scope, productId);
+
+        // Con el modo revisión, el descuento general espera aprobación (una solicitud por cuenta de Falabella donde está publicado).
+        // Sin cuentas publicadas no hay nada que mandar, y se guarda directo como siempre.
+        const quitarGeneral = dto.salePrice === null || dto.salePrice === undefined;
+        const cuentasFalabella = await this.listingLinkRepository.find({
+            where: { product: { id: productId }, marketplace: 'falabella', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+            relations: { connection: true },
+        });
+        if (cuentasFalabella.length && (await this.changeRequests.isReviewMode(scope.storeId))) {
+            const inicio = quitarGeneral ? null : fechaDeFalabella(dto.saleStartDate);
+            const fin = quitarGeneral ? null : fechaDeFalabella(dto.saleEndDate);
+            if (!quitarGeneral) {
+                if (dto.saleStartDate && !inicio) throw new BadRequestException('La fecha de inicio no es válida (usa AAAA-MM-DD).');
+                if (dto.saleEndDate && !fin) throw new BadRequestException('La fecha de fin no es válida (usa AAAA-MM-DD).');
+                if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
+                if (!(Number(dto.salePrice) > 0) || !(Number(dto.salePrice) < Number(product.price))) {
+                    throw new BadRequestException(`El precio con descuento debe ser mayor que 0 y menor que el precio regular (${Number(product.price).toFixed(2)}).`);
+                }
+            }
+            const nuevo = conMarcaGeneral(valorDeDescuento(quitarGeneral ? { precio: null } : { precio: Number(dto.salePrice), desde: inicio, hasta: fin }));
+            for (const enlace of cuentasFalabella) {
+                if (!enlace.connection) continue;
+                await this.changeRequests.createPromoRequest(scope, product, {
+                    marketplace: 'falabella',
+                    connectionId: enlace.connection.id,
+                    previous: product.salePrice != null ? String(Number(product.salePrice)) : '',
+                    next: nuevo,
+                });
+            }
+            return {
+                productId,
+                pending: cuentasFalabella.length,
+                message: quitarGeneral
+                    ? 'Quitar el descuento quedó en revisión: apruébalo en el Tablero (o en Revisión).'
+                    : `Descuento ${Number(dto.salePrice)} en revisión: apruébalo en el Tablero (o en Revisión) para mandarlo a Falabella.`,
+            };
+        }
+
         if (dto.salePrice === null || dto.salePrice === undefined) {
             product.salePrice = null;
             product.saleStartDate = null;

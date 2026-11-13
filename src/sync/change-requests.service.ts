@@ -8,9 +8,20 @@ import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
 import { ChangeRequestStatus, SyncChangeRequest } from './entities/sync-change-request.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
+import { ListingLink } from './entities/listing-link.entity';
 import { descuentoDeValor } from './ripley/ripley-oferta';
 
 const ESTADOS: ChangeRequestStatus[] = ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'];
+
+/**
+ * El descuento general de un producto (el de «Precios») viaja en la solicitud con la marca «|g» al final: al aprobarlo se guarda en el
+ * producto. Sin la marca es el descuento propio de una cuenta. Ejemplos: «70|2026-08-02|2026-12-01|g», «quitar|g».
+ */
+export const conMarcaGeneral = (valor: string): string => `${valor}|g`;
+export function sinMarcaGeneral(valor: string): { valor: string; general: boolean } {
+    const t = String(valor ?? '').trim();
+    return t.endsWith('|g') ? { valor: t.slice(0, -2), general: true } : { valor: t, general: false };
+}
 
 /** Quién actúa y en qué tienda. */
 export interface ChangeScope {
@@ -38,6 +49,9 @@ export class ChangeRequestsService {
         private readonly storeRepository: Repository<Store>,
         @InjectQueue('marketplace-sync-queue')
         private readonly syncQueue: Queue,
+        // Solo lo usa la aprobación de un descuento de Falabella (se guarda en la publicación de esa cuenta).
+        @InjectRepository(ListingLink)
+        private readonly listingLinkRepository?: Repository<ListingLink>,
     ) { }
 
     async isReviewMode(storeId: string): Promise<boolean> {
@@ -253,11 +267,21 @@ export class ChangeRequestsService {
             throw new NotFoundException('Producto no encontrado');
         }
 
-        // Un descuento por canal no cambia el producto: solo se manda a esa cuenta.
-        const descuento = request.field === 'promo' ? descuentoDeValor(request.newValue) : null;
+        // Un descuento por canal no cambia el producto: solo se manda a esa cuenta (el general de Falabella sí se guarda en el producto).
+        const { valor: valorDescuento, general } = sinMarcaGeneral(request.newValue);
+        const descuento = request.field === 'promo' ? descuentoDeValor(valorDescuento) : null;
         if (request.field === 'promo' && !descuento) {
             await this.finish(id, 'error', 'El descuento de la solicitud no es válido.');
             throw new BadRequestException('El descuento de la solicitud no es válido.');
+        }
+        if (request.field === 'promo' && request.marketplace === 'falabella') {
+            const quitado = await this.aplicarDescuentoDeFalabella(request, product, descuento!, general);
+            // Quitar un descuento no se manda: Falabella lo conserva hasta que se quita en su Seller Center.
+            if (quitado) {
+                const aviso = 'Descuento quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.';
+                await this.markSkipped(id, aviso);
+                return { id, status: 'approved', message: aviso };
+            }
         }
         if (request.field === 'price') {
             product.price = Number(request.newValue) as any;
@@ -280,6 +304,36 @@ export class ChangeRequestsService {
         });
 
         return { id, status: 'approved', message: `Aprobado. Enviando ${request.field} a ${request.marketplace}.` };
+    }
+
+    /**
+     * Guarda un descuento aprobado de Falabella: el general, en el producto; el de una cuenta, en la publicación de esa cuenta.
+     * Devuelve true si era quitarlo (no hay nada que mandar al canal).
+     */
+    private async aplicarDescuentoDeFalabella(request: SyncChangeRequest, product: Product, descuento: { precio: number | null; desde?: string | null; hasta?: string | null }, general: boolean): Promise<boolean> {
+        const quitar = descuento.precio === null;
+        const precio = quitar ? null : descuento.precio;
+        const desde = quitar ? null : descuento.desde || null;
+        const hasta = quitar ? null : descuento.hasta || null;
+        if (general) {
+            product.salePrice = precio as any;
+            product.saleStartDate = desde as any;
+            product.saleEndDate = hasta as any;
+            await this.productRepository.save(product);
+            return quitar;
+        }
+        const enlace = request.connection?.id && this.listingLinkRepository
+            ? await this.listingLinkRepository.findOne({ where: { product: { id: product.id }, connection: { id: request.connection.id } } })
+            : null;
+        if (!enlace) {
+            await this.finish(request.id, 'error', 'No se encontró la publicación de esa cuenta.');
+            throw new NotFoundException('No se encontró la publicación de esa cuenta.');
+        }
+        enlace.salePriceOverride = precio as any;
+        enlace.saleStartOverride = desde as any;
+        enlace.saleEndOverride = hasta as any;
+        await this.listingLinkRepository!.save(enlace);
+        return quitar;
     }
 
     async reject(id: string, scope: ChangeScope, reason?: string) {
