@@ -8,7 +8,7 @@ import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenD
 import { conUnidadMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
-import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
+import { claseDeEje, EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { valorConAjuste } from '../products/ajustes-de-canal';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
@@ -2115,6 +2115,15 @@ export class SyncService implements OnModuleInit {
                     ? valorConAjuste({ canal: 'falabella', atributos: attributes, atributo: attribute.label || attribute.name, valor: String(bruto), opciones: attribute.options, automatico: (v, o) => opcionCercana(v.trim(), o) })
                     : this.valorPermitido(attribute, String(bruto)))
                 : undefined;
+            // El color de la variante («Leopardo») pisa a TODOS los campos de color; un campo de colores básicos (27 opciones) puede no
+            // tenerlo aunque el campo de color completo sí. Entonces vale la opción válida que ya tiene el producto (la que eligió la IA
+            // o la persona), nunca un color vacío ni inventado. Solo con colores: una talla equivocada saldría en silencio.
+            if (valor === undefined && hayValor && attribute.options?.length && !esCampoNumerico(attribute.inputType) && claseDeEje(attribute.label || attribute.name) === 'color') {
+                const base = this.buscarAtributo((product.aiAttributes as any) || {}, attribute.name);
+                if (base !== undefined && base !== null && String(base).trim() !== '' && String(base).trim() !== String(bruto).trim()) {
+                    valor = valorConAjuste({ canal: 'falabella', atributos: attributes, atributo: attribute.label || attribute.name, valor: String(base), opciones: attribute.options, automatico: (v, o) => opcionCercana(v.trim(), o) });
+                }
+            }
             // Los textos largos se acortan al máximo que acepta Falabella para ese campo (p. ej. «Contenido del paquete»: 172).
             const maximo = valor !== undefined ? limiteDeLongitud(attribute, attributes) : undefined;
             if (valor !== undefined && maximo && valor.length > maximo) valor = recortarTexto(valor, maximo);

@@ -11,6 +11,7 @@ import { CategorySeederService } from '../categories/category-seeder.service';
 import { VectorSearchService } from '../categories/vector-search.service';
 import { categoriasElegidas } from '../ai/categorias-elegidas';
 import { EjeSynkro, InfoVariantesDeCategoria, NOMBRE_DE_CANAL, ResultadoDeCompatibilidad, claseDeEje, revisarCompatibilidad } from './compatibilidad-variantes';
+import { normalizar } from '../ai/ripley-atributos';
 import { ajustesDe, guardarAjustes, opcionDeLaLista } from './ajustes-de-canal';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ejesQueSeparanFamilias } from '../sync/falabella/falabella-fields';
@@ -197,6 +198,23 @@ export class VariantCompatService {
         return { aplicados: validos.length, variantes: variantes.length };
     }
 
+    /**
+     * Categorías de Falabella que agrupan por talla y color sin campos «…Variant»: el color y la talla son los datos «Color» y «Talla» de la
+     * categoría. Se devuelven CON sus listas, para que la revisión avise de los valores que Falabella no tiene (un color «Leopardo») y la
+     * persona pueda elegir a qué opción corresponde. Sin la lista no se podía comprobar nada y la pantalla no ofrecía opciones.
+     */
+    private async ejesDeTallaYColor(ambito: AmbitoDeGrupo, categoryId: string): Promise<{ id: string; label: string; options?: string[] }[]> {
+        let campos: { name: string; label: string; options?: string[] }[] = [];
+        try { campos = await this.sync.getFalabellaCategoryFields(ambito, categoryId); } catch { /* sin lista: se revisa sin comprobar valores */ }
+        const lista = (clase: string, exacto: string) => {
+            const delaClase = campos.filter((c) => c.options?.length && claseDeEje(c.label || c.name) === clase);
+            return (delaClase.find((c) => normalizar(c.name) === exacto) ?? delaClase[0])?.options;
+        };
+        const color = lista('color', 'color');
+        const talla = lista('talla', 'talla');
+        return [{ id: 'Color', label: 'Color', ...(color?.length ? { options: color } : {}) }, { id: 'Talla', label: 'Talla', ...(talla?.length ? { options: talla } : {}) }];
+    }
+
     /** Lo que admite la categoría del canal; null si no se puede saber (sin categoría, sin cuenta conectada o el canal no responde). */
     private async infoDe(ambito: AmbitoDeGrupo, canal: string, categoryId: string | null): Promise<InfoVariantesDeCategoria | null> {
         try {
@@ -217,7 +235,7 @@ export class VariantCompatService {
                 const r = await this.sync.falabellaCategoryVariants(ambito, categoryId);
                 const ejes = r.camposDeVariacion.length
                     ? r.camposDeVariacion.map((c) => ({ id: c.name, label: c.label, required: !!c.required, ...(c.options?.length ? { options: c.options } : {}) }))
-                    : r.porTallaYColor ? [{ id: 'Color', label: 'Color' }, { id: 'Talla', label: 'Talla' }] : [];
+                    : r.porTallaYColor ? await this.ejesDeTallaYColor(ambito, categoryId) : [];
                 return { canal, categoryId, admite: r.admiteVariantes, ejes };
             }
             if (canal === 'mercadolibre') {
