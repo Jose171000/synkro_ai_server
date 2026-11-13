@@ -868,8 +868,7 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
           values[a.name] = String(v);
         }
       }
-      // Cero datos de una lista que tenía obligatorios no es normal: se avisa para que no parezca que «no había nada que completar».
-      if (!Object.keys(values).length) return { values, estimated, error: 'La IA respondió sin ningún dato.' as string | undefined };
+      // Cero datos puede ser normal (lo que queda son garantías o certificaciones que no se deducen): no se trata como fallo.
       return { values, estimated, error: undefined as string | undefined };
     } catch (error: any) {
       console.warn('[AiService] No se pudieron completar los atributos:', error);

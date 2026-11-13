@@ -390,8 +390,14 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         for (const a of definiciones) {
             const v = this.sync.buscarAtributo(attrs, a.name);
             if (v !== null && v !== undefined && String(v).trim() !== '') {
-                actuales[a.name] = String(v);
-                continue;
+                // En una lista cerrada, un valor que Falabella no tiene («Leopardo» como color) no cuenta como completo:
+                // la IA elige una opción válida (o queda vacío para que la persona la elija), nunca se muestra el inválido como bueno.
+                const valido = !a.options?.length
+                    || valorConAjuste({ canal: 'falabella', atributos: attrs, atributo: a.label || a.name, valor: String(v), opciones: a.options, automatico: (x, o) => opcionCercana(x.trim(), o) }) !== undefined;
+                if (valido) {
+                    actuales[a.name] = String(v);
+                    continue;
+                }
             }
             faltantes.push({
                 name: a.name,
