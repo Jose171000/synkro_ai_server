@@ -318,6 +318,18 @@ export class SyncController {
         return this.ecommerce.importListings(scopeOf(req), marketplace as EcommerceChannel, connectionId, { dryRun: dryRun === 'true', gruposManuales: dto?.gruposManuales });
     }
 
+    @Get('mercadolibre/listings/:listingId/discount-diagnosis')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.ver')
+    @ApiOperation({
+        summary: 'Por qué una publicación de Mercado Libre acepta o rechaza un descuento (solo lectura)',
+        description: 'Consulta a Mercado Libre el estado y la exposición de la publicación, sus ventas, la reputación de la cuenta y las promociones que ya tiene, y resume los motivos probables. No escribe nada en Mercado Libre.',
+    })
+    discountDiagnosis(@Param('listingId') listingId: string, @Req() req) {
+        return this.syncService.diagnosticoDeDescuentoMeli(scopeOf(req), listingId);
+    }
+
     @Get('listings')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

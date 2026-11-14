@@ -5332,6 +5332,52 @@ export class SyncService implements OnModuleInit {
     }
 
     /**
+     * Diagnóstico de SOLO LECTURA de por qué una publicación de Mercado Libre acepta o rechaza un descuento: pregunta a Mercado Libre
+     * por la publicación (estado, tipo de exposición, ventas), la reputación de la cuenta y las promociones que ya tiene.
+     * No escribe nada en Mercado Libre.
+     */
+    async diagnosticoDeDescuentoMeli(scope: SyncScope, listingId: string) {
+        const enlace = await this.listingLinkRepository.findOne({
+            where: { id: listingId, marketplace: 'mercadolibre', connection: { store: { id: scope.storeId } } },
+            relations: { connection: true, product: true },
+        });
+        if (!enlace?.connection) throw new NotFoundException('No se encontró esa publicación de Mercado Libre en esta tienda.');
+        const conexion = await this.getValidConnectionById(enlace.connection.id);
+        const { items, notFound } = await this.meliApi.getItems(conexion.accessToken, [enlace.externalId]);
+        const item = items[0];
+        if (!item) return { publicacion: null, hallazgos: [notFound.length ? 'Mercado Libre dice que esa publicación ya no existe.' : 'Mercado Libre no devolvió datos de la publicación.'] };
+
+        const vendedor = await this.meliApi.getSellerInfo(conexion.accessToken, conexion.externalUserId).catch((e: any) => ({ error: String(e?.message ?? e).slice(0, 200) }));
+        const promociones = await this.meliApi.getItemPromotions(conexion.accessToken, enlace.externalId).catch((e: any) => [{ error: String(e?.message ?? e).slice(0, 300) }]);
+
+        const rep = vendedor?.seller_reputation ?? {};
+        const nivel: string | null = rep.level_id ?? null;
+        const hallazgos: string[] = [];
+        if (!nivel) hallazgos.push('La cuenta no tiene nivel de reputación (Mercado Libre pide reputación verde para los descuentos).');
+        else if (!/green/i.test(nivel)) hallazgos.push(`La reputación de la cuenta es «${nivel}»: Mercado Libre pide reputación verde para los descuentos.`);
+        if (item.status !== 'active') hallazgos.push(`La publicación está en estado «${item.status}»: debe estar activa.`);
+        if (item.condition !== 'new') hallazgos.push(`La condición es «${item.condition}»: debe ser nueva.`);
+        if (item.listing_type_id === 'free') hallazgos.push('La publicación tiene exposición gratuita: no admite descuentos.');
+        if (!(Number(item.sold_quantity) > 0)) hallazgos.push('La publicación no tiene ventas: Mercado Libre puede exigir al menos una venta al precio actual.');
+        if (!hallazgos.length) hallazgos.push('No se ve un motivo claro en los datos de la publicación ni de la cuenta; puede que Mercado Libre no la haya incluido como candidata.');
+
+        return {
+            publicacion: {
+                id: item.id, estado: item.status, subEstado: item.sub_status, condicion: item.condition, exposicion: item.listing_type_id,
+                precio: item.price, precioOriginal: item.original_price, vendidos: item.sold_quantity, disponibles: item.available_quantity,
+                salud: item.health, etiquetas: item.tags, variaciones: Array.isArray(item.variations) ? item.variations.length : 0,
+                catalogo: !!item.catalog_listing, tipoLogistica: item.shipping?.logistic_type ?? null,
+            },
+            vendedor: vendedor?.error ? vendedor : {
+                id: vendedor?.id, apodo: vendedor?.nickname, reputacion: nivel, powerSeller: rep.power_seller_status ?? null,
+                ventasCompletadas: rep.transactions?.completed ?? null, ventasTotales: rep.transactions?.total ?? null,
+            },
+            promociones,
+            hallazgos,
+        };
+    }
+
+    /**
      * El mismo descuento (en soles o en porcentaje, con fecha de fin) para varios productos y todos sus canales.
      * Cada producto se valida y se aplica por separado: uno que falle no frena a los demás.
      */

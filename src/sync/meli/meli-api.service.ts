@@ -273,6 +273,23 @@ export class MeliApiService {
         return { ids: ids.slice(0, max), incompleto: ids.length >= max };
     }
 
+    /** Datos de la cuenta vendedora, con su reputación (solo lectura). */
+    async getSellerInfo(accessToken: string, sellerId: string): Promise<any> {
+        const { data } = await this.http.get(`/users/${sellerId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        return data;
+    }
+
+    /** Las promociones de una publicación y su estado (solo lectura). Una publicación sin promociones devuelve []. */
+    async getItemPromotions(accessToken: string, itemId: string): Promise<any[]> {
+        try {
+            const { data } = await this.http.get(`/seller-promotions/items/${itemId}`, { params: { app_version: 'v2' }, headers: { Authorization: `Bearer ${accessToken}` } });
+            return Array.isArray(data) ? data : data ? [data] : [];
+        } catch (error: any) {
+            if (error?.response?.status === 404) return [];
+            throw error;
+        }
+    }
+
     /** Datos de varias publicaciones (ML admite hasta 20 por llamada). */
     async getItems(accessToken: string, ids: string[]): Promise<{ items: any[]; notFound: string[] }> {
         const items: any[] = [];
