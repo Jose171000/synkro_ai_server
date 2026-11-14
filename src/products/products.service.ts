@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { soloLoVacio } from './solo-vacio';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
@@ -432,13 +433,18 @@ export class ProductsService {
         };
     }
 
-    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[] }, storeId?: string | null) {
+    /**
+     * Regenera con IA el contenido de un producto. Con `soloVacio` NO se rehace nada que ya tenga valor (título, descripción, ficha HTML,
+     * lo visto en las fotos): la IA solo llena lo vacío, y el resultado trae `llenado` con lo que se llenó.
+     */
+    async generateAIContent(productId: string, userId: string, options?: { tone?: string; marketplaces?: string[]; soloVacio?: boolean }, storeId?: string | null) {
         const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
         // Los canales con los que la IA verifica categorías y atributos son los de quien subió el producto (como siempre), no los de
         // quien pulsa el botón: un editor no tiene cuentas propias.
         const cuentaDeCanales = product.owner?.id ?? userId;
         const previos: Record<string, any> = { ...((product.aiAttributes as any) || {}) };
         const fotos = (product.images ?? []).map((i) => i.url).filter(Boolean);
+        const contenidoAntes = { aiTitle: product.aiTitle, aiDescription: product.aiDescription, aiKeywords: product.aiKeywords, aiAttributes: previos };
 
         // La IA parte de todo lo que el producto ya tiene: nombre, texto, marca, fotos y la cuenta del dueño (para consultar a sus canales).
         const aiContent = await this.aiService.generateProductContent({
@@ -475,6 +481,16 @@ export class ProductsService {
             combinados._visionFotos = huellaDeFotos(fotos);
         }
         product.aiAttributes = combinados as any;
+
+        if (options?.soloVacio) {
+            const r = soloLoVacio(contenidoAntes as any, { aiTitle: product.aiTitle, aiDescription: product.aiDescription, aiKeywords: product.aiKeywords, aiAttributes: combinados });
+            product.aiTitle = r.final.aiTitle as any;
+            product.aiDescription = r.final.aiDescription as any;
+            product.aiKeywords = r.final.aiKeywords as any;
+            product.aiAttributes = r.final.aiAttributes as any;
+            const guardado = await this.productRepository.save(product);
+            return Object.assign(guardado, { llenado: r.llenado });
+        }
 
         return this.productRepository.save(product);
     }

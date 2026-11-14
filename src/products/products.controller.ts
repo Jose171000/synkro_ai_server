@@ -17,6 +17,8 @@ import { PrepararRipleyDto } from './dto/preparar-ripley.dto';
 import { VariantCompatService } from './variant-compat.service';
 import { RellenarRipleyDto } from './dto/rellenar-ripley.dto';
 import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
+import { RegeneracionMasivaDto } from './dto/regeneracion-masiva.dto';
+import { RegeneracionMasivaService } from './regeneracion-masiva.service';
 import { RenombrarEjeDto } from './dto/renombrar-eje.dto';
 import { AplicarAjustesDto, SugerirAjustesDto } from './dto/ajustes-de-canal.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -39,6 +41,7 @@ export class ProductsController {
     private readonly skuGenerator: SkuGeneratorService,
     private readonly overview: ProductOverviewService,
     private readonly variantCompat: VariantCompatService,
+    private readonly regeneracionMasiva: RegeneracionMasivaService,
   ) { }
 
   /**
@@ -353,6 +356,26 @@ export class ProductsController {
   })
   prepareRipley(@Param('id') id: string, @Body() dto: PrepararRipleyDto, @Req() req) {
     return this.productsService.prepararParaRipley(id, req.user.id, { guardar: dto?.guardar === true, alGrupo: dto?.alGrupo === true }, req.store.storeId);
+  }
+
+  @Post('ai-batch')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Regenerar con IA varios productos seleccionados (solo lo vacío)',
+    description: 'Genera la ficha HTML, la descripción, el título y los atributos que falten de cada producto; un grupo de variantes se regenera una sola vez. No pisa lo que ya tiene valor ni envía nada a los canales. Corre en segundo plano: consulta el avance con GET ai-batch/:id. Hay un tope por tanda.',
+  })
+  async regenerateMany(@Body() dto: RegeneracionMasivaDto, @Req() req) {
+    const lote = await this.regeneracionMasiva.iniciar({ userId: req.user.id, storeId: req.store.storeId }, dto.productIds, { tone: dto.tone, marketplaces: dto.targetMarketplaces });
+    return this.regeneracionMasiva.estado({ userId: req.user.id, storeId: req.store.storeId }, lote.id);
+  }
+
+  @Get('ai-batch/:batchId')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({ summary: 'Estado, producto por producto, de una regeneración con IA por lotes' })
+  regenerationStatus(@Param('batchId') batchId: string, @Req() req) {
+    return this.regeneracionMasiva.estado({ userId: req.user.id, storeId: req.store.storeId }, batchId);
   }
 
   @Post(':id/generate-ai')

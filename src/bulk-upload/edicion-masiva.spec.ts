@@ -52,7 +52,11 @@ describe('EdicionMasivaService', () => {
             { id: 'p2', sku: 'B-2', name: 'Morral', price: '50.00', stock: 2, description: '' },
         ];
         const repo = { find: jest.fn(async () => existentes), update: jest.fn(async () => undefined) };
-        const sync = { updateInventory: jest.fn(async () => ({ pending: 1, message: 'x' })) };
+        const sync = {
+            updateInventory: jest.fn(async () => ({ pending: 1, message: 'x' })),
+            aplicarDescuentoGeneral: jest.fn(async () => ({ total: 1, aplicados: 1, fallidos: 0, resultados: [{ productId: 'p1', ok: true, message: 'ok' }] })),
+            quitarDescuentoGeneral: jest.fn(async () => ({ total: 1, quitados: 1, fallidos: 0, resultados: [{ productId: 'p1', ok: true, message: 'ok' }] })),
+        };
         return { servicio: new EdicionMasivaService(repo as any, sync as any), repo, sync };
     };
     const scope = { userId: 'u', storeId: 's' };
@@ -80,7 +84,7 @@ describe('EdicionMasivaService', () => {
         const { servicio, sync } = armar();
         const buf = await excel([['SKU', 'Stock'], ['A-1', 9]]);
         const r = await servicio.procesar(scope, buf, true, false);
-        expect(r.errores[0].mensaje).toMatch(/no puede cambiar precio ni stock/);
+        expect(r.errores[0].mensaje).toMatch(/no puede cambiar precio, stock ni descuentos/);
         expect(sync.updateInventory).not.toHaveBeenCalled();
     });
 
@@ -97,5 +101,136 @@ describe('EdicionMasivaService', () => {
         expect(libro.worksheets.map((h) => h.name)).toEqual(['Productos', 'Cómo usar']);
         expect(libro.getWorksheet('Productos')!.getRow(2).getCell(1).value).toBe('A-1');
         expect(libro.getWorksheet('Productos')!.getRow(2).getCell(3).value).toBe(89);
+    });
+});
+
+describe('descuento en el Excel', () => {
+    const HASTA = '2099-12-31';
+    const actual = { name: 'Bolso', price: '100.00', stock: 5, description: '', salePrice: null, saleEndDate: null };
+
+    it('lee porcentaje o precio con descuento y la fecha de fin (texto, DD/MM/AAAA o fecha de Excel)', () => {
+        const [a, b, c, d] = leerFilasDeEdicion([
+            { SKU: 'A', 'Descuento %': '15%', 'Descuento hasta': HASTA },
+            { SKU: 'B', 'Precio con descuento': 79.9, 'Descuento desde': '01/12/2098', 'Descuento hasta': '31/12/2099' },
+            { SKU: 'C', 'Descuento %': 0.2, 'Descuento hasta': new Date('2099-06-30T00:00:00Z') },
+            { SKU: 'D', 'Descuento %': 10, 'Descuento hasta': '31-12-2099' },
+        ]);
+        expect(a.descuento).toEqual({ modo: 'porcentaje', valor: 15, hasta: HASTA });
+        expect(b.descuento).toEqual({ modo: 'precio', valor: 79.9, desde: '2098-12-01', hasta: '2099-12-31' });
+        expect(c.descuento).toMatchObject({ modo: 'porcentaje', valor: 20, hasta: '2099-06-30' }); // 0.2 = «20%» con formato de Excel
+        expect(d.descuento?.hasta).toBe('2099-12-31');
+        expect([a, b, c, d].every((f) => f.errores.length === 0)).toBe(true);
+    });
+
+    it('sin fecha de fin, con los dos tipos a la vez o con fechas sueltas es un error de la fila', () => {
+        const [sinFin, ambos, suelta, malaFecha] = leerFilasDeEdicion([
+            { SKU: 'A', 'Descuento %': 10 },
+            { SKU: 'B', 'Descuento %': 10, 'Precio con descuento': 50, 'Descuento hasta': HASTA },
+            { SKU: 'C', 'Descuento hasta': HASTA },
+            { SKU: 'D', 'Descuento %': 10, 'Descuento hasta': '2099-02-30' },
+        ]);
+        expect(sinFin.errores.join()).toMatch(/necesita «Descuento hasta»/);
+        expect(ambos.errores.join()).toMatch(/porcentaje o en soles, no los dos/);
+        expect(suelta.errores.join()).toMatch(/falta el porcentaje o el precio/);
+        expect(malaFecha.errores.join()).toMatch(/no es una fecha válida/);
+        expect([sinFin, ambos, suelta, malaFecha].every((f) => !f.descuento)).toBe(true);
+    });
+
+    it('«Quitar descuento: sí» marca quitar, y no se mezcla con poner uno', () => {
+        const [quitar, mezcla, no] = leerFilasDeEdicion([
+            { SKU: 'A', 'Quitar descuento': 'sí' },
+            { SKU: 'B', 'Quitar descuento': 'x', 'Descuento %': 10, 'Descuento hasta': HASTA },
+            { SKU: 'C', 'Quitar descuento': 'no' },
+        ]);
+        expect(quitar.quitarDescuento).toBe(true);
+        expect(mezcla.errores.join()).toMatch(/quitar y poner/);
+        expect(no.quitarDescuento).toBeUndefined();
+    });
+
+    it('calcula el precio con descuento sobre el precio nuevo de la misma fila y no repite uno igual', () => {
+        const [f] = leerFilasDeEdicion([{ SKU: 'A', Precio: 200, 'Descuento %': 25, 'Descuento hasta': HASTA }]);
+        const cambios = calcularCambios(f, actual);
+        expect(cambios.map((c) => c.campo)).toEqual(['precio', 'descuento']);
+        expect(String(cambios[1].despues)).toContain('150.00 (25% menos)');
+        const [g] = leerFilasDeEdicion([{ SKU: 'A', 'Precio con descuento': 80, 'Descuento hasta': HASTA }]);
+        expect(calcularCambios(g, { ...actual, salePrice: '80.00', saleEndDate: HASTA })).toEqual([]);
+    });
+
+    it('un descuento que no rebaja el precio lanza el motivo', () => {
+        const [f] = leerFilasDeEdicion([{ SKU: 'A', 'Precio con descuento': 120, 'Descuento hasta': HASTA }]);
+        expect(() => calcularCambios(f, actual)).toThrow(/menor que el precio regular/);
+    });
+});
+
+describe('EdicionMasivaService · descuento', () => {
+    async function excel(filas: any[][]): Promise<Buffer> {
+        const libro = new ExcelJS.Workbook();
+        const h = libro.addWorksheet('P');
+        filas.forEach((f) => h.addRow(f));
+        return Buffer.from(await libro.xlsx.writeBuffer());
+    }
+    const prod = (id: string, sku: string, price: string, salePrice: string | null = null, saleEndDate: string | null = null) =>
+        ({ id, sku, name: 'N-' + sku, price, stock: 5, description: '', salePrice, saleEndDate });
+    const armar = (existentes: any[] = [prod('p1', 'A-1', '100.00')]) => {
+        const repo = { find: jest.fn(async () => existentes), update: jest.fn(async () => undefined) };
+        const sync = {
+            updateInventory: jest.fn(async () => ({ message: 'x' })),
+            aplicarDescuentoGeneral: jest.fn(async () => ({ total: 1, aplicados: 1, fallidos: 0, resultados: [{ productId: 'p1', ok: true, message: 'ok' }] })),
+            quitarDescuentoGeneral: jest.fn(async () => ({ total: 1, quitados: 1, fallidos: 0, resultados: [{ productId: 'p1', ok: true, message: 'ok' }] })),
+        };
+        return { servicio: new EdicionMasivaService(repo as any, sync as any), sync };
+    };
+    const scope = { userId: 'u', storeId: 's' };
+
+    it('la vista previa muestra el descuento y no envía nada', async () => {
+        const { servicio, sync } = armar();
+        const r = await servicio.procesar(scope, await excel([['SKU', 'Descuento %', 'Descuento hasta'], ['A-1', 20, '2099-12-31']]), false, true);
+        expect(r).toMatchObject({ conCambios: 1, columnas: ['descuento'] });
+        expect(r.cambios[0].cambios[0]).toMatchObject({ campo: 'descuento' });
+        expect(sync.aplicarDescuentoGeneral).not.toHaveBeenCalled();
+    });
+
+    it('al aplicar manda el descuento general del producto con sus fechas', async () => {
+        const { servicio, sync } = armar();
+        const r = await servicio.procesar(scope, await excel([['SKU', 'Precio con descuento', 'Descuento desde', 'Descuento hasta'], ['A-1', 80, '2099-01-01', '2099-12-31']]), true, true);
+        expect(sync.aplicarDescuentoGeneral).toHaveBeenCalledWith(scope, { productIds: ['p1'], modo: 'precio', valor: 80, desde: '2099-01-01', hasta: '2099-12-31' });
+        expect(r.actualizados).toBe(1);
+    });
+
+    it('quitar descuento solo actúa si el producto tiene uno', async () => {
+        const { servicio, sync } = armar([prod('p1', 'A-1', '100.00', '80.00', '2099-12-31'), prod('p2', 'B-2', '50.00')]);
+        const r = await servicio.procesar(scope, await excel([['SKU', 'Quitar descuento'], ['A-1', 'sí'], ['B-2', 'sí']]), true, true);
+        expect(sync.quitarDescuentoGeneral).toHaveBeenCalledTimes(1);
+        expect(sync.quitarDescuentoGeneral).toHaveBeenCalledWith(scope, ['p1']);
+        expect(r).toMatchObject({ actualizados: 1, sinCambios: 1 });
+    });
+
+    it('un descuento inválido en una fila no frena a las demás, y sin permiso de inventario no se aplica', async () => {
+        const dos = [prod('p1', 'A-1', '100.00'), prod('p2', 'B-2', '50.00')];
+        const { servicio, sync } = armar(dos);
+        const r = await servicio.procesar(scope, await excel([['SKU', 'Precio con descuento', 'Descuento hasta'], ['A-1', 150, '2099-12-31'], ['B-2', 40, '2099-12-31']]), true, true);
+        expect(r.errores).toHaveLength(1);
+        expect(r.errores[0].mensaje).toMatch(/menor que el precio regular/);
+        expect(sync.aplicarDescuentoGeneral).toHaveBeenCalledTimes(1);
+        const sin = armar(dos);
+        const r2 = await sin.servicio.procesar(scope, await excel([['SKU', 'Descuento %', 'Descuento hasta'], ['A-1', 10, '2099-12-31']]), true, false);
+        expect(r2.errores[0].mensaje).toMatch(/descuentos/);
+        expect(sin.sync.aplicarDescuentoGeneral).not.toHaveBeenCalled();
+    });
+
+    it('si el canal rechaza el descuento, la fila queda con error y no cuenta como actualizada', async () => {
+        const { servicio, sync } = armar();
+        sync.aplicarDescuentoGeneral.mockResolvedValueOnce({ total: 1, aplicados: 0, fallidos: 1, resultados: [{ productId: 'p1', ok: false, message: 'No se pudo' }] } as any);
+        const r = await servicio.procesar(scope, await excel([['SKU', 'Descuento %', 'Descuento hasta'], ['A-1', 10, '2099-12-31']]), true, true);
+        expect(r.actualizados).toBe(0);
+        expect(r.errores[0]).toMatchObject({ sku: 'A-1', mensaje: 'No se pudo' });
+    });
+
+    it('la plantilla trae las columnas de descuento', async () => {
+        const { servicio } = armar();
+        const libro = new ExcelJS.Workbook();
+        await libro.xlsx.load((await servicio.plantilla('s')) as any);
+        const encabezados = (libro.getWorksheet('Productos')!.getRow(1).values as any[]).filter(Boolean);
+        expect(encabezados).toEqual(expect.arrayContaining(['Descuento %', 'Precio con descuento', 'Descuento desde', 'Descuento hasta', 'Quitar descuento']));
     });
 });

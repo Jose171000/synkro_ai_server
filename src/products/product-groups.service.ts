@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { soloLoVacio } from './solo-vacio';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
@@ -189,7 +190,7 @@ export class ProductGroupsService {
      * límite de fotos del análisis). Se rehacen el título, la descripción, la ficha HTML y lo que se ve en las fotos; el resto
      * de lo que cada variante ya tenía se conserva, y su color, talla, nombre, precio y stock no se tocan.
      */
-    async regenerarContenido(grupoId: string, opciones: { tone?: string; marketplaces?: string[] }, ambito: AmbitoDeGrupo): Promise<{ variantes: number; titulo: string | null }> {
+    async regenerarContenido(grupoId: string, opciones: { tone?: string; marketplaces?: string[]; soloVacio?: boolean }, ambito: AmbitoDeGrupo): Promise<{ variantes: number; titulo: string | null; llenado?: string[] }> {
         const vista = await this.obtener(grupoId, ambito);
         const grupo = await this.groupRepository.findOne({ where: { id: grupoId }, relations: { owner: true } });
         const variantes = await this.productRepository.find({ where: { group: { id: grupoId } }, order: { createdAt: 'ASC' } });
@@ -217,7 +218,9 @@ export class ProductGroupsService {
         const delGrupo = sinAtributosDeEje(molde.aiAttributes, vista.axes);
         const titulo = String(molde.aiTitle ?? '').trim();
 
+        let llenado: string[] | undefined;
         for (const v of variantes) {
+            const antesDeLaVariante = { aiTitle: v.aiTitle, aiDescription: v.aiDescription, aiKeywords: v.aiKeywords, aiAttributes: v.aiAttributes as any };
             if (titulo) v.aiTitle = titulo as any;
             if (molde.aiDescription) v.aiDescription = molde.aiDescription;
             if (molde.aiKeywords) v.aiKeywords = molde.aiKeywords;
@@ -227,6 +230,16 @@ export class ProductGroupsService {
                 atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any,
                 v.variantValues,
             ) as any;
+            // «Solo lo vacío»: lo que la variante ya tenía lleno se queda como estaba.
+            if (opciones.soloVacio) {
+                const r = soloLoVacio(antesDeLaVariante, { aiTitle: v.aiTitle, aiDescription: v.aiDescription, aiKeywords: v.aiKeywords, aiAttributes: v.aiAttributes as any });
+                v.aiTitle = r.final.aiTitle as any;
+                v.aiDescription = r.final.aiDescription as any;
+                v.aiKeywords = r.final.aiKeywords as any;
+                v.aiAttributes = r.final.aiAttributes as any;
+                // El contenido compartido es el mismo en todas; de los atributos se informa los de la primera variante.
+                llenado = llenado ? [...new Set([...llenado, ...r.llenado.filter((x) => !/atributo/.test(x))])] : r.llenado;
+            }
             // Las medidas del paquete que el cliente no dio se completan con las estimadas.
             if (v.packageWidth == null && molde.packageWidth != null) v.packageWidth = molde.packageWidth;
             if (v.packageLength == null && molde.packageLength != null) v.packageLength = molde.packageLength;
@@ -235,8 +248,9 @@ export class ProductGroupsService {
             await this.productRepository.save(v);
         }
         // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
-        if (titulo) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
-        return { variantes: variantes.length, titulo: titulo || null };
+        // «Solo lo vacío» no rebautiza un grupo que ya tiene nombre.
+        if (titulo && (!opciones.soloVacio || !String(grupo.name ?? '').trim())) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
+        return { variantes: variantes.length, titulo: titulo || null, ...(llenado ? { llenado } : {}) };
     }
 
     /**

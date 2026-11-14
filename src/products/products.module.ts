@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { RegeneracionMasivaService } from './regeneracion-masiva.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SectionAccessGuard } from '../common/guards/section-access.guard';
 import { User } from '../users/entities/user.entity';
@@ -29,7 +30,7 @@ import { CategoryModule } from '../categories/category.module';
     CategoryModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, ProductGroupsService, VariantCompatService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
+  providers: [ProductsService, ProductGroupsService, RegeneracionMasivaService, VariantCompatService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
   exports: [ProductsService, ProductGroupsService, SkuGeneratorService],
 })
 export class ProductModule { }
