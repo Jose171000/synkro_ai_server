@@ -4,7 +4,7 @@ const prod = (id: string, over: any = {}) => ({ id, sku: 'SKU-' + id, name: 'Pro
 const grupo = (id: string) => ({ id, name: 'Grupo ' + id, parentSku: 'GP-' + id });
 
 function armar(existentes: any[]) {
-    const repo = { find: jest.fn(async () => existentes) };
+    const repo = { find: jest.fn(async () => existentes), count: jest.fn(async (o: any) => existentes.filter((p) => p.group?.id === o.where.group.id).length) };
     const products = { generateAIContent: jest.fn(async () => ({ llenado: ['ficha HTML', '3 atributos'] })) };
     const groups = { regenerarContenido: jest.fn(async () => ({ variantes: 3, titulo: 't', llenado: ['descripción'] })) };
     const guardado = new Map<string, string>();
@@ -51,6 +51,14 @@ describe('RegeneracionMasivaService', () => {
         expect(groups.regenerarContenido).toHaveBeenCalledWith('G1', { tone: undefined, marketplaces: undefined, soloVacio: true }, ambito);
         expect(products.generateAIContent).toHaveBeenCalledTimes(1);
         expect(fin.items[0].mensaje).toBe('Llené: descripción (en las 3 variantes).');
+    });
+
+    it('si solo se marca una variante, el grupo cuenta con todas las que tiene', async () => {
+        const g = grupo('G1');
+        const { servicio, repo } = armar([prod('v1', { group: g }), prod('v2', { group: g }), prod('v3', { group: g })]);
+        repo.find.mockResolvedValueOnce([prod('v1', { group: g })] as any); // se marcó solo una
+        const lote = await servicio.iniciar(ambito, ['v1']);
+        expect(lote.items[0].variantes).toBe(3);
     });
 
     it('si no había nada vacío, queda «sin cambios»', async () => {

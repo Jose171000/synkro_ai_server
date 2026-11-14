@@ -103,6 +103,10 @@ export class RegeneracionMasivaService {
                 actualizado: ahora,
             });
         }
+        // El grupo se regenera completo aunque solo se haya marcado una de sus variantes: se cuentan todas las que tiene.
+        for (const item of items.values()) {
+            if (item.grupoId) item.variantes = Math.max(item.variantes, await this.productos.count({ where: { group: { id: item.grupoId } } as any }));
+        }
         const tope = maxPorTanda();
         if (items.size > tope) {
             throw new BadRequestException(`Seleccionaste ${items.size} productos (los grupos de variantes cuentan como uno). El máximo por tanda es ${tope}: divídelo en varias tandas.`);
