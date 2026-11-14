@@ -24,6 +24,7 @@ import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
 import { PromoDto } from './dto/promo.dto';
+import { DescuentoGeneralDto, QuitarDescuentoGeneralDto } from './dto/descuento-general.dto';
 import { ChannelActionDto } from './dto/channel-action.dto';
 import { ListingActionsService } from './listing-actions.service';
 import { DuplicatesActionDto } from './dto/duplicates-action.dto';
@@ -921,6 +922,27 @@ export class SyncController {
     })
     setPromo(@Param('id') id: string, @Body() dto: PromoDto, @Req() req) {
         return this.syncService.setPromo(scopeOf(req), id, dto);
+    }
+
+    @Post('discounts/apply')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({
+        summary: 'Aplica el mismo descuento (en soles o en porcentaje, con fecha de fin) a varios productos y a todos sus canales',
+        description: 'Se guarda en cada producto y se envía a Falabella, Mercado Libre y WooCommerce. En Mercado Libre se reparte en promociones de hasta 14 días. Devuelve el resultado por producto.',
+    })
+    applyDiscount(@Body() dto: DescuentoGeneralDto, @Req() req) {
+        return this.syncService.aplicarDescuentoGeneral(scopeOf(req), dto);
+    }
+
+    @Post('discounts/remove')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('inventario.editar')
+    @ApiOperation({ summary: 'Quita el descuento general de varios productos (Mercado Libre y WooCommerce lo quitan solos; Falabella se quita en el Seller Center)' })
+    removeDiscount(@Body() dto: QuitarDescuentoGeneralDto, @Req() req) {
+        return this.syncService.quitarDescuentoGeneral(scopeOf(req), dto.productIds);
     }
 
     @Patch('products/:id/web-price')

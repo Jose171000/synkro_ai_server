@@ -302,18 +302,25 @@ export class WooApiService implements ChannelClient {
     async setInventory(
         auth: ChannelAuth,
         target: { externalId: string; variationId: string | null },
-        values: { stock: number; price?: number | null },
+        values: { stock: number; price?: number | null; /** Descuento con fechas AAAA-MM-DD; precio null lo quita. Sin este campo no se toca el que tenga la tienda. */ descuento?: { precio: number | null; desde?: string | null; hasta?: string | null } },
     ): Promise<void> {
         const http = this.cliente(auth);
         const stock = Math.max(0, Math.trunc(values.stock));
         const ruta = target.variationId
             ? `/products/${target.externalId}/variations/${target.variationId}`
             : `/products/${target.externalId}`;
+        const d = values.descuento;
         const cuerpo = {
             manage_stock: true,
             stock_quantity: stock,
             stock_status: stock > 0 ? 'instock' : 'outofstock',
             ...(values.price != null ? { regular_price: values.price.toFixed(2) } : {}),
+            // WooCommerce quita la oferta con cadenas vacías; las fechas van en la zona horaria de la tienda.
+            ...(d ? {
+                sale_price: d.precio != null ? d.precio.toFixed(2) : '',
+                date_on_sale_from: d.precio != null && d.desde ? `${d.desde}T00:00:00` : '',
+                date_on_sale_to: d.precio != null && d.hasta ? `${d.hasta}T23:59:59` : '',
+            } : {}),
         };
         await this.llamar(() => http.put(ruta, cuerpo));
     }

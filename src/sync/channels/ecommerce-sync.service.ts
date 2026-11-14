@@ -11,7 +11,7 @@ import { SaleAlertsService } from '../sale-alerts.service';
 import { ventaAnteriorALaConexion } from '../venta-anterior-a-la-conexion';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { OpcionesDeEnvio, SyncScope, SyncService } from '../sync.service';
-import { preciosParaCanal } from '../precios-por-canal';
+import { firmaDePromo, preciosParaCanal } from '../precios-por-canal';
 import { WooApiService } from '../woo/woo-api.service';
 import { ShopifyApiService } from '../shopify/shopify-api.service';
 import { RipleyApiService } from '../ripley/ripley-api.service';
@@ -514,13 +514,29 @@ export class EcommerceSyncService implements OnModuleInit {
         // El precio normal de este canal: el fijado para la cuenta o, si no hay, el del producto (la rebaja de Ripley no se toca).
         const precio = esRipley ? Number(preciosParaCanal(product as any, link as any).price) : (product.price != null ? Number(product.price) : null);
 
+        // WooCommerce: el descuento general viaja con cada envío. Solo se quita si lo puso Synkro antes (lastPromoSynced):
+        // una oferta que la tienda tenga por su cuenta no se borra.
+        let descuentoWoo: { precio: number | null; desde?: string | null; hasta?: string | null } | null = null;
+        let firmaWoo: string | null = null;
+        if (canal === 'woocommerce') {
+            const promo = preciosParaCanal(product as any, link as any).promo;
+            if (promo) {
+                descuentoWoo = { precio: promo.salePrice, desde: promo.start, hasta: promo.end };
+                firmaWoo = firmaDePromo(promo);
+            } else if (link.lastPromoSynced) {
+                descuentoWoo = { precio: null };
+                firmaWoo = '';
+            }
+        }
+
         try {
             const connection = await this.sync.getValidConnectionById(link.connection.id);
             await this.clientOf(canal).setInventory(
                 this.authOf(connection),
                 { externalId: link.externalId, variationId: link.variationId ?? null, ...(esRipley ? { sku: product.sku } : {}) },
-                { stock: conStock ? product.stock : null, price: conPrecio ? precio : null, ...(descuento ? { descuento } : {}) },
+                { stock: conStock ? product.stock : null, price: conPrecio ? precio : null, ...(descuento ? { descuento } : descuentoWoo ? { descuento: descuentoWoo } : {}) },
             );
+            if (firmaWoo !== null) link.lastPromoSynced = (firmaWoo || null) as any;
             if (conStock) link.lastStockSynced = product.stock;
             if (conPrecio) {
                 link.lastPriceSynced = (esRipley ? precio : product.price) as any;

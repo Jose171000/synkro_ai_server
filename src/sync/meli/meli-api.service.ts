@@ -175,6 +175,31 @@ export class MeliApiService {
         await this.http.put(`/items/${itemId}/description`, { plain_text: plainText }, { headers: { Authorization: `Bearer ${accessToken}` } });
     }
 
+    /**
+     * Pone un descuento individual (PRICE_DISCOUNT) a una publicación, con fechas AAAA-MM-DD. Dura como máximo 14 días
+     * y debe estar entre 5% y 80%: de eso se encarga quien llama. Doc: «Descuento individual» de Mercado Libre.
+     */
+    async aplicarDescuento(accessToken: string, itemId: string, d: { dealPrice: number; desde: string; hasta: string }): Promise<void> {
+        await this.http.post(
+            `/seller-promotions/items/${itemId}`,
+            { deal_price: d.dealPrice, start_date: `${d.desde}T00:00:00`, finish_date: `${d.hasta}T00:00:00`, promotion_type: 'PRICE_DISCOUNT' },
+            { params: { app_version: 'v2' }, headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+    }
+
+    /** Quita el descuento individual de una publicación. Si no tenía ninguno, Mercado Libre responde 404 y no es un error. */
+    async quitarDescuento(accessToken: string, itemId: string): Promise<void> {
+        try {
+            await this.http.delete(`/seller-promotions/items/${itemId}`, {
+                params: { promotion_type: 'PRICE_DISCOUNT', app_version: 'v2' },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+        } catch (error: any) {
+            if (error?.response?.status === 404) return;
+            throw error;
+        }
+    }
+
     /** Pausa, reactiva o cierra una publicación (cerrada no se puede reactivar). */
     async setItemStatus(accessToken: string, itemId: string, status: 'paused' | 'active' | 'closed'): Promise<void> {
         await this.http.put(

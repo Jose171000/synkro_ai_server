@@ -494,7 +494,9 @@ describe('programación de la consulta periódica', () => {
 
         await service.onModuleInit();
 
-        expect(cola.upsertJobScheduler).not.toHaveBeenCalled();
+        // Solo queda el repaso diario de descuentos; la consulta de ventas y la de publicaciones no se programan.
+        expect(cola.upsertJobScheduler).toHaveBeenCalledTimes(1);
+        expect(cola.upsertJobScheduler).toHaveBeenCalledWith('meli-descuentos', { pattern: '10 5 * * *' }, expect.anything());
     });
 
     it('si Redis falla al programar, el servidor sigue arrancando', async () => {

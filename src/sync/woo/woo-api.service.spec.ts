@@ -196,6 +196,22 @@ describe('WooApiService', () => {
             });
         });
 
+        it('con descuento manda el precio de oferta y sus fechas; sin él no toca la oferta de la tienda', async () => {
+            http.put.mockResolvedValue(ok({}));
+            await servicio.setInventory(auth, { externalId: '200', variationId: '201' }, { stock: 3, price: 265, descuento: { precio: 225.25, desde: '2026-11-14', hasta: '2027-11-13' } });
+            expect(http.put).toHaveBeenLastCalledWith('/products/200/variations/201', expect.objectContaining({
+                regular_price: '265.00', sale_price: '225.25', date_on_sale_from: '2026-11-14T00:00:00', date_on_sale_to: '2027-11-13T23:59:59',
+            }));
+            await servicio.setInventory(auth, { externalId: '200', variationId: '201' }, { stock: 3, price: 265 });
+            expect(http.put.mock.calls[1][1]).not.toHaveProperty('sale_price');
+        });
+
+        it('un descuento con precio null quita la oferta y sus fechas', async () => {
+            http.put.mockResolvedValue(ok({}));
+            await servicio.setInventory(auth, { externalId: '1', variationId: null }, { stock: 1, descuento: { precio: null } });
+            expect(http.put.mock.calls[0][1]).toMatchObject({ sale_price: '', date_on_sale_from: '', date_on_sale_to: '' });
+        });
+
         it('nunca manda stock negativo', async () => {
             http.put.mockResolvedValue(ok({}));
             await servicio.setInventory(auth, { externalId: '1', variationId: null }, { stock: -4, price: null });

@@ -6,6 +6,8 @@ import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './rip
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
+import { maxDiasPromoMeli, planDeDescuentoMeli, promosMeliActivas } from './meli/descuento-meli';
+import { calcularDescuento, hoyEnLima } from './descuento-general';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
@@ -3098,16 +3100,75 @@ export class SyncService implements OnModuleInit {
                     ? { variations: [{ id: link.variationId, available_quantity: product.stock, price: precio }] }
                     : { available_quantity: product.stock, price: precio },
             );
+            // Subir el precio quita los descuentos en Mercado Libre: lo que se había puesto ya no cuenta.
+            const subioElPrecio = link.lastPriceSynced != null && Number(precio) > Number(link.lastPriceSynced);
+            if (subioElPrecio) link.lastPromoSynced = null;
             link.lastStockSynced = product.stock;
             link.lastPriceSynced = precio as any;
             link.lastSyncedAt = new Date();
             link.lastError = null as any;
+            await this.sincronizarDescuentoMeli(connection.accessToken, link, product, Number(precio));
         } catch (error: any) {
             link.lastError = this.describeApiError(error);
             await this.listingLinkRepository.save(link);
             throw error;
         }
         await this.listingLinkRepository.save(link);
+    }
+
+    /**
+     * Pone, reemplaza o quita el descuento general en UNA publicación de Mercado Libre (solo con MELI_PROMOS_ACTIVAS=true).
+     * Un descuento largo se reparte en promociones de hasta 14 días; esto crea la del día y el repaso diario pasa a la siguiente.
+     * Nunca hace fallar el envío de stock y precio: si el descuento no entra, se deja el motivo en el enlace.
+     */
+    private async sincronizarDescuentoMeli(accessToken: string, link: ListingLink, product: Product, precio: number): Promise<void> {
+        if (!promosMeliActivas() || !link.externalId) return;
+        try {
+            const precios = preciosParaCanal(product, link);
+            // Lo que Mercado Libre ya muestra por su cuenta no es del descuento general: no se toca.
+            const promo = precios.origen.promo === 'canal' ? null : precios.promo;
+            const plan = planDeDescuentoMeli({ precio, promo, ultima: link.lastPromoSynced, hoy: hoyEnLima(), maxDias: maxDiasPromoMeli() });
+            if (plan.tipo === 'nada') return;
+
+            if (plan.tipo === 'poner' && link.variationId) {
+                // Las variantes comparten la publicación: si otra ya tiene este mismo tramo, no se repite.
+                const hermana = await this.listingLinkRepository.findOne({ where: { marketplace: 'mercadolibre', externalId: link.externalId, lastPromoSynced: plan.firma } });
+                if (hermana && hermana.id !== link.id) { link.lastPromoSynced = plan.firma; return; }
+            }
+            if (plan.tipo === 'quitar' || ('quitarAntes' in plan && plan.quitarAntes)) {
+                await this.meliApi.quitarDescuento(accessToken, link.externalId);
+            }
+            if (plan.tipo === 'poner') {
+                await this.meliApi.aplicarDescuento(accessToken, link.externalId, { dealPrice: plan.dealPrice, desde: plan.desde, hasta: plan.hasta });
+                link.lastPromoSynced = plan.firma;
+            } else {
+                link.lastPromoSynced = null;
+                if (plan.tipo === 'omitir') link.lastError = `Descuento no aplicado en Mercado Libre: ${plan.motivo}`.slice(0, 300);
+            }
+        } catch (error: any) {
+            console.warn(`[Sync] Descuento de Mercado Libre (${link.externalId}): ${error?.message}`);
+            link.lastError = `Descuento no aplicado en Mercado Libre: ${this.describeApiError(error)}`.slice(0, 300);
+        }
+    }
+
+    /**
+     * Repaso diario: pasa cada publicación de Mercado Libre con descuento al tramo que le toca hoy (las promociones duran 14 días)
+     * y quita las de los descuentos que terminaron o se borraron. Se encola un envío por publicación para repartir la carga.
+     */
+    async renovarDescuentosMeli(): Promise<{ revisadas: number }> {
+        if (!promosMeliActivas()) return { revisadas: 0 };
+        const enlaces = await this.listingLinkRepository.find({
+            where: { marketplace: 'mercadolibre', syncStatus: 'published', pausedByUser: false },
+            relations: { product: true, connection: { owner: true } },
+        });
+        let revisadas = 0;
+        for (const e of enlaces) {
+            const conDescuento = e.product?.salePrice != null || !!e.lastPromoSynced;
+            if (!conDescuento || !e.connection) continue;
+            await this.syncQueue.add('inventory', { productId: e.product.id, userId: e.connection.owner?.id, marketplace: 'mercadolibre', connectionId: e.connection.id });
+            revisadas++;
+        }
+        return { revisadas };
     }
 
     /**
@@ -4403,6 +4464,16 @@ export class SyncService implements OnModuleInit {
         void this.corregirEstadosDeFalabellaUnaVez();
         void this.completarCostosUnaVez();
         void this.repasarVentasMeliUnaVez();
+        // Cada día a las 00:10 de Lima (05:10 UTC): las promociones de Mercado Libre duran 14 días y hay que pasar a la siguiente.
+        try {
+            await this.syncQueue.upsertJobScheduler(
+                'meli-descuentos',
+                { pattern: '10 5 * * *' },
+                { name: 'meli-descuentos', data: {}, opts: { removeOnComplete: true, removeOnFail: 20 } },
+            );
+        } catch (error: any) {
+            console.warn(`[Sync] No se pudo programar el repaso diario de descuentos de Mercado Libre: ${error?.message}`);
+        }
         const minutos = Number(process.env.ORDER_POLL_MINUTES ?? 5);
         if (!(minutos > 0)) return;
         try {
@@ -5154,7 +5225,15 @@ export class SyncService implements OnModuleInit {
             product.saleStartDate = null;
             product.saleEndDate = null;
             await this.productRepository.save(product);
-            return { productId, message: 'Descuento quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
+            // Mercado Libre y WooCommerce sí quitan su oferta desde Synkro; Falabella no lo permite por esta vía.
+            const aQuitar = await this.listingLinkRepository.find({
+                where: { product: { id: productId }, marketplace: In(['mercadolibre', 'woocommerce']), syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+                relations: { connection: true },
+            });
+            for (const enlace of aQuitar) {
+                if (enlace.connection) await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: enlace.marketplace, connectionId: enlace.connection.id });
+            }
+            return { productId, message: 'Descuento quitado de Synkro' + (aQuitar.length ? ', Mercado Libre y WooCommerce.' : '.') + ' Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
         }
         const inicio = fechaDeFalabella(dto.saleStartDate);
         const fin = fechaDeFalabella(dto.saleEndDate);
@@ -5169,20 +5248,60 @@ export class SyncService implements OnModuleInit {
         product.saleEndDate = fin;
         await this.productRepository.save(product);
 
+        // El descuento general va a todos los canales donde está publicado (Ripley tiene su propio flujo de descuentos).
         const enlaces = await this.listingLinkRepository.find({
-            where: { product: { id: productId }, marketplace: 'falabella', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+            where: { product: { id: productId }, marketplace: In(['falabella', 'mercadolibre', 'woocommerce']), syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
             relations: { connection: true },
         });
         for (const enlace of enlaces) {
             if (!enlace.connection) continue;
-            await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: 'falabella', connectionId: enlace.connection.id });
+            await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: enlace.marketplace, connectionId: enlace.connection.id });
         }
+        const canales = [...new Set(enlaces.map(e => ({ falabella: 'Falabella', mercadolibre: 'Mercado Libre', woocommerce: 'WooCommerce' } as Record<string, string>)[e.marketplace]))];
         return {
             productId,
             message: enlaces.length
-                ? 'Descuento guardado y enviado a Falabella. Puede tardar unos minutos en verse.'
-                : 'Descuento guardado. Se enviará a Falabella cuando el producto esté publicado allí.',
+                ? `Descuento guardado y enviado a ${canales.join(', ')}. Puede tardar unos minutos en verse.`
+                : 'Descuento guardado. Se enviará a cada canal cuando el producto esté publicado allí.',
         };
+    }
+
+    /**
+     * El mismo descuento (en soles o en porcentaje, con fecha de fin) para varios productos y todos sus canales.
+     * Cada producto se valida y se aplica por separado: uno que falle no frena a los demás.
+     */
+    async aplicarDescuentoGeneral(
+        scope: SyncScope,
+        dto: { productIds: string[]; modo: 'precio' | 'porcentaje'; valor: number; desde?: string | null; hasta?: string | null },
+    ) {
+        const resultados: { productId: string; sku?: string; ok: boolean; salePrice?: number; porcentaje?: number; message: string }[] = [];
+        for (const id of [...new Set(dto.productIds ?? [])]) {
+            try {
+                const product = await this.findScopedProduct(scope, id);
+                const c = calcularDescuento(Number(product.price), { modo: dto.modo, valor: Number(dto.valor), desde: dto.desde, hasta: dto.hasta });
+                const r = await this.setPromo(scope, id, { salePrice: c.salePrice, saleStartDate: c.desde, saleEndDate: c.hasta });
+                resultados.push({ productId: id, sku: product.sku, ok: true, salePrice: c.salePrice, porcentaje: c.porcentaje, message: r.message });
+            } catch (error: any) {
+                resultados.push({ productId: id, ok: false, message: String(error?.message ?? 'No se pudo aplicar el descuento.') });
+            }
+        }
+        const ok = resultados.filter(r => r.ok).length;
+        return { total: resultados.length, aplicados: ok, fallidos: resultados.length - ok, resultados };
+    }
+
+    /** Quita el descuento general de varios productos. */
+    async quitarDescuentoGeneral(scope: SyncScope, productIds: string[]) {
+        const resultados: { productId: string; ok: boolean; message: string }[] = [];
+        for (const id of [...new Set(productIds ?? [])]) {
+            try {
+                const r = await this.setPromo(scope, id, { salePrice: null });
+                resultados.push({ productId: id, ok: true, message: r.message });
+            } catch (error: any) {
+                resultados.push({ productId: id, ok: false, message: String(error?.message ?? 'No se pudo quitar el descuento.') });
+            }
+        }
+        const ok = resultados.filter(r => r.ok).length;
+        return { total: resultados.length, quitados: ok, fallidos: resultados.length - ok, resultados };
     }
 
     async getProductSyncStatus(scope: SyncScope, productId: string) {

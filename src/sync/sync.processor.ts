@@ -160,6 +160,11 @@ export class SyncProcessor extends WorkerHost {
                 return this.syncService.pollAllOrders();
             }
 
+            case 'meli-descuentos': {
+                // Pasada diaria: cada publicación de Mercado Libre con descuento pasa a la promoción que le toca hoy.
+                return this.syncService.renovarDescuentosMeli();
+            }
+
             case 'sync-listings': {
                 // Pasada periódica: estado de las publicaciones de todas las cuentas.
                 return this.syncService.refreshAllListings();
