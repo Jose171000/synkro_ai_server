@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { IsNull, MoreThan, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
@@ -276,6 +276,8 @@ export class ChangeRequestsService {
         }
         if (request.field === 'promo' && request.marketplace === 'falabella') {
             const quitado = await this.aplicarDescuentoDeFalabella(request, product, descuento!, general);
+            // El descuento general es de todos los canales: ya guardado en el producto, también se manda a Mercado Libre y WooCommerce.
+            if (general) await this.propagarDescuentoGeneral(product, scope.userId);
             // Quitar un descuento no se manda: Falabella lo conserva hasta que se quita en su Seller Center.
             if (quitado) {
                 const aviso = 'Descuento quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.';
@@ -304,6 +306,22 @@ export class ChangeRequestsService {
         });
 
         return { id, status: 'approved', message: `Aprobado. Enviando ${request.field} a ${request.marketplace}.` };
+    }
+
+    /**
+     * Manda el descuento general (o su retiro) ya guardado en el producto a sus publicaciones de Mercado Libre y WooCommerce.
+     * Ripley tiene su propio flujo y sus propios interruptores: no se toca desde aquí.
+     */
+    private async propagarDescuentoGeneral(product: Product, userId: string): Promise<void> {
+        if (!this.listingLinkRepository) return;
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { id: product.id }, marketplace: In(['mercadolibre', 'woocommerce']), syncStatus: In(['published', 'paused']) },
+            relations: { connection: true },
+        });
+        for (const e of enlaces) {
+            if (!e.connection) continue;
+            await this.syncQueue.add('inventory', { productId: product.id, userId, marketplace: e.marketplace, connectionId: e.connection.id });
+        }
     }
 
     /**

@@ -9,7 +9,7 @@ import { ChangeRequestsService } from './change-requests.service';
  */
 const SCOPE = { userId: 'u1', storeId: 't1' };
 
-function construir(over: { solicitud?: any; producto?: any; claimed?: number; enlace?: any } = {}) {
+function construir(over: { solicitud?: any; producto?: any; claimed?: number; enlace?: any; otrosEnlaces?: any[] } = {}) {
     const guardadas: any[] = [];
     const repo = {
         update: jest.fn().mockResolvedValue({ affected: over.claimed ?? 1 }),
@@ -24,7 +24,7 @@ function construir(over: { solicitud?: any; producto?: any; claimed?: number; en
     };
     const tiendas = { findOne: jest.fn(), update: jest.fn() };
     const cola = { add: jest.fn() };
-    const enlaces = { findOne: jest.fn().mockResolvedValue(over.enlace ?? null), save: jest.fn(async (e: any) => e) };
+    const enlaces = { findOne: jest.fn().mockResolvedValue(over.enlace ?? null), find: jest.fn().mockResolvedValue(over.otrosEnlaces ?? []), save: jest.fn(async (e: any) => e) };
     const service = new ChangeRequestsService(repo as any, productos as any, tiendas as any, cola as any, enlaces as any);
     return { service, repo, productos, tiendas, cola, guardadas, enlaces };
 }
@@ -163,6 +163,24 @@ describe('aprobar y rechazar', () => {
             await service.approve('f1', SCOPE);
             expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ salePrice: 70, saleStartDate: '2026-08-02', saleEndDate: '2026-12-01' }));
             expect(enlaces.save).not.toHaveBeenCalled();
+            expect(cola.add).toHaveBeenCalledTimes(1);
+        });
+
+        it('el descuento general aprobado también se manda a Mercado Libre y WooCommerce (no solo a Falabella)', async () => {
+            const otros = [
+                { marketplace: 'mercadolibre', connection: { id: 'cm1' } },
+                { marketplace: 'woocommerce', connection: { id: 'cw1' } },
+            ];
+            const { service, cola } = construir({ solicitud: promoFa({ newValue: '70|2026-08-02|2026-12-01|g' }), producto: { ...producto }, otrosEnlaces: otros });
+            await service.approve('f1', SCOPE);
+            const destinos = cola.add.mock.calls.map((c: any[]) => `${c[1].marketplace}:${c[1].connectionId}`).sort();
+            expect(destinos).toEqual(['falabella:c1', 'mercadolibre:cm1', 'woocommerce:cw1']);
+        });
+
+        it('un descuento por cuenta (sin marca general) no se propaga a otros canales', async () => {
+            const { service, cola, enlaces } = construir({ solicitud: promoFa({ newValue: '70|2026-08-02|2026-12-01' }), producto: { ...producto }, enlace: { id: 'l1' }, otrosEnlaces: [{ marketplace: 'mercadolibre', connection: { id: 'cm1' } }] });
+            await service.approve('f1', SCOPE);
+            expect(enlaces.find).not.toHaveBeenCalled();
             expect(cola.add).toHaveBeenCalledTimes(1);
         });
 
