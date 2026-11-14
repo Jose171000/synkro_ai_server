@@ -5233,7 +5233,13 @@ export class SyncService implements OnModuleInit {
             for (const enlace of aQuitar) {
                 if (enlace.connection) await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: enlace.marketplace, connectionId: enlace.connection.id });
             }
-            return { productId, message: 'Descuento quitado de Synkro' + (aQuitar.length ? ', Mercado Libre y WooCommerce.' : '.') + ' Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
+            const ripley = await this.enviarDescuentoGeneralARipley(scope, product, { precio: null });
+            const quitadoEn = [...(aQuitar.length ? ['Mercado Libre', 'WooCommerce'] : []), ...(ripley.enviados ? ['Ripley'] : [])];
+            return {
+                productId,
+                message: 'Descuento quitado de Synkro' + (quitadoEn.length ? `, ${quitadoEn.join(' y ')}.` : '.')
+                    + ' Si ya estaba en Falabella, quítalo también desde el Seller Center.' + (ripley.avisos.length ? ' ' + ripley.avisos.join(' ') : ''),
+            };
         }
         const inicio = fechaDeFalabella(dto.saleStartDate);
         const fin = fechaDeFalabella(dto.saleEndDate);
@@ -5258,12 +5264,53 @@ export class SyncService implements OnModuleInit {
             await this.syncQueue.add('inventory', { productId, userId: scope.userId, marketplace: enlace.marketplace, connectionId: enlace.connection.id });
         }
         const canales = [...new Set(enlaces.map(e => ({ falabella: 'Falabella', mercadolibre: 'Mercado Libre', woocommerce: 'WooCommerce' } as Record<string, string>)[e.marketplace]))];
+        const ripley = await this.enviarDescuentoGeneralARipley(scope, product, { precio: Number(dto.salePrice), desde: inicio, hasta: fin });
+        if (ripley.enviados) canales.push('Ripley');
+        const aviso = ripley.avisos.length ? ' ' + ripley.avisos.join(' ') : '';
         return {
             productId,
-            message: enlaces.length
+            message: (canales.length
                 ? `Descuento guardado y enviado a ${canales.join(', ')}. Puede tardar unos minutos en verse.`
-                : 'Descuento guardado. Se enviará a cada canal cuando el producto esté publicado allí.',
+                : 'Descuento guardado. Se enviará a cada canal cuando el producto esté publicado allí.') + aviso,
         };
+    }
+
+    /**
+     * Manda (o quita) el descuento general en las ofertas de Ripley del producto. Ripley tiene su propio piloto: solo sale si está
+     * encendido el envío y el de precios, y el SKU está habilitado; y el descuento debe quedar bajo el precio de lista que Ripley tiene.
+     * Lo que no sale se explica en `avisos`; nunca lanza error.
+     */
+    private async enviarDescuentoGeneralARipley(
+        scope: SyncScope,
+        product: Product,
+        pedido: DescuentoPedido,
+    ): Promise<{ enviados: number; avisos: string[] }> {
+        const enlaces = await this.listingLinkRepository.find({
+            where: { product: { id: product.id }, marketplace: 'ripley', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+            relations: { connection: true },
+        });
+        if (!enlaces.length) return { enviados: 0, avisos: [] };
+        if (process.env.RIPLEY_PUSH_ENABLED !== 'true' || !skuPermitidoParaRipley(product.sku) || process.env.RIPLEY_PUSH_PRICE !== 'true') {
+            return { enviados: 0, avisos: ['Ripley no recibió el descuento: el envío de precios a Ripley todavía no está habilitado para este SKU.'] };
+        }
+        let enviados = 0;
+        const avisos: string[] = [];
+        for (const e of enlaces) {
+            if (!e.connection || e.pausedByUser) continue;
+            if (pedido.precio === null) {
+                if (e.salePrice == null) continue; // Ripley no tiene descuento que quitar
+            } else {
+                const lista = e.regularPrice ?? e.lastPriceSynced;
+                if (lista == null) { avisos.push('Ripley no recibió el descuento: todavía no se leyó el precio de la oferta (pulsa «Actualizar ahora»).'); continue; }
+                if (!(pedido.precio > 0 && pedido.precio < Number(lista))) {
+                    avisos.push(`Ripley no recibió el descuento: debe ser menor que su precio de lista (${Number(lista).toFixed(2)}).`);
+                    continue;
+                }
+            }
+            await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'ripley', connectionId: e.connection.id, conDescuento: true, descuento: pedido });
+            enviados++;
+        }
+        return { enviados, avisos: [...new Set(avisos)] };
     }
 
     /**
