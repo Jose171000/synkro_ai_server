@@ -1,6 +1,6 @@
 import * as ExcelJS from 'exceljs';
 
-const NOMBRE_DE_CANAL: Record<string, string> = { falabella: 'Falabella', mercadolibre: 'Mercado Libre' };
+const NOMBRE_DE_CANAL: Record<string, string> = { falabella: 'Falabella', mercadolibre: 'Mercado Libre', woocommerce: 'WooCommerce' };
 
 /** Todas las combinaciones no vacías de los canales conectados: la lista desplegable de Excel no admite varias selecciones. */
 export function combinacionesDeCanales(canales: string[]): string[] {

@@ -32,7 +32,7 @@ import { EdicionMasivaService } from './edicion-masiva.service';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 
 /** Canales donde la carga masiva puede publicar sola. */
-const CANALES_PUBLICABLES = ['mercadolibre', 'falabella'];
+const CANALES_PUBLICABLES = ['mercadolibre', 'falabella', 'woocommerce'];
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()

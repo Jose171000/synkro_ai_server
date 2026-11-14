@@ -1175,16 +1175,29 @@ export class SyncService implements OnModuleInit {
                 continue;
             }
             encoladas.push(marketplace);
+            let opciones: Record<string, any> | undefined;
+            if (marketplace === 'falabella') {
+                // Falabella limita las llamadas de envío (50 seguidas y luego 2 minutos): si se pasa, se reintenta más tarde.
+                opciones = { attempts: 5, backoff: { type: 'exponential', delay: 120_000 } };
+            } else if (marketplace === 'woocommerce') {
+                // WooCommerce publica el grupo entero en un solo trabajo: con un mismo id, las variantes de un grupo no lo repiten
+                // (dos trabajos a la vez crearían el producto dos veces). El id se libera al terminar para poder volver a publicar.
+                const conGrupo = await this.productRepository.findOne({ where: { id: productId }, relations: { group: true } });
+                opciones = {
+                    attempts: 3,
+                    backoff: { type: 'exponential', delay: 60_000 },
+                    jobId: `woo-publish-${connection.id}-${conGrupo?.group?.id ?? productId}`,
+                    removeOnComplete: true,
+                    removeOnFail: true,
+                };
+            }
             await this.syncQueue.add('publish', {
                 productId,
                 userId: scope.userId,
                 storeId: scope.storeId,
                 marketplace,
                 connectionId: connection.id,
-            }, marketplace === 'falabella'
-                // Falabella limita las llamadas de envío (50 seguidas y luego 2 minutos): si se pasa, se reintenta más tarde.
-                ? { attempts: 5, backoff: { type: 'exponential', delay: 120_000 } }
-                : undefined);
+            }, opciones);
         }
 
         if (!encoladas.length) {

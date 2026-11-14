@@ -65,11 +65,11 @@ describe('describirErrorWoo', () => {
 });
 
 describe('WooApiService', () => {
-    let http: { get: jest.Mock; put: jest.Mock };
+    let http: { get: jest.Mock; put: jest.Mock; post: jest.Mock };
     let servicio: WooApiService;
 
     beforeEach(() => {
-        http = { get: jest.fn(), put: jest.fn() };
+        http = { get: jest.fn(), put: jest.fn(), post: jest.fn() };
         (axios.create as jest.Mock).mockReturnValue(http);
         servicio = new WooApiService();
     });
@@ -206,6 +206,45 @@ describe('WooApiService', () => {
             http.put.mockRejectedValue({ response: { status: 401, data: {} } });
             await expect(servicio.setInventory(auth, { externalId: '1', variationId: null }, { stock: 1 }))
                 .rejects.toThrow('rechazó las claves');
+        });
+    });
+
+    describe('crear productos', () => {
+        it('crea el producto con más espera (WooCommerce descarga las fotos) y devuelve su id y su dirección', async () => {
+            http.post.mockResolvedValue(ok({ id: 77, permalink: 'https://mitienda.com/?post_type=product&p=77' }));
+            expect(await servicio.crearProducto(auth, { name: 'X', status: 'draft' })).toEqual({ id: '77', permalink: 'https://mitienda.com/?post_type=product&p=77' });
+            expect(http.post).toHaveBeenCalledWith('/products', { name: 'X', status: 'draft' });
+            expect(axios.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 120000 }));
+        });
+
+        it('crea las variaciones en lotes de 10 y devuelve el id o el motivo de cada una, en orden', async () => {
+            const cuerpos = Array.from({ length: 12 }, (_, i) => ({ sku: `S-${i}` }));
+            http.post.mockImplementation(async (_url: string, body: any) => ok({
+                create: body.create.map((c: any) => (c.sku === 'S-3' ? { id: 0, error: { code: 'product_invalid_sku', message: 'SKU repetido' } } : { id: Number(c.sku.slice(2)) + 100 })),
+            }));
+            const r = await servicio.crearVariaciones(auth, '9', cuerpos);
+            expect(http.post).toHaveBeenCalledTimes(2);
+            expect(http.post.mock.calls[0][0]).toBe('/products/9/variations/batch');
+            expect(http.post.mock.calls[0][1].create).toHaveLength(10);
+            expect(http.post.mock.calls[1][1].create).toHaveLength(2);
+            expect(r).toHaveLength(12);
+            expect(r[0]).toEqual({ id: '100', error: null });
+            expect(r[3]).toEqual({ id: null, error: 'SKU repetido' });
+            expect(r[11]).toEqual({ id: '111', error: null });
+        });
+
+        it('reutiliza las categorías que ya existen en cada nivel y crea las que faltan', async () => {
+            http.get.mockImplementation(async (_u: string, { params }: any) =>
+                ok(String(params.search).toLowerCase() === 'hogar' && params.parent === 0 ? [{ id: 5, name: 'Hogar' }, { id: 6, name: 'Hogar y jardín' }] : []));
+            http.post.mockResolvedValue(ok({ id: 9 }));
+            expect(await servicio.asegurarCategorias(auth, ['hogar', 'Cama'])).toEqual([5, 9]);
+            expect(http.post).toHaveBeenCalledTimes(1);
+            expect(http.post).toHaveBeenCalledWith('/products/categories', { name: 'Cama', parent: 5 });
+        });
+
+        it('traduce los errores de la tienda al crear', async () => {
+            http.post.mockRejectedValue({ response: { status: 400, data: { message: 'El número de artículo (SKU) no es válido o ya existe.' } } });
+            await expect(servicio.crearProducto(auth, {})).rejects.toThrow('ya existe');
         });
     });
 

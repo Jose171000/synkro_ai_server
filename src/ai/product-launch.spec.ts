@@ -143,7 +143,7 @@ describe('lanzar un producto en un paso', () => {
 
     it('ignora canales no soportados y avisa si la tienda no tiene cuenta del canal', async () => {
         const { service, falabellaPrep } = construir({ cuentas: [{ id: 'ml1', marketplace: 'mercadolibre', status: 'active' }] });
-        const r = await service.lanzar(SCOPE, 'p1', ['falabella', 'woocommerce', 'amazon']);
+        const r = await service.lanzar(SCOPE, 'p1', ['falabella', 'shopify', 'amazon']);
         expect(r.channels).toEqual([expect.objectContaining({ marketplace: 'falabella', status: 'omitido', accounts: 0 })]);
         expect(falabellaPrep.preparar).not.toHaveBeenCalled();
     });

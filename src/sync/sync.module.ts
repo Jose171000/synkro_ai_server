@@ -21,6 +21,7 @@ import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { WooApiService } from './woo/woo-api.service';
+import { WooPublicacionService } from './woo/woo-publicacion.service';
 import { ShopifyApiService } from './shopify/shopify-api.service';
 import { RipleyApiService } from './ripley/ripley-api.service';
 import { RipleyMarcasService } from './ripley/ripley-marcas.service';
@@ -51,7 +52,7 @@ import { Product } from '../products/entities/product.entity';
         StoresModule,
     ],
     controllers: [SyncController],
-    providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, ShopifyApiService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, RipleyPublicacionService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
+    providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, WooPublicacionService, ShopifyApiService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, RipleyPublicacionService, EcommerceSyncService, SaleAlertsService, ProductSheetService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
     exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, EcommerceSyncService],
 })
 export class SyncModule { }

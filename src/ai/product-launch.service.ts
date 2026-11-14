@@ -39,8 +39,8 @@ export interface LaunchReport {
     variants?: LaunchVariant[];
 }
 
-const CANALES = ['mercadolibre', 'falabella'];
-const NOMBRE: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella' };
+const CANALES = ['mercadolibre', 'falabella', 'woocommerce'];
+const NOMBRE: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', woocommerce: 'WooCommerce' };
 
 /**
  * «Lanzar» un producto: deja listo cada canal y lo publica, sin que la persona tenga que hacer nada más.

@@ -5,7 +5,7 @@ describe('SyncProcessor: cierre de solicitudes de cambio', () => {
     const armar = (resultadoDelCanal: any) => {
         const syncService: any = { hasChannel: jest.fn(() => true), pushInventoryToChannel: jest.fn(async () => resultadoDelCanal) };
         const changeRequests: any = { markResult: jest.fn(async () => undefined), markSkipped: jest.fn(async () => undefined) };
-        const procesador = new SyncProcessor(syncService, changeRequests, {} as any);
+        const procesador = new SyncProcessor(syncService, changeRequests, {} as any, {} as any);
         const trabajo: any = { id: 'j1', name: 'inventory', data: { productId: 'p1', marketplace: 'ripley', connectionId: 'c1', changeRequestId: 'r1' } };
         return { procesador, changeRequests, trabajo };
     };

@@ -3,6 +3,7 @@ import { Job, UnrecoverableError } from 'bullmq';
 import { SyncService } from './sync.service';
 import { ChangeRequestsService } from './change-requests.service';
 import { YavendioSyncService } from './yavendio/yavendio-sync.service';
+import { PlanInvalido, WooPublicacionService } from './woo/woo-publicacion.service';
 
 /**
  * Background worker for every marketplace-sync job:
@@ -19,6 +20,7 @@ export class SyncProcessor extends WorkerHost {
         private readonly syncService: SyncService,
         private readonly changeRequests: ChangeRequestsService,
         private readonly yavendio: YavendioSyncService,
+        private readonly woo: WooPublicacionService,
     ) {
         super();
     }
@@ -84,6 +86,20 @@ export class SyncProcessor extends WorkerHost {
                             throw new UnrecoverableError(error?.message ?? 'El producto no cumple lo que pide Yavendió.');
                         }
                         if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) await this.yavendio.marcarFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
+                        throw error;
+                    }
+                }
+                if (marketplace === 'woocommerce') {
+                    try {
+                        const r = await this.woo.publish(productId, userId, connectionId);
+                        return { status: 'borrador', externalId: r.externalId, creadas: r.creadas };
+                    } catch (error: any) {
+                        // Un producto que WooCommerce no puede recibir (sin precio, SKU repetido, valor de eje faltante…) no mejora reintentando.
+                        if (error instanceof PlanInvalido) {
+                            await this.woo.marcarFallida(productId, connectionId, userId, error.message);
+                            throw new UnrecoverableError(error.message);
+                        }
+                        if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) await this.woo.marcarFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
                         throw error;
                     }
                 }

@@ -93,11 +93,11 @@ export function describirErrorWoo(error: any): string {
 export class WooApiService implements ChannelClient {
     readonly channel = 'woocommerce' as const;
 
-    private cliente(auth: ChannelAuth): AxiosInstance {
+    private cliente(auth: ChannelAuth, timeout = 20000): AxiosInstance {
         const sitio = normalizarSitioWoo(auth.site);
         return axios.create({
             baseURL: `${sitio}/wp-json/wc/v3`,
-            timeout: 20000,
+            timeout,
             auth: { username: auth.token, password: auth.secret ?? '' },
             headers: { 'User-Agent': 'Synkro-AI' },
         });
@@ -189,6 +189,76 @@ export class WooApiService implements ChannelClient {
             pagina++;
         }
         return todas;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Crear productos (publicar desde Synkro)
+    // ─────────────────────────────────────────────────────────────
+
+    /** WooCommerce descarga cada foto desde su dirección al guardar: las llamadas con fotos pueden tardar. */
+    private static readonly ESPERA_CON_FOTOS = 120_000;
+
+    /** Crea un producto (simple o variable) y devuelve su id y su dirección. */
+    async crearProducto(auth: ChannelAuth, cuerpo: Record<string, any>): Promise<{ id: string; permalink: string | null }> {
+        const http = this.cliente(auth, WooApiService.ESPERA_CON_FOTOS);
+        const { data } = await this.llamar(() => http.post('/products', cuerpo));
+        return { id: String(data?.id), permalink: texto(data?.permalink) };
+    }
+
+    /** Cambia campos de un producto ya creado (por ejemplo, ponerle las fotos). */
+    async actualizarProducto(auth: ChannelAuth, productoId: string, cuerpo: Record<string, any>): Promise<void> {
+        const http = this.cliente(auth, WooApiService.ESPERA_CON_FOTOS);
+        await this.llamar(() => http.put(`/products/${productoId}`, cuerpo));
+    }
+
+    /** Las variaciones que ya tiene un producto variable (id y SKU). */
+    async variacionesDe(auth: ChannelAuth, productoId: string): Promise<{ id: string; sku: string | null }[]> {
+        const http = this.cliente(auth);
+        return (await this.leerVariaciones(http, productoId)).map(v => ({ id: String(v?.id), sku: texto(v?.sku) }));
+    }
+
+    /**
+     * Crea variaciones de un producto variable en lotes pequeños. Devuelve una entrada por variación pedida, en el mismo orden:
+     * su id si se creó, o el motivo si WooCommerce la rechazó (otras siguen).
+     */
+    async crearVariaciones(auth: ChannelAuth, productoId: string, cuerpos: Record<string, any>[], tamanoDeLote = 10): Promise<{ id: string | null; error: string | null }[]> {
+        const http = this.cliente(auth, WooApiService.ESPERA_CON_FOTOS);
+        const salida: { id: string | null; error: string | null }[] = [];
+        for (let i = 0; i < cuerpos.length; i += tamanoDeLote) {
+            const lote = cuerpos.slice(i, i + tamanoDeLote);
+            const { data } = await this.llamar(() => http.post(`/products/${productoId}/variations/batch`, { create: lote }));
+            const creadas: any[] = Array.isArray(data?.create) ? data.create : [];
+            lote.forEach((_, j) => {
+                const r = creadas[j];
+                const id = r?.id ? String(r.id) : null;
+                salida.push(id ? { id, error: null } : { id: null, error: texto(r?.error?.message) ?? 'WooCommerce no creó la variación.' });
+            });
+        }
+        return salida;
+    }
+
+    /**
+     * Busca (o crea) las categorías de una ruta «Hogar › Cama» y devuelve el id de cada nivel, de arriba hacia abajo.
+     * Una categoría que ya existe con ese nombre en ese nivel se reutiliza; nunca se duplica.
+     */
+    async asegurarCategorias(auth: ChannelAuth, ruta: string[]): Promise<number[]> {
+        const http = this.cliente(auth);
+        const ids: number[] = [];
+        let padre = 0;
+        for (const nombre of ruta.map(n => n.trim()).filter(Boolean)) {
+            const { data } = await this.llamar(() => http.get('/products/categories', { params: { search: nombre, per_page: 100, parent: padre } }));
+            const clave = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+            const existente = (Array.isArray(data) ? data : []).find((c: any) => clave(String(c?.name ?? '').replace(/&amp;/g, '&')) === clave(nombre));
+            let id = existente?.id ? Number(existente.id) : 0;
+            if (!id) {
+                const creada = await this.llamar(() => http.post('/products/categories', { name: nombre, parent: padre }));
+                id = Number(creada.data?.id);
+            }
+            if (!id) break;
+            ids.push(id);
+            padre = id;
+        }
+        return ids;
     }
 
     async setInventory(
