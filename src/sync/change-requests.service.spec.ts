@@ -166,22 +166,31 @@ describe('aprobar y rechazar', () => {
             expect(cola.add).toHaveBeenCalledTimes(1);
         });
 
-        it('el descuento general aprobado también se manda a Mercado Libre y WooCommerce (no solo a Falabella)', async () => {
-            const otros = [
-                { marketplace: 'mercadolibre', connection: { id: 'cm1' } },
-                { marketplace: 'woocommerce', connection: { id: 'cw1' } },
-            ];
-            const { service, cola } = construir({ solicitud: promoFa({ newValue: '70|2026-08-02|2026-12-01|g' }), producto: { ...producto }, otrosEnlaces: otros });
+        it('aprobar el descuento de una cuenta de Mercado Libre lo deja solo en SU publicación y lo manda solo a esa cuenta', async () => {
+            const enlace: any = { id: 'lm' };
+            const { service, productos, enlaces, cola } = construir({ solicitud: promoFa({ marketplace: 'mercadolibre', connection: { id: 'cm1' } }), producto: { ...producto }, enlace });
             await service.approve('f1', SCOPE);
-            const destinos = cola.add.mock.calls.map((c: any[]) => `${c[1].marketplace}:${c[1].connectionId}`).sort();
-            expect(destinos).toEqual(['falabella:c1', 'mercadolibre:cm1', 'woocommerce:cw1']);
+            expect(productos.save).not.toHaveBeenCalled(); // el producto no cambia: los demás canales no reciben nada
+            expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: 70, saleStartOverride: '2026-08-02', saleEndOverride: '2026-12-01' }));
+            expect(cola.add).toHaveBeenCalledTimes(1);
+            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'mercadolibre', connectionId: 'cm1', changeRequestId: 'f1' }));
         });
 
-        it('un descuento por cuenta (sin marca general) no se propaga a otros canales', async () => {
-            const { service, cola, enlaces } = construir({ solicitud: promoFa({ newValue: '70|2026-08-02|2026-12-01' }), producto: { ...producto }, enlace: { id: 'l1' }, otrosEnlaces: [{ marketplace: 'mercadolibre', connection: { id: 'cm1' } }] });
+        it('lo mismo con WooCommerce, y aprobar un canal nunca manda el descuento a los demás', async () => {
+            const { service, cola, enlaces } = construir({ solicitud: promoFa({ marketplace: 'woocommerce', connection: { id: 'cw1' } }), producto: { ...producto }, enlace: { id: 'lw' }, otrosEnlaces: [{ marketplace: 'mercadolibre', connection: { id: 'cm1' } }] });
             await service.approve('f1', SCOPE);
             expect(enlaces.find).not.toHaveBeenCalled();
             expect(cola.add).toHaveBeenCalledTimes(1);
+            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'woocommerce', connectionId: 'cw1' }));
+        });
+
+        it('quitar el descuento en Mercado Libre sí se manda (el canal lo quita solo); en Falabella no', async () => {
+            const enlace: any = { id: 'lm', salePriceOverride: 70 };
+            const { service, enlaces, cola, repo } = construir({ solicitud: promoFa({ marketplace: 'mercadolibre', connection: { id: 'cm1' }, newValue: 'quitar' }), producto: { ...producto }, enlace });
+            await service.approve('f1', SCOPE);
+            expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: null, saleStartOverride: null, saleEndOverride: null }));
+            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'mercadolibre', connectionId: 'cm1' }));
+            expect(repo.update).not.toHaveBeenLastCalledWith({ id: 'f1' }, expect.objectContaining({ status: 'skipped' }));
         });
 
         it('quitar un descuento lo borra de Synkro y no manda nada: la solicitud queda como «No enviado» con el aviso del Seller Center', async () => {

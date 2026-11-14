@@ -3163,7 +3163,7 @@ export class SyncService implements OnModuleInit {
         });
         let revisadas = 0;
         for (const e of enlaces) {
-            const conDescuento = e.product?.salePrice != null || !!e.lastPromoSynced;
+            const conDescuento = e.product?.salePrice != null || e.salePriceOverride != null || !!e.lastPromoSynced;
             if (!conDescuento || !e.connection) continue;
             await this.syncQueue.add('inventory', { productId: e.product.id, userId: e.connection.owner?.id, marketplace: 'mercadolibre', connectionId: e.connection.id });
             revisadas++;
@@ -5186,11 +5186,13 @@ export class SyncService implements OnModuleInit {
         // Con el modo revisión, el descuento general espera aprobación (una solicitud por cuenta de Falabella donde está publicado).
         // Sin cuentas publicadas no hay nada que mandar, y se guarda directo como siempre.
         const quitarGeneral = dto.salePrice === null || dto.salePrice === undefined;
-        const cuentasFalabella = await this.listingLinkRepository.find({
-            where: { product: { id: productId }, marketplace: 'falabella', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
+        // Con el modo revisión, cada cuenta de Falabella, Mercado Libre y WooCommerce pide su propia aprobación: nada sale a un canal sin ella.
+        const cuentasConRevision = await this.listingLinkRepository.find({
+            where: { product: { id: productId }, marketplace: In(['falabella', 'mercadolibre', 'woocommerce']), syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
             relations: { connection: true },
         });
-        if (cuentasFalabella.length && (await this.changeRequests.isReviewMode(scope.storeId))) {
+        const tieneRipley = (await this.listingLinkRepository.count({ where: { product: { id: productId }, marketplace: 'ripley', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } } })) > 0;
+        if ((cuentasConRevision.length || tieneRipley) && (await this.changeRequests.isReviewMode(scope.storeId))) {
             const inicio = quitarGeneral ? null : fechaDeFalabella(dto.saleStartDate);
             const fin = quitarGeneral ? null : fechaDeFalabella(dto.saleEndDate);
             if (!quitarGeneral) {
@@ -5201,22 +5203,27 @@ export class SyncService implements OnModuleInit {
                     throw new BadRequestException(`El precio con descuento debe ser mayor que 0 y menor que el precio regular (${Number(product.price).toFixed(2)}).`);
                 }
             }
-            const nuevo = conMarcaGeneral(valorDeDescuento(quitarGeneral ? { precio: null } : { precio: Number(dto.salePrice), desde: inicio, hasta: fin }));
-            for (const enlace of cuentasFalabella) {
+            // Sin marca «general»: lo aprobado queda solo en la publicación de esa cuenta y no se filtra a los demás canales.
+            const nuevo = valorDeDescuento(quitarGeneral ? { precio: null } : { precio: Number(dto.salePrice), desde: inicio, hasta: fin });
+            for (const enlace of cuentasConRevision) {
                 if (!enlace.connection) continue;
                 await this.changeRequests.createPromoRequest(scope, product, {
-                    marketplace: 'falabella',
+                    marketplace: enlace.marketplace,
                     connectionId: enlace.connection.id,
-                    previous: product.salePrice != null ? String(Number(product.salePrice)) : '',
+                    previous: enlace.salePriceOverride != null ? String(Number(enlace.salePriceOverride)) : (enlace.salePrice != null ? String(Number(enlace.salePrice)) : ''),
                     next: nuevo,
                 });
             }
+            // Ripley también pide su aprobación por oferta, con sus mismas condiciones (envío habilitado y bajo su precio de lista).
+            const ripley = await this.enviarDescuentoGeneralARipley(scope, product, quitarGeneral ? { precio: null } : { precio: Number(dto.salePrice), desde: inicio, hasta: fin }, true);
+            const solicitudes = cuentasConRevision.length + ripley.enviados;
+            const aviso = ripley.avisos.length ? ' ' + ripley.avisos.join(' ') : '';
             return {
                 productId,
-                pending: cuentasFalabella.length,
-                message: quitarGeneral
-                    ? 'Quitar el descuento quedó en revisión: apruébalo en el Tablero (o en Revisión).'
-                    : `Descuento ${Number(dto.salePrice)} en revisión: apruébalo en el Tablero (o en Revisión) para mandarlo a Falabella.`,
+                pending: solicitudes,
+                message: (quitarGeneral
+                    ? `Quitar el descuento quedó en revisión (${solicitudes} solicitud(es), una por cuenta): apruébalo en el Tablero (o en Revisión).`
+                    : `Descuento ${Number(dto.salePrice)} en revisión (${solicitudes} solicitud(es), una por cuenta de Falabella, Mercado Libre, WooCommerce o Ripley): apruébalas en el Tablero (o en Revisión) para mandarlo a cada canal.`) + aviso,
             };
         }
 
@@ -5284,6 +5291,8 @@ export class SyncService implements OnModuleInit {
         scope: SyncScope,
         product: Product,
         pedido: DescuentoPedido,
+        /** Con el modo revisión: en vez de enviarlo, se crea una solicitud de aprobación por cada oferta de Ripley. */
+        comoSolicitud = false,
     ): Promise<{ enviados: number; avisos: string[] }> {
         const enlaces = await this.listingLinkRepository.find({
             where: { product: { id: product.id }, marketplace: 'ripley', syncStatus: In(['published', 'paused']), connection: { store: { id: scope.storeId } } },
@@ -5307,7 +5316,16 @@ export class SyncService implements OnModuleInit {
                     continue;
                 }
             }
-            await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'ripley', connectionId: e.connection.id, conDescuento: true, descuento: pedido });
+            if (comoSolicitud) {
+                await this.changeRequests.createPromoRequest(scope, product, {
+                    marketplace: 'ripley',
+                    connectionId: e.connection.id,
+                    previous: e.salePrice != null ? String(Number(e.salePrice)) : '',
+                    next: valorDeDescuento(pedido),
+                });
+            } else {
+                await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'ripley', connectionId: e.connection.id, conDescuento: true, descuento: pedido });
+            }
             enviados++;
         }
         return { enviados, avisos: [...new Set(avisos)] };
