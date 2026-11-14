@@ -65,11 +65,11 @@ describe('describirErrorWoo', () => {
 });
 
 describe('WooApiService', () => {
-    let http: { get: jest.Mock; put: jest.Mock; post: jest.Mock };
+    let http: { get: jest.Mock; put: jest.Mock; post: jest.Mock; delete: jest.Mock };
     let servicio: WooApiService;
 
     beforeEach(() => {
-        http = { get: jest.fn(), put: jest.fn(), post: jest.fn() };
+        http = { get: jest.fn(), put: jest.fn(), post: jest.fn(), delete: jest.fn() };
         (axios.create as jest.Mock).mockReturnValue(http);
         servicio = new WooApiService();
     });
@@ -246,9 +246,62 @@ describe('WooApiService', () => {
             expect(http.post).not.toHaveBeenCalled();
         });
 
+        it('al actualizar un producto devuelve su dirección pública (útil al publicarlo)', async () => {
+            http.put.mockResolvedValue(ok({ id: 77, status: 'publish', permalink: 'https://mitienda.com/sabanas/' }));
+            expect(await servicio.actualizarProducto(auth, '77', { status: 'publish' })).toEqual({ permalink: 'https://mitienda.com/sabanas/' });
+            expect(http.put).toHaveBeenCalledWith('/products/77', { status: 'publish' });
+        });
+
         it('traduce los errores de la tienda al crear', async () => {
             http.post.mockRejectedValue({ response: { status: 400, data: { message: 'El número de artículo (SKU) no es válido o ya existe.' } } });
             await expect(servicio.crearProducto(auth, {})).rejects.toThrow('ya existe');
+        });
+    });
+
+    describe('pausar, reanudar y quitar', () => {
+        const noExiste = { response: { status: 404, data: { code: 'woocommerce_rest_product_invalid_id', message: 'ID no válido.' } } };
+
+        it('oculta o vuelve a publicar un producto cambiando su estado', async () => {
+            http.put.mockResolvedValue(ok({ id: 5 }));
+            expect(await servicio.cambiarEstadoDeProducto(auth, '5', 'draft')).toEqual({ noExiste: false });
+            expect(http.put).toHaveBeenCalledWith('/products/5', { status: 'draft' });
+            await servicio.cambiarEstadoDeProducto(auth, '5', 'publish');
+            expect(http.put).toHaveBeenLastCalledWith('/products/5', { status: 'publish' });
+        });
+
+        it('quitar manda el producto a la papelera (force=false), no lo borra', async () => {
+            http.delete.mockResolvedValue(ok({ id: 5 }));
+            await servicio.moverProductoAPapelera(auth, '5');
+            expect(http.delete).toHaveBeenCalledWith('/products/5', { params: { force: false } });
+        });
+
+        it('oculta variaciones concretas en lotes de 50', async () => {
+            http.post.mockResolvedValue(ok({ update: [] }));
+            const ids = Array.from({ length: 60 }, (_, i) => String(i + 1));
+            await servicio.cambiarEstadoDeVariaciones(auth, '5', ids, 'private');
+            expect(http.post).toHaveBeenCalledTimes(2);
+            expect(http.post.mock.calls[0][0]).toBe('/products/5/variations/batch');
+            expect(http.post.mock.calls[0][1].update).toHaveLength(50);
+            expect(http.post.mock.calls[0][1].update[0]).toEqual({ id: 1, status: 'private' });
+            expect(http.post.mock.calls[1][1].update).toHaveLength(10);
+        });
+
+        it('elimina variaciones concretas con el lote de borrado', async () => {
+            http.post.mockResolvedValue(ok({ delete: [] }));
+            await servicio.eliminarVariaciones(auth, '5', ['7', '8']);
+            expect(http.post).toHaveBeenCalledWith('/products/5/variations/batch', { delete: [7, 8] });
+        });
+
+        it('un producto que ya no existe en la tienda se informa como «noExiste» (no como tienda mal escrita)', async () => {
+            http.put.mockRejectedValue(noExiste);
+            expect(await servicio.cambiarEstadoDeProducto(auth, '5', 'draft')).toEqual({ noExiste: true });
+            http.delete.mockRejectedValue(noExiste);
+            expect(await servicio.moverProductoAPapelera(auth, '5')).toEqual({ noExiste: true });
+        });
+
+        it('un 404 sin ese código (la tienda no tiene la API) sigue siendo un error claro', async () => {
+            http.put.mockRejectedValue({ response: { status: 404, data: {} } });
+            await expect(servicio.cambiarEstadoDeProducto(auth, '5', 'draft')).rejects.toThrow('No se encontró la API de WooCommerce');
         });
     });
 

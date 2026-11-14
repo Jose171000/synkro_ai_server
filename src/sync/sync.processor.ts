@@ -92,7 +92,7 @@ export class SyncProcessor extends WorkerHost {
                 if (marketplace === 'woocommerce') {
                     try {
                         const r = await this.woo.publish(productId, userId, connectionId);
-                        return { status: 'borrador', externalId: r.externalId, creadas: r.creadas };
+                        return { status: r.publicado ? 'publicado' : 'borrador', externalId: r.externalId, creadas: r.creadas };
                     } catch (error: any) {
                         // Un producto que WooCommerce no puede recibir (sin precio, SKU repetido, valor de eje faltante…) no mejora reintentando.
                         if (error instanceof PlanInvalido) {

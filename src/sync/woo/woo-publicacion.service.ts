@@ -44,8 +44,11 @@ export class WooPublicacionService {
         return familia.length ? familia : [producto];
     }
 
-    /** Publica el producto (o su grupo entero) como borrador en la tienda. */
-    async publish(productId: string, userId: string, connectionId: string): Promise<{ externalId: string; creadas: number; borrador: true }> {
+    /**
+     * Publica el producto (o su grupo entero) en la tienda. Se crea oculto (borrador), se le ponen las variaciones y las fotos y SOLO AL FINAL
+     * se publica: así nunca queda a la venta un producto a medias. Con WOO_PUBLICAR_COMO_BORRADOR=true se queda en borrador para revisarlo en WordPress.
+     */
+    async publish(productId: string, userId: string, connectionId: string): Promise<{ externalId: string; creadas: number; publicado: boolean }> {
         const familia = await this.cargarFamilia(productId);
         const grupo = familia[0].group ? { name: familia[0].group.name, axes: familia[0].group.axes } : null;
         const plan: PlanWoo = planificarWoo(familia, grupo); // lanza PlanInvalido si algo no sirve: reintentar no lo arregla
@@ -124,15 +127,27 @@ export class WooPublicacionService {
             // Falla el trabajo para que la cola reintente solo lo que falta (lo ya creado no se repite).
             throw new Error(`No se pudieron crear ${errores.length} variante(s) en WooCommerce. ${errores[0]}`);
         }
+        // Ya tiene todas sus variaciones y sus fotos: ahora sí se publica (salvo que se pida dejarlo en borrador).
+        const publicado = process.env.WOO_PUBLICAR_COMO_BORRADOR !== 'true';
+        if (publicado) {
+            const final = await this.api.actualizarProducto(auth, wooId, { status: 'publish' });
+            if (final?.permalink) permalink = final.permalink;
+            for (const p of familia) {
+                await this.guardarEnlace(p, connectionId, enlaces.get(p.id), { syncStatus: 'published', permalink: permalink as any, lastError: null as any, lastSyncedAt: new Date() });
+            }
+        }
+
+        const variantes = plan.tipo === 'variable' ? ` (${creadas} variantes)` : '';
+        const sinCategoria = 'No se encontró una categoría que encaje: elígela en Synkro o en WordPress (quedó en la categoría por defecto).';
         await this.notifications.notify(userId, {
             type: 'publish',
             severity: 'success',
-            title: `${familia[0].sku} está en WooCommerce como borrador`,
-            body: `Revísalo en WordPress y publícalo allí${plan.tipo === 'variable' ? ` (${creadas} variantes)` : ''}. ${categoria ? `Categoría: ${categoria.categoria.ruta}.` : 'No se encontró una categoría que encaje: elígela en Synkro o en WordPress (quedó en la categoría por defecto).'}`,
+            title: publicado ? `${familia[0].sku} ya está publicado en WooCommerce` : `${familia[0].sku} está en WooCommerce como borrador`,
+            body: `${publicado ? `Ya está a la venta en tu tienda${variantes}.` : `Revísalo en WordPress y publícalo allí${variantes}.`} ${categoria ? `Categoría: ${categoria.categoria.ruta}.` : sinCategoria}`,
             marketplace: MARKETPLACE,
             meta: { productId, connectionId },
         });
-        return { externalId: wooId, creadas, borrador: true };
+        return { externalId: wooId, creadas, publicado };
     }
 
     private datosDeEnlace(p: Product, regular: string, oferta: string, foto: string | undefined, variationId: string | null, wooId: string, permalink: string | null, variacion?: string): Partial<ListingLink> {
@@ -140,7 +155,7 @@ export class WooPublicacionService {
             externalId: wooId,
             variationId,
             permalink: permalink as any,
-            // WooCommerce lo recibe como borrador: en Synkro queda «pausado» hasta que se publique en WordPress (la próxima lectura lo confirma).
+            // Mientras se crea queda «pausado» (borrador en WordPress); al terminar pasa a «publicado», salvo que se pida dejarlo en borrador.
             syncStatus: 'paused',
             lastError: null as any,
             lastPriceSynced: Number(regular),
@@ -163,6 +178,8 @@ export class WooPublicacionService {
         const base = enlace ?? this.listingLinkRepository.create({ marketplace: MARKETPLACE, product: producto, connection: { id: connectionId } as any });
         // Un enlace cerrado que se vuelve a publicar empieza de cero.
         if (base.syncStatus === 'removed') Object.assign(base, { externalId: '', variationId: null, permalink: null });
+        // Un producto que ya está a la venta no pasa a «pausado» mientras se completan sus variaciones.
+        if (base.syncStatus === 'published' && cambios.syncStatus === 'paused') cambios = { ...cambios, syncStatus: 'published' };
         Object.assign(base, cambios);
         return this.listingLinkRepository.save(base);
     }

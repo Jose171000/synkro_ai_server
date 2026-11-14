@@ -5,6 +5,7 @@ import { ListingLink } from './entities/listing-link.entity';
 import { MeliApiService } from './meli/meli-api.service';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { EcommerceSyncService } from './channels/ecommerce-sync.service';
+import { WooApiService } from './woo/woo-api.service';
 import { SyncScope, SyncService } from './sync.service';
 import { detectarDuplicados, elegirDuplicadasAfectables } from './meli/duplicados-meli';
 import { filasDeItemMeli } from './meli/meli-listings';
@@ -37,7 +38,9 @@ const ESTADOS_QUE_ADMITEN: Record<AccionDeCanal, ListingLink['syncStatus'][]> = 
  * Mercado Libre: pausa y reactivación con el estado de la publicación; quitar la cierra (definitivo).
  * Falabella: pausar es dejar el stock en 0 (la ficha sigue ahí, sin poder venderse); reanudar vuelve a enviar el stock
  * real; quitar da de baja la ficha (ProductRemove). Ripley: pausar deja el stock de la oferta en 0, reanudar lo restaura y quitar borra
- * la oferta (el producto sigue en su catálogo). Los demás canales aún no se pueden controlar desde aquí y se avisa.
+ * la oferta (el producto sigue en su catálogo). WooCommerce: pausar oculta el producto (borrador), reanudar lo vuelve a publicar y quitar lo manda a la
+ * papelera de WordPress; si la acción es solo sobre algunas variantes, pausa/reanuda las variaciones (ocultas) o las elimina. Los demás canales aún no se
+ * pueden controlar desde aquí y se avisa.
  */
 @Injectable()
 export class ListingActionsService {
@@ -49,6 +52,7 @@ export class ListingActionsService {
         private readonly meliApi: MeliApiService,
         private readonly falabellaApi: FalabellaApiService,
         @Optional() private readonly ecommerce?: EcommerceSyncService,
+        @Optional() private readonly woo?: WooApiService,
     ) { }
 
     /**
@@ -88,11 +92,15 @@ export class ListingActionsService {
     private async aplicarAEnlaces(enlaces: ListingLink[], accion: AccionDeCanal): Promise<{ results: ResultadoDeCanal[]; message: string }> {
         const resultados: ResultadoDeCanal[] = [];
         let aplicables = 0;
+        const deWoo: ListingLink[] = [];
         for (const enlace of enlaces) {
             if (!ESTADOS_QUE_ADMITEN[accion].includes(this.estadoEfectivo(enlace))) continue;
             aplicables++;
+            // WooCommerce actúa por producto y en lotes: 32 variantes no son 32 llamadas a la tienda.
+            if (enlace.marketplace === 'woocommerce') { deWoo.push(enlace); continue; }
             resultados.push(await this.aplicar(enlace, accion));
         }
+        if (deWoo.length) resultados.push(...await this.aplicarEnWoo(deWoo, accion));
         if (!aplicables) {
             throw new BadRequestException(
                 accion === 'resume' ? 'Ninguna publicación de este producto está pausada.'
@@ -106,7 +114,7 @@ export class ListingActionsService {
         return {
             results: resultados,
             message: bien === resultados.length
-                ? `${verbo} en ${resultados.map(r => this.etiqueta(r)).join(', ')}.`
+                ? `${verbo} en ${[...new Set(resultados.map(r => this.etiqueta(r)))].join(', ')}.`
                 : `${verbo} en ${bien} de ${resultados.length} canales. Revisa el detalle: ${resultados.filter(r => !r.ok).map(r => `${this.etiqueta(r)}: ${r.message}`).join(' — ')}`,
         };
     }
@@ -313,6 +321,80 @@ export class ListingActionsService {
             if (enlace.lastStockSynced === 0) enlace.syncStatus = 'paused';
         }
         await this.listingLinkRepository.save(enlace);
+    }
+
+    // ── WooCommerce ───────────────────────────────────────────────
+
+    /**
+     * Pausar = ocultar el producto de la tienda (borrador); reanudar = volver a publicarlo; quitar = mandarlo a la papelera de WordPress
+     * (se puede restaurar desde allí). Si la acción cubre TODAS las variantes del producto (o es un producto simple) actúa sobre el
+     * producto; si es solo sobre algunas, actúa sobre esas variaciones (pausar/reanudar las oculta/muestra; quitar las elimina).
+     * Los enlaces se agrupan por producto y cuenta: una llamada por producto (o por lote de variaciones), no una por variante.
+     */
+    private async aplicarEnWoo(enlaces: ListingLink[], accion: AccionDeCanal): Promise<ResultadoDeCanal[]> {
+        const resultados: ResultadoDeCanal[] = [];
+        const grupos = new Map<string, ListingLink[]>();
+        for (const e of enlaces) grupos.set(`${e.connection?.id ?? ''}|${e.externalId}`, [...(grupos.get(`${e.connection?.id ?? ''}|${e.externalId}`) ?? []), e]);
+
+        for (const delProducto of grupos.values()) {
+            const muestra = delProducto[0];
+            const base = (e: ListingLink) => ({ linkId: e.id, marketplace: e.marketplace, connectionId: e.connection?.id ?? null, account: e.connection?.label || e.connection?.externalNickname || null });
+            try {
+                if (!muestra.connection) throw new Error('La cuenta del canal está desconectada.');
+                if (!this.woo || !this.ecommerce) throw new Error('WooCommerce no está disponible en este momento.');
+                if (!muestra.externalId) {
+                    // Un envío que no llegó a crear nada en la tienda no tiene qué quitar: solo queda anotado.
+                    if (accion !== 'remove') throw new Error('Este producto todavía no está en WooCommerce.');
+                    for (const e of delProducto) { this.marcar(e, accion); await this.listingLinkRepository.save(e); resultados.push({ ...base(e), ok: true, message: 'Listo' }); }
+                    continue;
+                }
+                const auth = this.ecommerce.authOf(await this.sync.getValidConnectionById(muestra.connection.id));
+
+                // ¿La acción cubre todas las variantes que siguen vivas de ese producto?
+                const hermanos = await this.listingLinkRepository.find({ where: { externalId: muestra.externalId, marketplace: 'woocommerce', connection: { id: muestra.connection.id } } });
+                const vivos = hermanos.filter(h => h.syncStatus !== 'removed');
+                const cubreTodo = vivos.every(h => delProducto.some(d => d.id === h.id));
+                const conVariaciones = delProducto.some(d => !!d.variationId);
+
+                let noExiste: boolean;
+                if (!conVariaciones || cubreTodo) {
+                    noExiste = accion === 'remove'
+                        ? (await this.woo.moverProductoAPapelera(auth, muestra.externalId)).noExiste
+                        : (await this.woo.cambiarEstadoDeProducto(auth, muestra.externalId, accion === 'pause' ? 'draft' : 'publish')).noExiste;
+                } else {
+                    const ids = delProducto.map(d => d.variationId!).filter(Boolean);
+                    noExiste = accion === 'remove'
+                        ? (await this.woo.eliminarVariaciones(auth, muestra.externalId, ids)).noExiste
+                        : (await this.woo.cambiarEstadoDeVariaciones(auth, muestra.externalId, ids, accion === 'pause' ? 'private' : 'publish')).noExiste;
+                }
+                // Si ya no existe en la tienda: quitarlo es lo que se quería; pausar o reanudar no tiene sentido.
+                if (noExiste && accion !== 'remove') throw new Error('Este producto ya no existe en WooCommerce: vuelve a publicarlo desde Synkro.');
+
+                for (const e of delProducto) {
+                    this.marcar(e, accion);
+                    if (accion === 'pause') e.lastStockSynced = 0;
+                    await this.listingLinkRepository.save(e);
+                    resultados.push({ ...base(e), ok: true, message: 'Listo' });
+                }
+                if (accion === 'resume') {
+                    // Mientras estuvo pausado no se enviaron cambios de stock ni precio: se ponen al día (en la cola, no en esta llamada).
+                    const dueno = await this.duenoDeLaCuenta(muestra).catch(() => '');
+                    for (const e of delProducto) {
+                        await this.sync.programarEnvioDeInventario(dueno, e.product.id, 'woocommerce', muestra.connection.id)
+                            .catch((error: any) => this.logger.warn(`Reanudado, pero no se pudo programar el stock de ${e.product.sku}: ${error?.message}`));
+                    }
+                }
+            } catch (error: any) {
+                const detalle = String(error?.response?.message ?? error?.message ?? 'error desconocido').slice(0, 300);
+                this.logger.warn(`No se pudo ${accion} WooCommerce ${muestra.externalId}: ${detalle}`);
+                for (const e of delProducto) {
+                    e.lastError = detalle.slice(0, 500);
+                    await this.listingLinkRepository.save(e);
+                    resultados.push({ ...base(e), ok: false, message: detalle });
+                }
+            }
+        }
+        return resultados;
     }
 
     private async duenoDeLaCuenta(enlace: ListingLink): Promise<string> {

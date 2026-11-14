@@ -3,7 +3,7 @@
  *
  * - Un producto suelto es un producto «simple». Un grupo es UN producto «variable» y cada variante de Synkro es una variación
  *   (con su SKU, precio, stock y foto). Los ejes del grupo (Color, Talla…) pasan a ser atributos de variación.
- * - Siempre se crea como BORRADOR: la persona lo revisa en WordPress y lo publica allí.
+ * - El cuerpo se crea como BORRADOR (oculto): WooPublicacionService lo publica al final, cuando ya tiene variaciones y fotos.
  * - Precio: el normal es `price`; si el producto tiene `webPrice` menor, ese va como precio de oferta.
  */
 

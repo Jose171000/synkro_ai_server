@@ -133,7 +133,7 @@ describe('ListingActionsService', () => {
     });
 
     it('los canales que aún no se controlan desde Synkro se avisan sin tocarlos', async () => {
-        const l = enlace({ marketplace: 'woocommerce' });
+        const l = enlace({ marketplace: 'shopify' });
         const { servicio, meli, fala } = construir([l]);
         const r = await servicio.ejecutar(ambito, 'p1', 'pause');
         expect(r.results[0].ok).toBe(false);
@@ -321,5 +321,121 @@ describe('ListingActionsService · todas las variantes', () => {
         expect(r.results).toHaveLength(2); // la ya pausada se omite
         expect(r.results.filter((x) => x.ok)).toHaveLength(1);
         expect(r.message).toContain('Ripley no respondió');
+    });
+});
+
+describe('ListingActionsService · WooCommerce', () => {
+    /** Un producto de la tienda: id 55; las variantes comparten el producto y cada una tiene su variación. */
+    const woo = (id: string, over: any = {}) => enlace({ id, marketplace: 'woocommerce', externalId: '55', variationId: null, product: { id: 'v-' + id, sku: 'SKU-' + id, stock: 3 }, connection: { id: 'c-woo', label: 'laihome.com.pe', owner: { id: 'u1' } }, ...over });
+    const armar = (enlaces: any[]) => {
+        const base: any = construir(enlaces);
+        base.repo.find = jest.fn(async ({ where }: any) => enlaces.filter((e) => (!where.id || where.id._value?.includes(e.id)) && (!where.externalId || e.externalId === where.externalId)));
+        base.sync.familiaDe = jest.fn(async () => enlaces.map((e) => ({ id: e.product.id })));
+        base.sync.programarEnvioDeInventario = jest.fn(async () => undefined);
+        const ecommerce: any = { authOf: jest.fn(() => ({ site: 'https://t.com', token: 'k' })) };
+        const wooApi: any = {
+            cambiarEstadoDeProducto: jest.fn(async () => ({ noExiste: false })),
+            moverProductoAPapelera: jest.fn(async () => ({ noExiste: false })),
+            cambiarEstadoDeVariaciones: jest.fn(async () => ({ noExiste: false })),
+            eliminarVariaciones: jest.fn(async () => ({ noExiste: false })),
+        };
+        return { servicio: new ListingActionsService(base.repo, base.sync, base.meli, base.fala, ecommerce, wooApi), wooApi, sync: base.sync };
+    };
+    const grupo = () => [woo('a', { variationId: '1' }), woo('b', { variationId: '2' }), woo('c', { variationId: '3' })];
+
+    it('pausar un producto simple lo oculta de la tienda (borrador) y queda pausado por la persona', async () => {
+        const l = woo('s');
+        const { servicio, wooApi } = armar([l]);
+        const r = await servicio.ejecutar(ambito, 'v-s', 'pause');
+        expect(wooApi.cambiarEstadoDeProducto).toHaveBeenCalledWith(expect.anything(), '55', 'draft');
+        expect(l.syncStatus).toBe('paused');
+        expect(l.pausedByUser).toBe(true);
+        expect(l.lastStockSynced).toBe(0);
+        expect(r.results[0].ok).toBe(true);
+    });
+
+    it('pausar TODAS las variantes es una sola llamada al producto, no una por variante', async () => {
+        const ls = grupo();
+        const { servicio, wooApi } = armar(ls);
+        const r = await servicio.ejecutarGrupo(ambito, 'v-a', 'pause');
+        expect(wooApi.cambiarEstadoDeProducto).toHaveBeenCalledTimes(1);
+        expect(wooApi.cambiarEstadoDeProducto).toHaveBeenCalledWith(expect.anything(), '55', 'draft');
+        expect(wooApi.cambiarEstadoDeVariaciones).not.toHaveBeenCalled();
+        expect(ls.every((l) => l.syncStatus === 'paused' && l.pausedByUser)).toBe(true);
+        expect(r.results).toHaveLength(3);
+        expect(r.message).toBe('Pausado en WooCommerce (laihome.com.pe).'); // sin repetir el canal por cada variante
+    });
+
+    it('pausar solo UNA variante oculta esa variación y deja el producto publicado', async () => {
+        const ls = grupo();
+        const { servicio, wooApi } = armar(ls);
+        await servicio.ejecutar(ambito, 'v-a', 'pause', ['a']);
+        expect(wooApi.cambiarEstadoDeVariaciones).toHaveBeenCalledWith(expect.anything(), '55', ['1'], 'private');
+        expect(wooApi.cambiarEstadoDeProducto).not.toHaveBeenCalled();
+        expect(ls[0].syncStatus).toBe('paused');
+        expect(ls[1].syncStatus).toBe('published');
+    });
+
+    it('reanudar vuelve a publicar y programa el stock y el precio actuales (en la cola)', async () => {
+        const ls = [woo('a', { variationId: '1', syncStatus: 'paused', pausedByUser: true }), woo('b', { variationId: '2', syncStatus: 'paused', pausedByUser: true })];
+        const { servicio, wooApi, sync } = armar(ls);
+        await servicio.ejecutarGrupo(ambito, 'v-a', 'resume');
+        expect(wooApi.cambiarEstadoDeProducto).toHaveBeenCalledWith(expect.anything(), '55', 'publish');
+        expect(ls.every((l) => l.syncStatus === 'published' && !l.pausedByUser)).toBe(true);
+        expect(sync.programarEnvioDeInventario).toHaveBeenCalledTimes(2);
+        expect(sync.programarEnvioDeInventario).toHaveBeenCalledWith('u1', 'v-a', 'woocommerce', 'c-woo');
+    });
+
+    it('«reanudar» un producto que quedó como borrador (no pausado por la persona) lo publica', async () => {
+        const l = woo('s', { syncStatus: 'paused', pausedByUser: false });
+        const { servicio, wooApi } = armar([l]);
+        await servicio.ejecutar(ambito, 'v-s', 'resume');
+        expect(wooApi.cambiarEstadoDeProducto).toHaveBeenCalledWith(expect.anything(), '55', 'publish');
+        expect(l.syncStatus).toBe('published');
+    });
+
+    it('quitar todas las variantes manda el producto a la papelera de WordPress (se puede restaurar)', async () => {
+        const ls = grupo();
+        const { servicio, wooApi } = armar(ls);
+        await servicio.ejecutarGrupo(ambito, 'v-a', 'remove');
+        expect(wooApi.moverProductoAPapelera).toHaveBeenCalledTimes(1);
+        expect(wooApi.eliminarVariaciones).not.toHaveBeenCalled();
+        expect(ls.every((l) => l.syncStatus === 'removed')).toBe(true);
+    });
+
+    it('quitar solo una variante elimina esa variación y deja el resto', async () => {
+        const ls = grupo();
+        const { servicio, wooApi } = armar(ls);
+        await servicio.ejecutar(ambito, 'v-b', 'remove', ['b']);
+        expect(wooApi.eliminarVariaciones).toHaveBeenCalledWith(expect.anything(), '55', ['2']);
+        expect(wooApi.moverProductoAPapelera).not.toHaveBeenCalled();
+        expect(ls[1].syncStatus).toBe('removed');
+        expect(ls[0].syncStatus).toBe('published');
+    });
+
+    it('si el producto ya no existe en la tienda, quitarlo basta; pausarlo avisa que hay que volver a publicarlo', async () => {
+        const l1 = woo('s');
+        const a = armar([l1]);
+        a.wooApi.moverProductoAPapelera.mockResolvedValueOnce({ noExiste: true });
+        expect((await a.servicio.ejecutar(ambito, 'v-s', 'remove')).results[0].ok).toBe(true);
+        expect(l1.syncStatus).toBe('removed');
+
+        const l2 = woo('t');
+        const b = armar([l2]);
+        b.wooApi.cambiarEstadoDeProducto.mockResolvedValueOnce({ noExiste: true });
+        const r = await b.servicio.ejecutar(ambito, 'v-t', 'pause');
+        expect(r.results[0].ok).toBe(false);
+        expect(r.results[0].message).toContain('ya no existe en WooCommerce');
+        expect(l2.syncStatus).toBe('published'); // no cambia de estado si no se pudo
+    });
+
+    it('si la tienda falla, no cambia el estado en Synkro y se dice por qué', async () => {
+        const l = woo('s');
+        const { servicio, wooApi } = armar([l]);
+        wooApi.cambiarEstadoDeProducto.mockRejectedValueOnce(new BadRequestException('WooCommerce rechazó las claves'));
+        const r = await servicio.ejecutar(ambito, 'v-s', 'pause');
+        expect(r.results[0]).toMatchObject({ ok: false, message: expect.stringContaining('rechazó las claves') });
+        expect(l.syncStatus).toBe('published');
+        expect(l.lastError).toContain('rechazó las claves');
     });
 });

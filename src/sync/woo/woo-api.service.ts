@@ -104,7 +104,7 @@ export class WooApiService implements ChannelClient {
     }
 
     /** Ejecuta una llamada y convierte cualquier fallo en un mensaje claro. */
-    private async llamar(fn: () => Promise<{ data: any; headers?: any }>): Promise<{ data: any; paginas: number }> {
+    private async llamar(fn: () => Promise<{ data: any; headers?: any }>, opciones: { toleraNoExiste?: boolean } = {}): Promise<{ data: any; paginas: number; noExiste?: boolean }> {
         try {
             const res = await fn();
             if (typeof res.data === 'string') {
@@ -115,6 +115,10 @@ export class WooApiService implements ChannelClient {
             return { data: res.data, paginas: Number.isFinite(paginas) && paginas > 0 ? paginas : 1 };
         } catch (e: any) {
             if (e instanceof HttpException) throw e;
+            // «Ese producto (o variación) ya no existe» no es una tienda mal escrita: se distingue del 404 de «no hay API».
+            if (opciones.toleraNoExiste && e?.response?.status === 404 && /invalid_id|not_found/i.test(String(e?.response?.data?.code ?? ''))) {
+                return { data: null, paginas: 1, noExiste: true };
+            }
             throw new BadRequestException(describirErrorWoo(e));
         }
     }
@@ -206,9 +210,10 @@ export class WooApiService implements ChannelClient {
     }
 
     /** Cambia campos de un producto ya creado (por ejemplo, ponerle las fotos). */
-    async actualizarProducto(auth: ChannelAuth, productoId: string, cuerpo: Record<string, any>): Promise<void> {
+    async actualizarProducto(auth: ChannelAuth, productoId: string, cuerpo: Record<string, any>): Promise<{ permalink: string | null }> {
         const http = this.cliente(auth, WooApiService.ESPERA_CON_FOTOS);
-        await this.llamar(() => http.put(`/products/${productoId}`, cuerpo));
+        const { data } = await this.llamar(() => http.put(`/products/${productoId}`, cuerpo));
+        return { permalink: texto(data?.permalink) };
     }
 
     /** Las variaciones que ya tiene un producto variable (id y SKU). */
@@ -235,6 +240,46 @@ export class WooApiService implements ChannelClient {
             });
         }
         return salida;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Pausar, reanudar y quitar
+    // ─────────────────────────────────────────────────────────────
+
+    /** Cambia el estado de un producto («draft» lo oculta de la tienda, «publish» lo muestra). `noExiste`: ya no está en la tienda. */
+    async cambiarEstadoDeProducto(auth: ChannelAuth, productoId: string, status: 'draft' | 'publish'): Promise<{ noExiste: boolean }> {
+        const http = this.cliente(auth);
+        const r = await this.llamar(() => http.put(`/products/${productoId}`, { status }), { toleraNoExiste: true });
+        return { noExiste: !!r.noExiste };
+    }
+
+    /** Manda un producto a la papelera de WordPress (no se borra: se puede restaurar desde allí). */
+    async moverProductoAPapelera(auth: ChannelAuth, productoId: string): Promise<{ noExiste: boolean }> {
+        const http = this.cliente(auth);
+        const r = await this.llamar(() => http.delete(`/products/${productoId}`, { params: { force: false } }), { toleraNoExiste: true });
+        return { noExiste: !!r.noExiste };
+    }
+
+    /** Oculta («private») o vuelve a mostrar («publish») variaciones concretas de un producto variable, en lotes. */
+    async cambiarEstadoDeVariaciones(auth: ChannelAuth, productoId: string, ids: string[], status: 'private' | 'publish', tamanoDeLote = 50): Promise<{ noExiste: boolean }> {
+        const http = this.cliente(auth);
+        for (let i = 0; i < ids.length; i += tamanoDeLote) {
+            const update = ids.slice(i, i + tamanoDeLote).map(id => ({ id: Number(id), status }));
+            const r = await this.llamar(() => http.post(`/products/${productoId}/variations/batch`, { update }), { toleraNoExiste: true });
+            if (r.noExiste) return { noExiste: true };
+        }
+        return { noExiste: false };
+    }
+
+    /** Elimina variaciones concretas de un producto variable (las variaciones no tienen papelera: es definitivo), en lotes. */
+    async eliminarVariaciones(auth: ChannelAuth, productoId: string, ids: string[], tamanoDeLote = 50): Promise<{ noExiste: boolean }> {
+        const http = this.cliente(auth);
+        for (let i = 0; i < ids.length; i += tamanoDeLote) {
+            const lote = ids.slice(i, i + tamanoDeLote).map(id => Number(id));
+            const r = await this.llamar(() => http.post(`/products/${productoId}/variations/batch`, { delete: lote }), { toleraNoExiste: true });
+            if (r.noExiste) return { noExiste: true };
+        }
+        return { noExiste: false };
     }
 
     /** Todas las categorías de la tienda (id, nombre, categoría padre, cuántos productos tiene). Solo lee. */
