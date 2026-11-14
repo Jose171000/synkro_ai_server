@@ -739,11 +739,11 @@ export class SyncController {
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
     @RequirePermission('canales.publicar')
     @ApiOperation({
-        summary: 'Fija la categoría de WooCommerce de un producto (o de su grupo): la que se indica o, sin categoryId, la que Synkro elige sola',
-        description: 'Si el producto ya está en WooCommerce, también se cambia allí (solo la categoría). Nunca crea categorías.',
+        summary: 'Categoría de WooCommerce de un producto (o de su grupo): fija la que se indica, vuelve a elegir sola (reelegir) o, sin nada de eso, devuelve la elegida (eligiéndola sola si aún no hay)',
+        description: 'Fijar o reelegir también cambia la categoría en WooCommerce si el producto ya está allí (solo la categoría). Nunca crea categorías.',
     })
     setWooCategory(@Param('id') id: string, @Body() dto: WooCategoriaDto, @Req() req) {
-        return this.wooCategorias.fijar(scopeOf(req), id, dto.connectionId, dto.categoryId);
+        return this.wooCategorias.fijar(scopeOf(req), id, dto.connectionId, dto.categoryId, dto.reelegir === true);
     }
 
     @Post('listings/resend-stock')

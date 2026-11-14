@@ -13,13 +13,14 @@ import { fechaDeFalabella } from './falabella/falabella-product-xml';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
 import { origenDeAtributo, origenesGenerales, quitarEstimado, quitarMarcaIA, CampoGeneral } from './origen-de-datos';
+import { CLAVE_CATEGORIAS_WOO } from './woo/woo-categorias';
 import { ATRIBUTOS_DE_SISTEMA, atributosObligatoriosAprendidos, claveDeAtributo, esAtributoDeSistema } from './falabella/falabella-fields';
 
 const ATRIBUTOS_YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
 const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
-/** Ripley solo se MUESTRA en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
-const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley'];
+/** Ripley y WooCommerce solo se MUESTRAN en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
+const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley', 'woocommerce'];
 
 export interface SheetChannel {
     /** La publicación (para pausarla, reanudarla o quitarla) y si la pausó la persona (no es lo mismo que «sin stock»). */
@@ -100,7 +101,7 @@ export class ProductSheetService {
         for (const enlace of enlaces) {
             const cuenta = enlace.connection;
             if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_QUE_SE_MUESTRAN.includes(enlace.marketplace)) continue;
-            if (enlace.marketplace !== 'ripley') precios.push(this.preciosDeEnlace(product, enlace, cuenta));
+            if (enlace.marketplace !== 'ripley' && enlace.marketplace !== 'woocommerce') precios.push(this.preciosDeEnlace(product, enlace, cuenta));
             const numero = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
             sincronizacion.push({
                 listingId: enlace.id,
@@ -126,7 +127,9 @@ export class ProductSheetService {
                     ? await this.hojaFalabella(base, product, attrs, cuenta)
                     : enlace.marketplace === 'ripley'
                         ? await this.hojaRipley(base, product, attrs, enlace)
-                        : this.hojaMeli(base, product, attrs),
+                        : enlace.marketplace === 'woocommerce'
+                            ? this.hojaWoo(base, attrs, cuenta)
+                            : this.hojaMeli(base, product, attrs),
             );
         }
 
@@ -265,6 +268,21 @@ export class ProductSheetService {
             },
             listo: !!(datos.name && categoriaId),
             motivo: !categoriaId ? 'Falta elegir la categoría de Ripley (Publicar → Preparar para Ripley).' : undefined,
+        };
+    }
+
+    /** WooCommerce: lo que se ve en la ficha es en qué categoría de la tienda quedó y si sigue como borrador en WordPress. */
+    private hojaWoo(base: Omit<SheetChannel, 'sent' | 'listo' | 'motivo'>, attrs: Record<string, any>, cuenta: MarketplaceConnection): SheetChannel {
+        const categoria = (attrs[CLAVE_CATEGORIAS_WOO] ?? {})[cuenta.id];
+        return {
+            ...base,
+            sent: {
+                categoryId: categoria?.id ?? null,
+                categoryPath: categoria?.ruta ?? null,
+                categoryOrigin: categoria?.origen ?? null,
+                borrador: base.status === 'paused' && !base.pausedByUser,
+            },
+            listo: true,
         };
     }
 

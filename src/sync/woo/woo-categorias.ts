@@ -3,6 +3,9 @@
  * Funciones puras, sin red. Primero se busca por texto; si no hay una respuesta clara, decide la IA (solo entre esta lista).
  */
 
+/** Dónde se guarda la categoría elegida de cada tienda: aiAttributes._wooCategorias[idDeLaCuenta] = { id, ruta, origen }. */
+export const CLAVE_CATEGORIAS_WOO = '_wooCategorias';
+
 export interface CategoriaWoo {
     id: number;
     name: string;

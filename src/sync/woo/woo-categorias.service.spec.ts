@@ -77,9 +77,19 @@ describe('WooCategoriasService', () => {
         expect(api.actualizarProducto).not.toHaveBeenCalled();
     });
 
-    it('fijar sin categoría vuelve a elegir sola, ignorando la guardada', async () => {
-        const { servicio, sync } = armar();
+    it('reelegir vuelve a elegir sola, ignorando la guardada, y corrige también la de WooCommerce', async () => {
+        const { servicio, sync, api } = armar({ enlaces: [{ externalId: '31778' }] });
         sync.familiaDe.mockResolvedValue([producto({ aiAttributes: { _wooCategorias: { c1: { id: 6, origen: 'texto' } } } })]);
-        expect((await servicio.fijar({ userId: 'u', storeId: 's' } as any, 'p1', undefined))?.categoria.id).toBe(4);
+        const r = await servicio.fijar({ userId: 'u', storeId: 's' } as any, 'p1', undefined, undefined, true);
+        expect(r.categoria.id).toBe(4);
+        expect(api.actualizarProducto).toHaveBeenCalledWith(expect.anything(), '31778', { categories: [{ id: 4 }] });
+    });
+
+    it('sin categoryId ni reelegir devuelve la ya elegida y NO toca WooCommerce', async () => {
+        const { servicio, sync, api } = armar({ enlaces: [{ externalId: '31778' }] });
+        sync.familiaDe.mockResolvedValue([producto({ aiAttributes: { _wooCategorias: { c1: { id: 6, origen: 'manual' } } } })]);
+        const r = await servicio.fijar({ userId: 'u', storeId: 's' } as any, 'p1', undefined);
+        expect(r).toMatchObject({ origen: 'manual', categoria: { id: 6 }, actualizadosEnWoo: 0 });
+        expect(api.actualizarProducto).not.toHaveBeenCalled();
     });
 });

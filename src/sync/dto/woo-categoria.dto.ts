@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 
 export class WooCategoriaDto {
     @ApiProperty({ required: false, description: 'Tienda WooCommerce. Obligatoria si la tienda de Synkro tiene varias.' })
@@ -12,4 +12,9 @@ export class WooCategoriaDto {
     @IsInt()
     @Min(1)
     categoryId?: number;
+
+    @ApiProperty({ required: false, description: 'true: vuelve a elegir sola aunque ya haya una elegida (también una fijada a mano). Sin él, se reutiliza la elegida.' })
+    @IsOptional()
+    @IsBoolean()
+    reelegir?: boolean;
 }

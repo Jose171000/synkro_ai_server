@@ -6,10 +6,7 @@ import { ListingLink } from '../entities/listing-link.entity';
 import { SyncScope, SyncService } from '../sync.service';
 import { EcommerceSyncService } from '../channels/ecommerce-sync.service';
 import { WooApiService } from './woo-api.service';
-import { candidatasParaIA, categoriaPorId, CategoriaConRuta, elegirPorTexto, OrigenDeCategoria, rutasDeCategorias } from './woo-categorias';
-
-/** Dónde se guarda la categoría elegida de cada tienda: aiAttributes._wooCategorias[idDeLaCuenta] = { id, ruta, origen }. */
-export const CLAVE_CATEGORIAS_WOO = '_wooCategorias';
+import { CLAVE_CATEGORIAS_WOO, candidatasParaIA, categoriaPorId, CategoriaConRuta, elegirPorTexto, OrigenDeCategoria, rutasDeCategorias } from './woo-categorias';
 
 const MINUTOS_EN_MEMORIA = 10;
 /** Hasta esta cantidad de categorías se le manda toda la lista a la IA; con más, solo las más parecidas al producto. */
@@ -105,10 +102,11 @@ export class WooCategoriasService {
     }
 
     /**
-     * Fija la categoría de un producto (o de su grupo) en Synkro: la que se indica o, sin `categoryId`, la que Synkro elige sola de nuevo.
+     * Categoría de un producto (o de su grupo): fija la que se indica, vuelve a elegir sola (`reelegir`) o, sin ninguna de las dos, devuelve la
+     * ya elegida (eligiéndola sola si todavía no hay).
      * Si el producto ya está en WooCommerce, también se cambia allí (solo la categoría: nada más se toca).
      */
-    async fijar(scope: SyncScope, productId: string, connectionId: string | undefined, categoryId?: number) {
+    async fijar(scope: SyncScope, productId: string, connectionId: string | undefined, categoryId?: number, reelegir = false) {
         const conexion = await this.sync.resolveConnection(scope.storeId, 'woocommerce', connectionId);
         const familia = await this.sync.familiaDe(scope, productId);
         const lista = await this.listar(conexion.id, true);
@@ -120,11 +118,13 @@ export class WooCategoriasService {
             elegida = { categoria: c, origen: 'manual' };
             await this.guardar(familia, conexion.id, elegida);
         } else {
-            elegida = await this.elegir(familia, conexion.id, { ignorarGuardada: true });
+            elegida = await this.elegir(familia, conexion.id, { ignorarGuardada: reelegir });
             if (!elegida) throw new BadRequestException('Ninguna categoría de la tienda encaja con este producto: elígela a mano.');
         }
 
-        const enlaces = await this.listingLinkRepository.find({
+        // Solo cuando la categoría cambia (a mano o al volver a elegir) se toca WooCommerce; consultar la elegida no escribe nada.
+        const cambia = !!categoryId || reelegir;
+        const enlaces = !cambia ? [] : await this.listingLinkRepository.find({
             where: { marketplace: 'woocommerce', connection: { id: conexion.id }, product: { id: In(familia.map((p) => p.id)) } },
         });
         const idsEnWoo = [...new Set(enlaces.map((e) => e.externalId).filter(Boolean))];

@@ -28,6 +28,8 @@ export const nombreDeCanal = (marketplace: string): string => NOMBRES[marketplac
 const ESTADOS: Record<string, string> = { published: 'Publicado', pending: 'En proceso', paused: 'Pausado', error: 'Error', removed: 'Retirado' };
 
 export function estadoDeCanal(enlace: EnlaceParaMostrar): string {
+    // WooCommerce recibe los productos como borrador: «pausado» sin que lo haya pedido la persona significa que falta publicarlo en WordPress.
+    if (enlace.marketplace === 'woocommerce' && enlace.syncStatus === 'paused' && !enlace.pausedByUser) return 'Borrador';
     // Una ficha de Falabella pausada con stock 0 puede figurar «publicada» en el canal: manda lo que decidió el usuario.
     if (enlace.pausedByUser && enlace.syncStatus === 'published') return ESTADOS.paused;
     return ESTADOS[enlace.syncStatus] ?? enlace.syncStatus;

@@ -5,6 +5,7 @@ import { Product } from '../products/entities/product.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { FalabellaApiService } from './falabella/falabella-api.service';
 import { SyncScope, SyncService } from './sync.service';
+import { CLAVE_CATEGORIAS_WOO } from './woo/woo-categorias';
 import { categoriasAsignadas, datosQueFaltan, estadoDeCanal, nombreDeCanal } from '../products/completitud';
 
 export interface ResumenDeProducto {
@@ -12,6 +13,7 @@ export interface ResumenDeProducto {
         falabella: { id: string; path: string | null } | null;
         mercadolibre: { id: string } | null;
         ripley: { id: string; path: string | null } | null;
+        woocommerce: { id: string; path: string | null } | null;
         internal: string | null;
     };
     channels: {
@@ -50,6 +52,12 @@ export class ProductOverviewService {
         private readonly sync: SyncService,
         private readonly falabellaApi: FalabellaApiService,
     ) { }
+
+    /** La categoría de WooCommerce que Synkro eligió para el producto (de la primera tienda que la tenga). */
+    private categoriaWoo(p: Product): { id: string; path: string | null } | null {
+        const elegida = Object.values(((p.aiAttributes as any)?.[CLAVE_CATEGORIAS_WOO] ?? {}) as Record<string, { id?: number; ruta?: string }>).find((c) => c?.id);
+        return elegida ? { id: String(elegida.id), path: elegida.ruta ?? null } : null;
+    }
 
     async obtener(scope: SyncScope, ids: string[]): Promise<Record<string, ResumenDeProducto>> {
         const unicos = [...new Set(ids.filter(Boolean))].slice(0, MAX_PRODUCTOS_POR_CONSULTA);
@@ -99,6 +107,7 @@ export class ProductOverviewService {
                     ripley: String((p.marketplaceIds as any)?.ripley_category_id ?? '').trim()
                         ? { id: String((p.marketplaceIds as any).ripley_category_id).trim(), path: String((p.marketplaceIds as any)?.ripley_category_path ?? '').trim() || null }
                         : null,
+                    woocommerce: this.categoriaWoo(p),
                     internal: cats.interna,
                 },
                 channels: links

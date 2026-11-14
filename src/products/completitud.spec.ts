@@ -27,5 +27,9 @@ describe('completitud de un producto', () => {
         expect(estadoDeCanal({ marketplace: 'falabella', syncStatus: 'published' })).toBe('Publicado');
         expect(estadoDeCanal({ marketplace: 'mercadolibre', syncStatus: 'pending' })).toBe('En proceso');
         expect(estadoDeCanal({ marketplace: 'mercadolibre', syncStatus: 'error' })).toBe('Error');
+        // WooCommerce recibe los productos como borrador: «pausado» sin que lo pida la persona es «Borrador».
+        expect(estadoDeCanal({ marketplace: 'woocommerce', syncStatus: 'paused' })).toBe('Borrador');
+        expect(estadoDeCanal({ marketplace: 'woocommerce', syncStatus: 'paused', pausedByUser: true })).toBe('Pausado');
+        expect(estadoDeCanal({ marketplace: 'woocommerce', syncStatus: 'published' })).toBe('Publicado');
     });
 });
