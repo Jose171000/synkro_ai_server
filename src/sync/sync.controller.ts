@@ -704,6 +704,19 @@ export class SyncController {
         return this.syncService.publishBatchToFalabella(scopeOf(req), dto.connectionId, dto.productIds);
     }
 
+    @Post('falabella/resend-images')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Vuelve a mandar a Falabella las fotos de fichas que ya existen allí',
+        description: 'Para fichas rechazadas por «Images Missing». No cambia el estado en Synkro ni vuelve a crear la ficha. Devuelve cuántos se enviaron y cuáles se omitieron y por qué.',
+    })
+    resendFalabellaImages(@Body() dto: PublishFalabellaDto, @Req() req) {
+        return this.syncService.reenviarFotosAFalabella(scopeOf(req), dto.connectionId, dto.productIds);
+    }
+
     @Post('listings/resend-stock')
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()

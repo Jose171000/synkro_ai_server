@@ -2481,6 +2481,35 @@ export class SyncService implements OnModuleInit {
         }
     }
 
+    /**
+     * Vuelve a mandar a Falabella las fotos de fichas que ya existen allí (p. ej. rechazadas por «Images Missing»), sin tocar su estado
+     * en Synkro. Solo envía los productos de la tienda con enlace a esa cuenta y con fotos; el resto se devuelve con su motivo.
+     */
+    async reenviarFotosAFalabella(scope: SyncScope, connectionId: string | undefined, productIds: string[]) {
+        if (!productIds?.length) throw new BadRequestException('Selecciona al menos un producto.');
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const credentials = this.credentialsOf(connection);
+        const productos = await this.productRepository.find({ where: { id: In(productIds), store: { id: scope.storeId } } as any });
+        const enlaces = new Set(
+            (await this.listingLinkRepository.find({
+                where: { marketplace: 'falabella', connection: { id: connection.id }, product: { id: In(productos.map(p => p.id)) } },
+                relations: { product: true },
+            })).map(l => l.product.id),
+        );
+        const omitidos: { sku: string; motivo: string }[] = [];
+        const paraEnviar: Product[] = [];
+        for (const p of productos) {
+            if (!enlaces.has(p.id)) omitidos.push({ sku: p.sku, motivo: 'no está enlazado a esta cuenta de Falabella' });
+            else if (!(p.images ?? []).some(i => i?.url)) omitidos.push({ sku: p.sku, motivo: 'no tiene fotos en Synkro' });
+            else paraEnviar.push(p);
+        }
+        // Un envío por cada 100 productos: así un lote grande no se rechaza entero por tamaño.
+        for (let i = 0; i < paraEnviar.length; i += 100) {
+            await this.enviarImagenesAFalabella(connection.id, credentials, scope.userId, paraEnviar.slice(i, i + 100));
+        }
+        return { enviados: paraEnviar.length, omitidos };
+    }
+
     /** El producto ya existe en Falabella (se subió a mano o en un envío anterior): se vincula como publicado. */
     private async vincularComoPublicado(connectionId: string, product: Product): Promise<void> {
         let link = await this.listingLinkRepository.findOne({
