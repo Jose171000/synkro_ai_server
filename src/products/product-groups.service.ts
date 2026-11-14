@@ -8,7 +8,7 @@ import { EjeDeVariacion, ProductGroup } from './entities/product-group.entity';
 import { ProductsService } from './products.service';
 import { AiService } from '../ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
-import { atributosConVariante, tituloDeVariante } from './titulos-de-variante';
+import { atributosConVariante, atributosConVarianteEnCanales, tituloDeVariante } from './titulos-de-variante';
 import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/product-vision.service';
 import { fotosParaIA } from './fotos-para-ia';
 import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
@@ -170,7 +170,7 @@ export class ProductGroupsService {
                 variante.marketplaceIds = { ...(molde.marketplaceIds ?? {}) };
                 // Cada variante lleva sus propios valores como atributos (Color: Rojo, Talla: M) y lo común del grupo.
                 // Los atributos de color y talla que la IA dedujo para el grupo (p. ej. «Multicolor», «38») no valen para una variante: mandan los suyos.
-                variante.aiAttributes = atributosConVariante({ ...(molde.aiAttributes ?? {}), ...(variante.variantValues ?? {}) }, variante.variantValues);
+                variante.aiAttributes = atributosConVarianteEnCanales({ ...(molde.aiAttributes ?? {}), ...(variante.variantValues ?? {}) }, variante.variantValues);
                 if (molde.packageWidth != null) {
                     variante.packageWidth = molde.packageWidth; variante.packageLength = molde.packageLength;
                     variante.packageHeight = molde.packageHeight; variante.packageWeight = molde.packageWeight;
@@ -226,7 +226,7 @@ export class ProductGroupsService {
             if (molde.aiKeywords) v.aiKeywords = molde.aiKeywords;
             // Una categoría que la variante ya tenía no se cambia; si otra variante del grupo ya la tenía, se completa en las que no.
             v.marketplaceIds = fusionarCategorias((v.marketplaceIds as any) || {}, molde.marketplaceIds ?? {}) as any;
-            v.aiAttributes = atributosConVariante(
+            v.aiAttributes = atributosConVarianteEnCanales(
                 atributosTrasRegenerar(v.aiAttributes as any, delGrupo, { htmlDescription: (contenido as any)?.htmlDescription, vision: (contenido as any)?.vision }, fotos) as any,
                 v.variantValues,
             ) as any;
@@ -281,7 +281,7 @@ export class ProductGroupsService {
         let corregidas = 0;
         for (const v of variantes) {
             const antes = (v.aiAttributes ?? {}) as Record<string, any>;
-            const despues = atributosConVariante(antes, v.variantValues);
+            const despues = atributosConVarianteEnCanales(antes, v.variantValues);
             if (JSON.stringify(antes) === JSON.stringify(despues)) continue;
             v.aiAttributes = despues as any;
             await this.productRepository.save(v);

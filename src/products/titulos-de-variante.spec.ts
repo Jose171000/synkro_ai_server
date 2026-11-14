@@ -1,4 +1,4 @@
-import { atributosConVariante, nombreDeFamilia, recortarEnPalabra, sinValoresAlFinal, tituloDeVariante, sinOpcionesDeVariantes } from './titulos-de-variante';
+import { atributosConVarianteEnCanales, atributosConVariante, nombreDeFamilia, recortarEnPalabra, sinValoresAlFinal, tituloDeVariante, sinOpcionesDeVariantes } from './titulos-de-variante';
 
 describe('títulos de variante', () => {
     const base = 'Perchero Elegante Multifuncional Kasari Metal Negro Azul';
@@ -94,5 +94,20 @@ describe('sinOpcionesDeVariantes', () => {
 
     it('si quitaría todo el texto, lo deja como estaba', () => {
         expect(sinOpcionesDeVariantes('EN ROJO', colores)).toBe('EN ROJO');
+    });
+});
+
+describe('atributosConVarianteEnCanales', () => {
+    it('corrige también el color de los atributos de Mercado Libre con el de la variante', () => {
+        const molde = { color: 'Beige', brand: 'Royal', mercadolibre_attributes: { COLOR: 'Beige', MAIN_COLOR: 'Beige', MATERIAL: 'Algodón' } };
+        const r = atributosConVarianteEnCanales(molde, { Color: 'Blanco' });
+        expect(r.color).toBe('Blanco');
+        expect(r.mercadolibre_attributes).toEqual({ COLOR: 'Blanco', MAIN_COLOR: 'Blanco', MATERIAL: 'Algodón' });
+        expect(r.brand).toBe('Royal');
+        expect(molde.mercadolibre_attributes.COLOR).toBe('Beige'); // no modifica el original
+    });
+
+    it('sin bloque de Mercado Libre se comporta como atributosConVariante', () => {
+        expect(atributosConVarianteEnCanales({ color: 'Beige' }, { Color: 'Negro' })).toEqual({ color: 'Negro' });
     });
 });

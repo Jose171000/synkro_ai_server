@@ -77,6 +77,17 @@ export function atributosConVariante(atributos: Record<string, any>, valores?: R
     return salida;
 }
 
+/**
+ * Igual que atributosConVariante, y además lo aplica al bloque de atributos de Mercado Libre (mercadolibre_attributes), donde el
+ * color y la talla de la variante también deben ser los suyos y no los del molde del grupo.
+ */
+export function atributosConVarianteEnCanales(atributos: Record<string, any>, valores?: Record<string, string> | null): Record<string, any> {
+    const salida = atributosConVariante(atributos, valores);
+    const meli = salida.mercadolibre_attributes;
+    if (meli && typeof meli === 'object' && !Array.isArray(meli)) salida.mercadolibre_attributes = atributosConVariante(meli, valores);
+    return salida;
+}
+
 const PALABRAS_SUELTAS = new Set(['disponible', 'disponibles', 'en', 'y', 'e', 'o', 'con', 'de', 'en colores']);
 const aLaxo = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+').replace(/[aáàä]/gi, '[aáàä]').replace(/[eéèë]/gi, '[eéèë]').replace(/[ií]/gi, '[ií]').replace(/[oóòö]/gi, '[oóòö]').replace(/[uúü]/gi, '[uúü]').replace(/[nñ]/gi, '[nñ]');
 
