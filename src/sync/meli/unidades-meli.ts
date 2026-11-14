@@ -32,3 +32,13 @@ export function medidasQueFaltan(
     }
     return nuevos;
 }
+
+const MEDIDA_CON_UNIDAD = /^\d+([.,]\d+)?\s*(cm|mm|m|in|"|ft|yd|km|mil|pulgadas|µm|nm)$/i;
+
+/**
+ * Una medida (alto, ancho, largo, profundidad) que no es «número + unidad» («1.5 plazas» en «Ancho máximo del colchón»)
+ * hace que Mercado Libre rechace la publicación entera: ese dato se omite en vez de enviarlo mal.
+ */
+export function medidaInvalidaMeli(id: string, valor: string): boolean {
+    return MEDIDA_EN_CM.test(String(id)) && !MEDIDA_CON_UNIDAD.test(conUnidadMeli(id, valor));
+}

@@ -5,7 +5,7 @@ import { planearGruposDeMeli } from './meli/variantes-meli';
 import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './ripley/ripley-oferta';
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
-import { conUnidadMeli } from './meli/unidades-meli';
+import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
@@ -1585,7 +1585,7 @@ export class SyncService implements OnModuleInit {
             // El SKU viaja en la publicación, como dato del producto.
             { id: 'SELLER_SKU', value_name: product.sku },
             ...Object.entries(delCanal)
-                .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && valor !== null && valor !== undefined && String(valor).trim() !== '')
+                .filter(([id, valor]) => id !== 'BRAND' && id !== 'MODEL' && id !== 'SELLER_SKU' && !medidaInvalidaMeli(id, String(valor ?? '')) && valor !== null && valor !== undefined && String(valor).trim() !== '')
                 .map(([id, valor]) => ({ id, value_name: conUnidadMeli(id, String(valor)) })),
         ];
     }

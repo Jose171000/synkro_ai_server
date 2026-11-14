@@ -1,4 +1,4 @@
-import { conUnidadMeli, medidasQueFaltan } from './unidades-meli';
+import { conUnidadMeli, medidaInvalidaMeli, medidasQueFaltan } from './unidades-meli';
 
 describe('unidades de las medidas de Mercado Libre', () => {
     it('un número suelto en alto, ancho, largo o profundidad se envía en cm', () => {
@@ -27,5 +27,12 @@ describe('unidades de las medidas de Mercado Libre', () => {
 
     it('sin medidas del paquete no inventa nada', () => {
         expect(medidasQueFaltan({}, [{ name: 'DEPTH', isRequired: true }], null)).toEqual({});
+    });
+
+    it('una medida que no es número con unidad («1.5 plazas») se omite; las válidas pasan', () => {
+        expect(medidaInvalidaMeli('MAX_MATTRESS_WIDTH', '1.5 plazas')).toBe(true);
+        expect(medidaInvalidaMeli('MAX_MATTRESS_WIDTH', '150 cm')).toBe(false);
+        expect(medidaInvalidaMeli('MAX_MATTRESS_WIDTH', '150')).toBe(false);
+        expect(medidaInvalidaMeli('COLOR', '1.5 plazas')).toBe(false);
     });
 });
