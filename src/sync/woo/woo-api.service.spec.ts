@@ -233,13 +233,17 @@ describe('WooApiService', () => {
             expect(r[11]).toEqual({ id: '111', error: null });
         });
 
-        it('reutiliza las categorías que ya existen en cada nivel y crea las que faltan', async () => {
-            http.get.mockImplementation(async (_u: string, { params }: any) =>
-                ok(String(params.search).toLowerCase() === 'hogar' && params.parent === 0 ? [{ id: 5, name: 'Hogar' }, { id: 6, name: 'Hogar y jardín' }] : []));
-            http.post.mockResolvedValue(ok({ id: 9 }));
-            expect(await servicio.asegurarCategorias(auth, ['hogar', 'Cama'])).toEqual([5, 9]);
-            expect(http.post).toHaveBeenCalledTimes(1);
-            expect(http.post).toHaveBeenCalledWith('/products/categories', { name: 'Cama', parent: 5 });
+        it('lee todas las categorías de la tienda por páginas, sin crear ninguna', async () => {
+            http.get.mockImplementation(async (_u: string, { params }: any) => ({
+                data: params.page === 1 ? [{ id: 5, name: 'Hogar', parent: 0, count: 12, slug: 'hogar' }] : [{ id: 6, name: 'Cama', parent: '5', count: '3', slug: 'cama' }, { name: 'sin id' }],
+                headers: { 'x-wp-totalpages': '2' },
+            }));
+            expect(await servicio.listarCategorias(auth)).toEqual([
+                { id: 5, name: 'Hogar', parent: 0, count: 12, slug: 'hogar' },
+                { id: 6, name: 'Cama', parent: 5, count: 3, slug: 'cama' },
+            ]);
+            expect(http.get).toHaveBeenCalledTimes(2);
+            expect(http.post).not.toHaveBeenCalled();
         });
 
         it('traduce los errores de la tienda al crear', async () => {

@@ -724,6 +724,8 @@ export class SyncService implements OnModuleInit {
     proponerEjesConIA?: ProponerEjesConIA;
     /** Lo registra el módulo de IA: sugiere el color de cada oferta de una familia de Ripley mirando sus fotos. */
     coloresConIA?: (familias: import('../ai/product-vision.service').FamiliaParaColores[]) => Promise<import('../ai/product-vision.service').ColoresDeFamilia[]>;
+    /** Lo registra el módulo de IA: elige la categoría de WooCommerce entre las de la tienda (nombre + descripción + foto). */
+    categoriaWooConIA?: (entrada: { producto: string; descripcion?: string | null; imagen?: string | null; categorias: { id: number; ruta: string }[] }) => Promise<{ id: number | null; motivo: string }>;
 
     async importFalabellaListings(
         scope: SyncScope,

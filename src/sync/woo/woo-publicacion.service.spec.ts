@@ -19,7 +19,6 @@ function armar(opciones: { familia: any[]; enlaces?: any[]; variacionesExistente
         save: jest.fn(async (x: any) => { enlacesGuardados.set(x.product.id, x); return x; }),
     };
     const api: any = {
-        asegurarCategorias: jest.fn(async () => [7]),
         crearProducto: jest.fn(async () => ({ id: '900', permalink: 'https://t.com/?p=900' })),
         actualizarProducto: jest.fn(async () => undefined),
         variacionesDe: jest.fn(async () => opciones.variacionesExistentes ?? []),
@@ -28,8 +27,9 @@ function armar(opciones: { familia: any[]; enlaces?: any[]; variacionesExistente
     const sync: any = { getValidConnectionById: jest.fn(async () => ({ id: 'c1' })) };
     const ecommerce: any = { authOf: jest.fn(() => ({ site: 'https://t.com', token: 'k', secret: 's' })) };
     const notificaciones: any = { notify: jest.fn(async () => undefined) };
-    const servicio = new WooPublicacionService(productos, enlaces, api, sync, ecommerce, notificaciones);
-    return { servicio, api, enlacesGuardados, notificaciones };
+    const categorias: any = { elegir: jest.fn(async () => ({ categoria: { id: 7, nombre: 'Sábanas', ruta: 'Hogar › Sábanas' }, origen: 'texto' })) };
+    const servicio = new WooPublicacionService(productos, enlaces, api, sync, ecommerce, categorias, notificaciones);
+    return { servicio, api, enlacesGuardados, notificaciones, categorias };
 }
 
 describe('WooPublicacionService', () => {
@@ -86,10 +86,19 @@ describe('WooPublicacionService', () => {
         expect(api.crearProducto).not.toHaveBeenCalled();
     });
 
-    it('si no se pueden preparar las categorías, el producto se crea igual', async () => {
-        const { servicio, api } = armar({ familia: [variante(1, 'Rojo', { group: null, variantValues: null, category: 'Hogar' })] });
-        api.asegurarCategorias.mockRejectedValueOnce(new Error('sin permiso'));
+    it('la categoría elegida entre las de la tienda va en el producto y en el aviso', async () => {
+        const { servicio, api, notificaciones, categorias } = armar({ familia: [variante(1, 'Rojo', { group: null, variantValues: null })] });
+        await servicio.publish('p1', 'u1', 'c1');
+        expect(categorias.elegir).toHaveBeenCalledWith(expect.any(Array), 'c1');
+        expect(api.crearProducto.mock.calls[0][1].categories).toEqual([{ id: 7 }]);
+        expect(notificaciones.notify.mock.calls[0][1].body).toContain('Categoría: Hogar › Sábanas');
+    });
+
+    it('si ninguna categoría de la tienda encaja (o falla), el producto se crea igual y se avisa', async () => {
+        const { servicio, api, notificaciones, categorias } = armar({ familia: [variante(1, 'Rojo', { group: null, variantValues: null })] });
+        categorias.elegir.mockRejectedValueOnce(new Error('sin permiso'));
         await servicio.publish('p1', 'u1', 'c1');
         expect(api.crearProducto.mock.calls[0][1].categories).toBeUndefined();
+        expect(notificaciones.notify.mock.calls[0][1].body).toContain('No se encontró una categoría');
     });
 });

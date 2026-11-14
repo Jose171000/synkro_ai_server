@@ -322,6 +322,45 @@ Reglas estrictas:
         }
     }
 
+    /**
+     * Elige la categoría de una tienda (WooCommerce) entre las que ya tiene, mirando el nombre, la descripción y la foto principal.
+     * Solo puede devolver el id de una categoría de la lista; si ninguna encaja, null.
+     */
+    async elegirCategoriaDeLista(entrada: { producto: string; descripcion?: string | null; imagen?: string | null; categorias: { id: number; ruta: string }[] }): Promise<{ id: number | null; motivo: string }> {
+        if (!entrada.categorias.length) return { id: null, motivo: '' };
+        const imagen = /^https?:\/\//i.test(entrada.imagen ?? '') ? String(entrada.imagen) : null;
+        try {
+            const respuesta = await this.openai.chat.completions.create({
+                model: process.env.VISION_MODEL || 'gpt-4o-mini',
+                response_format: { type: 'json_object' },
+                temperature: 0,
+                messages: [
+                    { role: 'system', content: `Eres un experto en catálogos de tiendas online. Debes elegir en qué categoría de una tienda WooCommerce va un producto.
+Reglas estrictas:
+- Solo puedes elegir UNA categoría de la lista dada y debes devolver su "id" tal cual.
+- Elige la más específica que describa lo que ES el producto (su tipo), usando el nombre, la descripción y la foto. No te dejes llevar por el color, la marca ni el estampado.
+- Si ninguna categoría de la lista representa razonablemente el producto, devuelve null. Nunca inventes una.
+- "motivo": una frase corta en español.
+- Responde únicamente con un JSON válido: { "id": número o null, "motivo": "…" }` },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: `Categorías de la tienda (id · ruta): ${JSON.stringify(entrada.categorias.map((c) => `${c.id} · ${c.ruta}`))}\n\nProducto: ${entrada.producto}\nDescripción: ${String(entrada.descripcion ?? '').slice(0, 500)}` },
+                            ...(imagen ? [{ type: 'image_url' as const, image_url: { url: imagen, detail: 'low' as const } }] : []),
+                        ],
+                    },
+                ],
+            });
+            const crudo = JSON.parse(respuesta.choices[0]?.message?.content || '{}');
+            const id = Number(crudo?.id);
+            const valida = Number.isFinite(id) && entrada.categorias.some((c) => c.id === id);
+            return { id: valida ? id : null, motivo: typeof crudo?.motivo === 'string' ? crudo.motivo.slice(0, 160) : '' };
+        } catch (error: any) {
+            this.logger.warn(`No se pudo elegir la categoría de WooCommerce con IA: ${error?.message}`);
+            return { id: null, motivo: '' };
+        }
+    }
+
     async analyze(imageUrls: string[], hint?: { name?: string; description?: string }): Promise<ProductVision | null> {
         const urls = (imageUrls ?? []).filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_IMAGES);
         if (!urls.length) return null;

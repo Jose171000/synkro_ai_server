@@ -1,4 +1,4 @@
-import { descripcionParaWoo, fotosHttps, pesoYMedidas, planificarWoo, PlanInvalido, preciosDe, ProductoParaWoo, rutaDeCategoria } from './woo-plan';
+import { descripcionParaWoo, fotosHttps, pesoYMedidas, planificarWoo, PlanInvalido, preciosDe, ProductoParaWoo } from './woo-plan';
 
 const producto = (sobre: Partial<ProductoParaWoo> = {}): ProductoParaWoo => ({
     id: 'p1', sku: 'SKU-1', name: 'Sábana', price: 100, stock: 5, images: [{ url: 'https://c.com/1.jpg' }], ...sobre,
@@ -10,7 +10,6 @@ describe('woo-plan · producto simple', () => {
         expect(plan.tipo).toBe('simple');
         expect(plan.producto).toMatchObject({ type: 'simple', status: 'draft', name: 'Sábana Premium', sku: 'SKU-1', regular_price: '100.00', sale_price: '', manage_stock: true, stock_quantity: 5, stock_status: 'instock' });
         expect(plan.producto.images).toEqual([{ src: 'https://c.com/1.jpg' }]);
-        expect(plan.categoria).toEqual(['Hogar', 'Cama']);
     });
 
     it('el precio web menor va como precio de oferta; uno mayor o igual se ignora', () => {
@@ -55,10 +54,6 @@ describe('woo-plan · descripción, peso y categorías', () => {
     it('peso y medidas solo si están completos', () => {
         expect(pesoYMedidas({ packageWeight: '1.5', packageWidth: 10, packageLength: 20, packageHeight: 5 })).toEqual({ weight: '1.5', dimensions: { length: '20', width: '10', height: '5' } });
         expect(pesoYMedidas({ packageWeight: null, packageWidth: 10, packageLength: null, packageHeight: 5 })).toEqual({});
-    });
-    it('la ruta de categoría no repite niveles', () => {
-        expect(rutaDeCategoria({ category: 'Hogar', subCategory: 'hogar' })).toEqual(['Hogar']);
-        expect(rutaDeCategoria({ category: null, subCategory: ' ' })).toEqual([]);
     });
 });
 

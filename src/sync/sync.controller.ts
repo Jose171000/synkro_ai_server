@@ -42,6 +42,8 @@ import { plantillaDeVentas, ventasDeFilas } from './ventas-manuales';
 import { escribirHoja } from '../common/excel/excel';
 import { YavendioCatalogImportService } from './yavendio/yavendio-catalog-import.service';
 import { YavendioOrdersService } from './yavendio/yavendio-orders.service';
+import { WooCategoriasService } from './woo/woo-categorias.service';
+import { WooCategoriaDto } from './dto/woo-categoria.dto';
 import { RipleyMarcasService } from './ripley/ripley-marcas.service';
 import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
 import { RipleyPublicacionService } from './ripley/ripley-publicacion.service';
@@ -76,6 +78,7 @@ export class SyncController {
         private readonly variantImport: FalabellaVariantImportService,
         private readonly yavendioCatalog: YavendioCatalogImportService,
         private readonly yavendioOrders: YavendioOrdersService,
+        private readonly wooCategorias: WooCategoriasService,
         private readonly ripleyMarcas: RipleyMarcasService,
         private readonly ripleyCatalogo: RipleyCatalogoService,
         private readonly ripleyPublicacion: RipleyPublicacionService,
@@ -715,6 +718,32 @@ export class SyncController {
     })
     resendFalabellaImages(@Body() dto: PublishFalabellaDto, @Req() req) {
         return this.syncService.reenviarFotosAFalabella(scopeOf(req), dto.connectionId, dto.productIds);
+    }
+
+    @Get('woocommerce/categories')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.ver')
+    @ApiOperation({
+        summary: 'Categorías que tiene la tienda WooCommerce, con su ruta (solo lee)',
+        description: 'Son las categorías reales de la tienda: Synkro elige entre ellas y nunca crea una.',
+    })
+    async wooCategories(@Req() req, @Query('connectionId') connectionId?: string) {
+        const conexion = await this.syncService.resolveConnection(scopeOf(req).storeId, 'woocommerce', connectionId);
+        return this.wooCategorias.listar(conexion.id, true);
+    }
+
+    @Post('woocommerce/products/:id/category')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Fija la categoría de WooCommerce de un producto (o de su grupo): la que se indica o, sin categoryId, la que Synkro elige sola',
+        description: 'Si el producto ya está en WooCommerce, también se cambia allí (solo la categoría). Nunca crea categorías.',
+    })
+    setWooCategory(@Param('id') id: string, @Body() dto: WooCategoriaDto, @Req() req) {
+        return this.wooCategorias.fijar(scopeOf(req), id, dto.connectionId, dto.categoryId);
     }
 
     @Post('listings/resend-stock')

@@ -7,6 +7,7 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { SyncService } from '../sync.service';
 import { EcommerceSyncService } from '../channels/ecommerce-sync.service';
 import { normalizarSitioWoo, WooApiService } from './woo-api.service';
+import { CategoriaElegida, WooCategoriasService } from './woo-categorias.service';
 import { PlanInvalido, planificarWoo, PlanWoo } from './woo-plan';
 
 const MARKETPLACE = 'woocommerce';
@@ -30,6 +31,7 @@ export class WooPublicacionService {
         private readonly api: WooApiService,
         private readonly sync: SyncService,
         private readonly ecommerce: EcommerceSyncService,
+        private readonly categorias: WooCategoriasService,
         private readonly notifications: NotificationsService,
     ) { }
 
@@ -61,15 +63,17 @@ export class WooPublicacionService {
         let wooId = vivos[0]?.externalId ?? '';
         let permalink: string | null = vivos[0]?.permalink ?? null;
 
+        // La categoría se elige sola entre las que ya tiene la tienda (nunca se crean). Sin una que encaje, el producto se crea igual
+        // en la categoría por defecto de WordPress y se avisa para que la persona la elija.
+        const categoria: CategoriaElegida | null = await this.categorias.elegir(familia, connectionId).catch((e) => {
+            this.logger.warn(`No se pudo elegir la categoría de WooCommerce: ${e?.message}`);
+            return null;
+        });
+
         if (!wooId) {
-            const categorias = plan.categoria.length ? await this.api.asegurarCategorias(auth, plan.categoria).catch((e) => {
-                // Sin categoría el producto se crea igual: la persona la asigna en WordPress.
-                this.logger.warn(`No se pudieron preparar las categorías ${plan.categoria.join(' › ')}: ${e?.message}`);
-                return [] as number[];
-            }) : [];
             // Se crea sin fotos (es lo rápido) y las fotos se ponen después: si algo tarda, un reintento no duplica el producto.
             const { images: _fotos, ...sinFotos } = plan.producto;
-            const creado = await this.api.crearProducto(auth, { ...sinFotos, ...(categorias.length ? { categories: categorias.map((id) => ({ id })) } : {}) });
+            const creado = await this.api.crearProducto(auth, { ...sinFotos, ...(categoria ? { categories: [{ id: categoria.categoria.id }] } : {}) });
             wooId = creado.id;
             // Un borrador no se puede ver en la tienda: el enlace lleva a su pantalla de edición en WordPress (al publicarlo, la
             // próxima lectura del catálogo lo reemplaza por la dirección pública).
@@ -124,7 +128,7 @@ export class WooPublicacionService {
             type: 'publish',
             severity: 'success',
             title: `${familia[0].sku} está en WooCommerce como borrador`,
-            body: `Revísalo en WordPress y publícalo allí${plan.tipo === 'variable' ? ` (${creadas} variantes)` : ''}.`,
+            body: `Revísalo en WordPress y publícalo allí${plan.tipo === 'variable' ? ` (${creadas} variantes)` : ''}. ${categoria ? `Categoría: ${categoria.categoria.ruta}.` : 'No se encontró una categoría que encaje: elígela en Synkro o en WordPress (quedó en la categoría por defecto).'}`,
             marketplace: MARKETPLACE,
             meta: { productId, connectionId },
         });

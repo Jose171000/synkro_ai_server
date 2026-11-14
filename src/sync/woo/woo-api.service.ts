@@ -237,28 +237,21 @@ export class WooApiService implements ChannelClient {
         return salida;
     }
 
-    /**
-     * Busca (o crea) las categorías de una ruta «Hogar › Cama» y devuelve el id de cada nivel, de arriba hacia abajo.
-     * Una categoría que ya existe con ese nombre en ese nivel se reutiliza; nunca se duplica.
-     */
-    async asegurarCategorias(auth: ChannelAuth, ruta: string[]): Promise<number[]> {
+    /** Todas las categorías de la tienda (id, nombre, categoría padre, cuántos productos tiene). Solo lee. */
+    async listarCategorias(auth: ChannelAuth): Promise<{ id: number; name: string; parent: number; count: number; slug: string }[]> {
         const http = this.cliente(auth);
-        const ids: number[] = [];
-        let padre = 0;
-        for (const nombre of ruta.map(n => n.trim()).filter(Boolean)) {
-            const { data } = await this.llamar(() => http.get('/products/categories', { params: { search: nombre, per_page: 100, parent: padre } }));
-            const clave = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-            const existente = (Array.isArray(data) ? data : []).find((c: any) => clave(String(c?.name ?? '').replace(/&amp;/g, '&')) === clave(nombre));
-            let id = existente?.id ? Number(existente.id) : 0;
-            if (!id) {
-                const creada = await this.llamar(() => http.post('/products/categories', { name: nombre, parent: padre }));
-                id = Number(creada.data?.id);
-            }
-            if (!id) break;
-            ids.push(id);
-            padre = id;
+        const todas: any[] = [];
+        let pagina = 1;
+        let total = 1;
+        while (pagina <= total && pagina <= 20) {
+            const { data, paginas } = await this.llamar(() => http.get('/products/categories', { params: { per_page: 100, page: pagina, hide_empty: false } }));
+            total = paginas;
+            todas.push(...(Array.isArray(data) ? data : []));
+            pagina++;
         }
-        return ids;
+        return todas
+            .filter(c => c?.id)
+            .map(c => ({ id: Number(c.id), name: String(c.name ?? ''), parent: Number(c.parent) || 0, count: Number(c.count) || 0, slug: String(c.slug ?? '') }));
     }
 
     async setInventory(

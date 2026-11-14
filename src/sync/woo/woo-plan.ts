@@ -61,10 +61,8 @@ export interface VariacionDelPlan {
 
 export interface PlanWoo {
     tipo: 'simple' | 'variable';
-    /** Cuerpo del producto (padre en un grupo). Siempre con status «draft». Las categorías las resuelve el servicio. */
+    /** Cuerpo del producto (padre en un grupo). Siempre con status «draft». La categoría la elige aparte WooCategoriasService. */
     producto: Record<string, any>;
-    /** Nombres de categoría (de la más general a la más específica); el servicio los busca o crea y pone los ids. */
-    categoria: string[];
     variaciones: VariacionDelPlan[];
 }
 
@@ -118,16 +116,6 @@ export function pesoYMedidas(p: Pick<ProductoParaWoo, 'packageWeight' | 'package
 const stockDe = (stock: number) => Math.max(0, Math.trunc(Number(stock) || 0));
 const estadoDeStock = (stock: number): 'instock' | 'outofstock' => (stockDe(stock) > 0 ? 'instock' : 'outofstock');
 
-/** Nombres de categoría de arriba hacia abajo («Hogar» › «Cama»), sin vacíos ni repetidos. */
-export function rutaDeCategoria(p: Pick<ProductoParaWoo, 'category' | 'subCategory'>): string[] {
-    const ruta: string[] = [];
-    for (const nombre of [p.category, p.subCategory]) {
-        const n = limpio(nombre);
-        if (n && !ruta.some((x) => clave(x) === clave(n))) ruta.push(n);
-    }
-    return ruta;
-}
-
 export function planificarWoo(variantes: ProductoParaWoo[], grupo?: GrupoParaWoo | null): PlanWoo {
     if (!variantes.length) throw new PlanInvalido('No hay productos para publicar en WooCommerce.');
     const primero = variantes[0];
@@ -150,14 +138,12 @@ export function planificarWoo(variantes: ProductoParaWoo[], grupo?: GrupoParaWoo
         description: descripcionParaWoo(primero),
         catalog_visibility: 'visible',
     };
-    const categoria = rutaDeCategoria(primero);
 
     if (!esGrupo) {
         const precios = preciosDe(primero);
         const fotos = fotosHttps(primero, MAX_FOTOS_SIMPLE);
         return {
             tipo: 'simple',
-            categoria,
             variaciones: [],
             producto: {
                 ...base,
@@ -223,7 +209,6 @@ export function planificarWoo(variantes: ProductoParaWoo[], grupo?: GrupoParaWoo
 
     return {
         tipo: 'variable',
-        categoria,
         variaciones,
         producto: {
             ...base,
