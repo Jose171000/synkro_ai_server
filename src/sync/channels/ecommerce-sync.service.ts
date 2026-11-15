@@ -519,7 +519,10 @@ export class EcommerceSyncService implements OnModuleInit {
         let descuentoWoo: { precio: number | null; desde?: string | null; hasta?: string | null } | null = null;
         let firmaWoo: string | null = null;
         if (canal === 'woocommerce') {
-            const promo = preciosParaCanal(product as any, link as any).promo;
+            const precios = preciosParaCanal(product as any, link as any);
+            // Lo que la tienda ya muestra (leído en la última revisión) no es del descuento de Synkro: si no, un descuento quitado
+            // se volvería a mandar a sí mismo y nunca se retiraría.
+            const promo = precios.origen.promo === 'canal' ? null : precios.promo;
             if (promo) {
                 descuentoWoo = { precio: promo.salePrice, desde: promo.start, hasta: promo.end };
                 firmaWoo = firmaDePromo(promo);
@@ -536,7 +539,11 @@ export class EcommerceSyncService implements OnModuleInit {
                 { externalId: link.externalId, variationId: link.variationId ?? null, ...(esRipley ? { sku: product.sku } : {}) },
                 { stock: conStock ? product.stock : null, price: conPrecio ? precio : null, ...(descuento ? { descuento } : descuentoWoo ? { descuento: descuentoWoo } : {}) },
             );
-            if (firmaWoo !== null) link.lastPromoSynced = (firmaWoo || null) as any;
+            if (firmaWoo !== null) {
+                link.lastPromoSynced = (firmaWoo || null) as any;
+                // Lo que la tienda muestra ahora: el descuento puesto, o ninguno si se retiró (el tablero lo enseña tachado o no).
+                link.salePrice = (descuentoWoo?.precio ?? null) as any;
+            }
             if (conStock) link.lastStockSynced = product.stock;
             if (conPrecio) {
                 link.lastPriceSynced = (esRipley ? precio : product.price) as any;

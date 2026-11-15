@@ -281,6 +281,39 @@ describe('stock hacia el canal', () => {
         expect(enlaces[0].lastError).toMatch(/rechazó las claves/);
     });
 
+    it('quitar el descuento general retira la oferta de la tienda aunque la última lectura todavía la muestre', async () => {
+        const producto = { id: 'p1', sku: 'A', stock: 6, price: 350, salePrice: null };
+        // La tienda mostraba 165 (lo leyó la última revisión) y Synkro lo había puesto (lastPromoSynced).
+        const { service, cliente, enlaces } = construir({
+            conexiones: [cuenta()], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'woocommerce', externalId: '20', variationId: '202', syncStatus: 'published', product: producto, connection: { id: 'wc1' }, salePrice: 165, lastPromoSynced: '165|2026-11-14|2026-11-24' }],
+        });
+        await service.pushInventory('woocommerce', 'p1', 'wc1');
+        expect(cliente.setInventory).toHaveBeenCalledWith(expect.anything(), { externalId: '20', variationId: '202' }, expect.objectContaining({ descuento: { precio: null } }));
+        expect(enlaces[0]).toMatchObject({ lastPromoSynced: null, salePrice: null });
+    });
+
+    it('una oferta que la tienda tiene por su cuenta (Synkro no la puso) no se toca', async () => {
+        const producto = { id: 'p1', sku: 'A', stock: 6, price: 350, salePrice: null };
+        const { service, cliente } = construir({
+            conexiones: [cuenta()], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'woocommerce', externalId: '20', variationId: null, syncStatus: 'published', product: producto, connection: { id: 'wc1' }, salePrice: 300, lastPromoSynced: null }],
+        });
+        await service.pushInventory('woocommerce', 'p1', 'wc1');
+        expect(cliente.setInventory.mock.calls[0][2]).not.toHaveProperty('descuento');
+    });
+
+    it('un descuento general vigente se manda con sus fechas y queda anotado en el enlace', async () => {
+        const producto = { id: 'p1', sku: 'A', stock: 6, price: 350, salePrice: 165, saleStartDate: '2026-11-14', saleEndDate: '2026-11-24' };
+        const { service, cliente, enlaces } = construir({
+            conexiones: [cuenta()], productos: [producto],
+            enlaces: [{ id: 'e1', marketplace: 'woocommerce', externalId: '20', variationId: null, syncStatus: 'published', product: producto, connection: { id: 'wc1' }, salePrice: null, lastPromoSynced: null }],
+        });
+        await service.pushInventory('woocommerce', 'p1', 'wc1');
+        expect(cliente.setInventory.mock.calls[0][2]).toMatchObject({ descuento: { precio: 165, desde: '2026-11-14', hasta: '2026-11-24' } });
+        expect(enlaces[0]).toMatchObject({ salePrice: 165, lastPromoSynced: '165|2026-11-14|2026-11-24' });
+    });
+
     it('un enlace pausado no recibe stock', async () => {
         const producto = { id: 'p1', sku: 'A', stock: 6, price: 45 };
         const { service, cliente } = construir({
