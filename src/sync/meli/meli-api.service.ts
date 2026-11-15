@@ -290,21 +290,52 @@ export class MeliApiService {
         }
     }
 
-    /** Datos de varias publicaciones (ML admite hasta 20 por llamada). */
+    /**
+     * Datos de varias publicaciones (ML admite hasta 20 por llamada). Si Mercado Libre rechaza la consulta por lotes
+     * («403 Resource deprecated», que a veces responde a esta aplicación), se piden una por una: más lento, pero la lectura no se cae.
+     */
     async getItems(accessToken: string, ids: string[]): Promise<{ items: any[]; notFound: string[] }> {
         const items: any[] = [];
         const notFound: string[] = [];
         for (let i = 0; i < ids.length; i += 20) {
-            const { data } = await this.http.get('/items', {
-                headers: { Authorization: `Bearer ${accessToken}` },
-                params: { ids: ids.slice(i, i + 20).join(',') },
-            });
+            const lote = ids.slice(i, i + 20);
+            let data: any;
+            try {
+                ({ data } = await this.http.get('/items', {
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                    params: { ids: lote.join(',') },
+                }));
+            } catch (error: any) {
+                if (error?.response?.status !== 403) throw error;
+                const sueltas = await this.getItemsUnoAUno(accessToken, lote);
+                items.push(...sueltas.items);
+                notFound.push(...sueltas.notFound);
+                continue;
+            }
             for (const r of Array.isArray(data) ? data : []) {
                 if (r?.code === 200 && r?.body) items.push(r.body);
                 else if (r?.code === 404) notFound.push(String(r?.body?.id ?? r?.id ?? ''));
             }
         }
         return { items, notFound: notFound.filter(Boolean) };
+    }
+
+    /** Pide las publicaciones una por una (de a pocas a la vez, para no saturar a Mercado Libre). */
+    private async getItemsUnoAUno(accessToken: string, ids: string[]): Promise<{ items: any[]; notFound: string[] }> {
+        const items: any[] = [];
+        const notFound: string[] = [];
+        for (let i = 0; i < ids.length; i += 5) {
+            await Promise.all(ids.slice(i, i + 5).map(async (id) => {
+                try {
+                    const { data } = await this.http.get(`/items/${id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+                    if (data) items.push(data);
+                } catch (error: any) {
+                    if (error?.response?.status === 404) notFound.push(id);
+                    else throw error;
+                }
+            }));
+        }
+        return { items, notFound };
     }
 
     /** Una página de ventas de un rango de fechas, para traer el historial. */
