@@ -22,6 +22,9 @@ const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
 /** Ripley y WooCommerce solo se MUESTRAN en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
 const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley', 'woocommerce'];
 
+/** Canales cuyo descuento propio por cuenta se puede fijar desde Synkro. */
+const CANALES_CON_DESCUENTO = ['falabella', 'mercadolibre', 'woocommerce'];
+
 export interface SheetChannel {
     /** La publicación (para pausarla, reanudarla o quitarla) y si la pausó la persona (no es lo mismo que «sin stock»). */
     linkId: string;
@@ -64,6 +67,8 @@ export interface SheetSync {
     status: string;
     price: { synkro: number | null; channel: number | null };
     stock: { synkro: number; channel: number | null };
+    ownPrice?: number | null;
+    promo?: { propio: { price: number; start: string | null; end: string | null } | null; canal: number | null };
 }
 
 /**
@@ -111,6 +116,12 @@ export class ProductSheetService {
                 status: enlace.syncStatus,
                 price: { synkro: preciosParaCanal(product, enlace).price ?? null, channel: numero(enlace.regularPrice) },
                 stock: { synkro: product.stock, channel: enlace.lastStockSynced ?? null },
+                // El precio y el descuento fijados solo para esta cuenta (mandan sobre los del producto) y lo que el canal muestra con descuento.
+                ownPrice: numero(enlace.priceOverride),
+                promo: {
+                    propio: numero(enlace.salePriceOverride) !== null ? { price: Number(enlace.salePriceOverride), start: enlace.saleStartOverride ?? null, end: enlace.saleEndOverride ?? null } : null,
+                    canal: numero(enlace.salePrice),
+                },
             });
             const base = {
                 linkId: enlace.id,
@@ -188,7 +199,7 @@ export class ProductSheetService {
             channel: { price: num(enlace.regularPrice), salePrice: num(enlace.salePrice), stock: enlace.lastStockSynced ?? null },
             stock: product.stock,
             // El descuento puede tener una ventana de fechas que Synkro envía; sin precio de Falabella en el producto no hay nada que mostrar.
-            canSetSale: enlace.marketplace === 'falabella',
+            canSetSale: CANALES_CON_DESCUENTO.includes(enlace.marketplace),
         };
     }
 
@@ -341,7 +352,7 @@ export class ProductSheetService {
                 connectionId,
                 marketplace: lista[0].marketplace,
                 account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
-                canSetSale: lista[0].marketplace === 'falabella',
+                canSetSale: CANALES_CON_DESCUENTO.includes(lista[0].marketplace),
                 variantes: lista.length,
                 own: comun!.valor,
                 differs: comun!.distintos > 1,
@@ -506,17 +517,19 @@ export class ProductSheetService {
             }
             const vacio = (v: unknown) => v === null || v === undefined || v === '';
             const precio = vacio(p.price) ? null : Number(p.price);
-            // Mercado Libre no recibe descuentos desde aquí: se maneja en su propia herramienta de promociones.
-            const conDescuento = enlace.marketplace === 'falabella' && !vacio(p.salePrice);
+            // El descuento propio de la cuenta que ya tenga se conserva al guardar el precio (se cambia desde el bloque de descuento).
+            const conDescuento = !vacio(p.salePrice);
             const descuento = conDescuento ? Number(p.salePrice) : null;
             const inicio = conDescuento ? fechaDeFalabella(p.saleStart) : null;
             const fin = conDescuento ? fechaDeFalabella(p.saleEnd) : null;
             if (conDescuento && p.saleStart && !inicio) throw new BadRequestException('La fecha de inicio no es válida (usa AAAA-MM-DD).');
             if (conDescuento && p.saleEnd && !fin) throw new BadRequestException('La fecha de fin no es válida (usa AAAA-MM-DD).');
             if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
+            // Mercado Libre y WooCommerce no admiten un descuento sin fecha de fin (Falabella lo acepta por lo ya cargado).
+            if (conDescuento && !fin && enlace.marketplace !== 'falabella' && enlace.marketplace !== 'ripley') throw new BadRequestException('El descuento necesita una fecha de fin (AAAA-MM-DD).');
             const base = precio ?? Number(product.price);
             if (descuento !== null && !(descuento > 0 && descuento < base)) {
-                throw new BadRequestException(`El descuento en ${enlace.marketplace === 'falabella' ? 'Falabella' : 'este canal'} debe ser menor que su precio regular (${base.toFixed(2)}).`);
+                throw new BadRequestException(`El descuento en este canal debe ser menor que su precio regular (${base.toFixed(2)}).`);
             }
 
             const antes = [enlace.priceOverride, enlace.salePriceOverride, enlace.saleStartOverride, enlace.saleEndOverride].map((v) => (vacio(v) ? null : String(v)));

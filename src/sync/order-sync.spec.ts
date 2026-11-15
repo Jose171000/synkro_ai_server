@@ -960,7 +960,7 @@ describe('reenviar el stock de Synkro a un canal que quedó con otro número', (
 
         it('otros canales, publicaciones pausadas por la persona o de otra tienda no admiten descuento por cuenta', async () => {
             encender();
-            await expect((await armarPromo({ marketplace: 'mercadolibre' })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/solo está disponible para Falabella y Ripley/);
+            await expect((await armarPromo({ marketplace: 'shopify' })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/solo está disponible para Falabella, Mercado Libre, WooCommerce y Ripley/);
             await expect((await armarPromo({ pausedByUser: true })).service.setListingPromo(scope, 'l1', { salePrice: 100 })).rejects.toThrow(/La pausaste/);
             const t = await armarPromo();
             t.repoEnlaces.findOne.mockResolvedValue(null as any);

@@ -1,4 +1,4 @@
-import { planDeDescuentoMeli, maxDiasPromoMeli, promosMeliActivas, rechazoDe } from './descuento-meli';
+import { planDeDescuentoMeli, maxDiasPromoMeli, precioDeLaPromocionActiva, promosMeliActivas, rechazoDe } from './descuento-meli';
 
 const base = { precio: 265, ultima: null as string | null, hoy: '2026-11-14', maxDias: 14 };
 const promo = (salePrice: number, start: string | null, end: string | null) => ({ salePrice, start, end });
@@ -73,6 +73,19 @@ describe('rechazo recordado de Mercado Libre', () => {
 
     it('si el descuento se quitó, un rechazo anotado no genera un borrado', () => {
         expect(planDeDescuentoMeli({ ...base, promo: null, ultima: rechazoDe(firma, '2026-11-14') })).toEqual({ tipo: 'nada' });
+    });
+});
+
+describe('precioDeLaPromocionActiva (para el precio tachado)', () => {
+    it('devuelve el precio de la promoción en curso y null si no empezó, terminó o fue rechazada', () => {
+        const u = '165|2026-11-14|2026-11-24';
+        expect(precioDeLaPromocionActiva(u, '2026-11-14')).toBe(165);
+        expect(precioDeLaPromocionActiva(u, '2026-11-24')).toBe(165);
+        expect(precioDeLaPromocionActiva(u, '2026-11-13')).toBeNull();
+        expect(precioDeLaPromocionActiva(u, '2026-11-25')).toBeNull();
+        expect(precioDeLaPromocionActiva(rechazoDe(u, '2026-11-14'), '2026-11-15')).toBeNull();
+        expect(precioDeLaPromocionActiva(null, '2026-11-15')).toBeNull();
+        expect(precioDeLaPromocionActiva('basura', '2026-11-15')).toBeNull();
     });
 });
 

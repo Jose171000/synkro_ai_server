@@ -94,3 +94,16 @@ export function planDeDescuentoMeli(e: EntradaDePlanMeli): PlanMeli {
     if (rechazoVigente(e.ultima, firma, e.hoy)) return { tipo: 'nada', rechazada: true };
     return { tipo: 'poner', quitarAntes: hayPrevia, dealPrice: salePrice, desde: tramo.desde, hasta: tramo.hasta, firma };
 }
+
+/**
+ * El precio con descuento que Mercado Libre cobra hoy según lo que Synkro le puso («precio|desde|hasta»), o null si no hay una promoción
+ * en curso. Mercado Libre no lo muestra en el precio de la publicación (vive en su capa de promociones), así que Synkro lo anota para
+ * poder enseñar el precio tachado igual que en los demás canales.
+ */
+export function precioDeLaPromocionActiva(ultima: string | null | undefined, hoy: string): number | null {
+    if (!ultima || esRechazo(ultima)) return null;
+    const [precio, desde, hasta] = ultima.split('|');
+    const n = Number(precio);
+    if (!Number.isFinite(n) || n <= 0 || !desde || !hasta) return null;
+    return desde <= hoy && hoy <= hasta ? n : null;
+}

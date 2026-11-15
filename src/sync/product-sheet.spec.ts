@@ -279,7 +279,7 @@ describe('precios por canal en la ficha', () => {
             sent: { price: 480, salePrice: 450, origin: { price: 'producto', promo: 'canal' } },
             channel: { price: 500, salePrice: 450, stock: 3 },
         });
-        expect(hoja.prices[1]).toMatchObject({ marketplace: 'mercadolibre', canSetSale: false, sent: { price: 520, origin: { price: 'propio' } } });
+        expect(hoja.prices[1]).toMatchObject({ marketplace: 'mercadolibre', canSetSale: true, sent: { price: 520, origin: { price: 'propio' } } });
     });
 
     it('guardar precios fija el de esa cuenta, lo envía a su canal y no toca el contenido', async () => {
@@ -309,10 +309,18 @@ describe('precios por canal en la ficha', () => {
         expect(links.save).not.toHaveBeenCalled();
     });
 
-    it('en Mercado Libre el descuento no se guarda desde aquí', async () => {
+    it('en Mercado Libre el descuento propio de la cuenta se conserva al guardar el precio (y se cambia desde el bloque de descuento)', async () => {
         const { service, links } = construir(producto(), [enlace('mercadolibre')]);
-        await service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-mercadolibre', price: 600, salePrice: 100 }] });
-        expect(links.save).toHaveBeenCalledWith(expect.objectContaining({ priceOverride: 600, salePriceOverride: null }));
+        await service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-mercadolibre', price: 600, salePrice: 100, saleEnd: '2026-12-31' }] });
+        expect(links.save).toHaveBeenCalledWith(expect.objectContaining({ priceOverride: 600, salePriceOverride: 100, saleEndOverride: '2026-12-31' }));
+    });
+
+    it('en Mercado Libre el descuento propio exige fecha de fin; en Falabella no', async () => {
+        const ml = construir(producto(), [enlace('mercadolibre')]);
+        await expect(ml.service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-mercadolibre', salePrice: 100 }] })).rejects.toThrow(/fecha de fin/);
+        const fala = construir(producto(), [enlace('falabella')]);
+        await fala.service.saveSheet(SCOPE, 'p1', { prices: [{ connectionId: 'c-falabella', salePrice: 100 }] });
+        expect(fala.links.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: 100 }));
     });
 });
 
@@ -369,6 +377,6 @@ describe('ficha: pestaña de Ripley (solo lectura)', () => {
     it('informa, por canal enlazado, el precio y el stock de Synkro frente a los del canal (para sincronizar)', async () => {
         const { service } = construir(producto, [{ ...enlace, regularPrice: 95, lastStockSynced: 2 }]);
         const hoja = await service.getSheet(SCOPE, 'p1');
-        expect(hoja.sync).toEqual([{ listingId: 'l1', marketplace: 'ripley', connectionId: 'rp1', account: 'Chumpi Bags', status: 'published', price: { synkro: 99, channel: 95 }, stock: { synkro: 4, channel: 2 } }]);
+        expect(hoja.sync).toEqual([{ listingId: 'l1', marketplace: 'ripley', connectionId: 'rp1', account: 'Chumpi Bags', status: 'published', price: { synkro: 99, channel: 95 }, stock: { synkro: 4, channel: 2 }, ownPrice: null, promo: { propio: null, canal: null } }]);
     });
 });

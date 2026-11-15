@@ -6,7 +6,7 @@ import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './rip
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
-import { maxDiasPromoMeli, planDeDescuentoMeli, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
+import { maxDiasPromoMeli, planDeDescuentoMeli, precioDeLaPromocionActiva, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
 import { calcularDescuento, hoyEnLima } from './descuento-general';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
@@ -2971,7 +2971,7 @@ export class SyncService implements OnModuleInit {
             relations: { connection: true, product: true },
         });
         if (!link || !link.connection || !link.product) throw new NotFoundException('No se encontró esa publicación en esta tienda.');
-        if (!['ripley', 'falabella'].includes(link.marketplace)) throw new BadRequestException('El descuento por canal solo está disponible para Falabella y Ripley.');
+        if (!['ripley', 'falabella', 'mercadolibre', 'woocommerce'].includes(link.marketplace)) throw new BadRequestException('El descuento por canal solo está disponible para Falabella, Mercado Libre, WooCommerce y Ripley.');
         if (!['published', 'paused'].includes(link.syncStatus)) throw new BadRequestException('Esa publicación no está activa en el canal.');
         if (link.pausedByUser) throw new BadRequestException('La pausaste tú: reanúdala antes de cambiar su descuento.');
         const product = await this.findScopedProduct(scope, link.product.id);
@@ -2984,15 +2984,18 @@ export class SyncService implements OnModuleInit {
         if (inicio && fin && fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la de inicio.');
         const precio = quitar ? null : Number(dto.salePrice);
 
-        if (link.marketplace === 'falabella') {
+        if (['falabella', 'mercadolibre', 'woocommerce'].includes(link.marketplace)) {
+            const nombreCanal = ({ falabella: 'Falabella', mercadolibre: 'Mercado Libre', woocommerce: 'WooCommerce' } as Record<string, string>)[link.marketplace];
             const base = link.priceOverride != null && Number(link.priceOverride) > 0 ? Number(link.priceOverride) : Number(product.price);
             if (precio !== null && !(precio > 0 && precio < base)) {
-                throw new BadRequestException(`El descuento debe ser mayor que 0 y menor que el precio regular en Falabella (${base.toFixed(2)}).`);
+                throw new BadRequestException(`El descuento debe ser mayor que 0 y menor que el precio regular en ${nombreCanal} (${base.toFixed(2)}).`);
             }
-            // Con el modo revisión el descuento espera aprobación: aprobarlo lo guarda en esta cuenta y lo manda a Falabella.
+            // Mercado Libre y WooCommerce no admiten un descuento sin fecha de fin (Falabella lo acepta por compatibilidad con lo ya cargado).
+            if (precio !== null && link.marketplace !== 'falabella' && !fin) throw new BadRequestException('El descuento necesita una fecha de fin (AAAA-MM-DD).');
+            // Con el modo revisión el descuento espera aprobación: aprobarlo lo guarda en esta cuenta y lo manda a su canal.
             if (await this.changeRequests.isReviewMode(scope.storeId)) {
                 await this.changeRequests.createPromoRequest(scope, product, {
-                    marketplace: 'falabella',
+                    marketplace: link.marketplace,
                     connectionId: link.connection.id,
                     previous: link.salePriceOverride != null ? String(Number(link.salePriceOverride)) : '',
                     next: valorDeDescuento(precio === null ? { precio: null } : { precio, desde: inicio, hasta: fin }),
@@ -3001,16 +3004,17 @@ export class SyncService implements OnModuleInit {
                     pending: 1,
                     message: precio === null
                         ? 'Quitar el descuento de esta cuenta quedó en revisión: apruébalo en el Tablero (o en Revisión).'
-                        : `Descuento ${precio} en revisión: apruébalo en el Tablero (o en Revisión) para mandarlo a Falabella.`,
+                        : `Descuento ${precio} en revisión: apruébalo en el Tablero (o en Revisión) para mandarlo a ${nombreCanal}.`,
                 };
             }
             link.salePriceOverride = precio as any;
             link.saleStartOverride = inicio as any;
             link.saleEndOverride = fin as any;
             await this.listingLinkRepository.save(link);
-            if (precio === null) return { message: 'Descuento propio quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
-            await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: 'falabella', connectionId: link.connection.id });
-            return { message: 'Descuento guardado y enviado a Falabella. Puede tardar unos minutos en verse.' };
+            // Falabella no quita un descuento ya enviado desde aquí; Mercado Libre y WooCommerce sí: el siguiente envío lo retira.
+            if (precio === null && link.marketplace === 'falabella') return { message: 'Descuento propio quitado de Synkro. Si ya estaba en Falabella, quítalo también desde el Seller Center.' };
+            await this.syncQueue.add('inventory', { productId: product.id, userId: scope.userId, marketplace: link.marketplace, connectionId: link.connection.id });
+            return { message: precio === null ? `Descuento propio quitado; se retira de ${nombreCanal} en unos minutos.` : `Descuento guardado y enviado a ${nombreCanal}. Puede tardar unos minutos en verse.` };
         }
 
         // Ripley
@@ -3150,8 +3154,11 @@ export class SyncService implements OnModuleInit {
             if (plan.tipo === 'poner') {
                 await this.meliApi.aplicarDescuento(accessToken, link.externalId, { dealPrice: plan.dealPrice, desde: plan.desde, hasta: plan.hasta });
                 link.lastPromoSynced = plan.firma;
+                // Ya en curso: el tablero lo muestra con el precio regular tachado, como en los demás canales.
+                link.salePrice = (plan.desde <= hoyEnLima() ? plan.dealPrice : null) as any;
             } else {
                 link.lastPromoSynced = null;
+                link.salePrice = null as any;
                 if (plan.tipo === 'omitir') link.lastError = `Descuento no aplicado en Mercado Libre: ${plan.motivo}`.slice(0, 300);
             }
         } catch (error: any) {
@@ -3159,6 +3166,7 @@ export class SyncService implements OnModuleInit {
             if (/No candidates found/i.test(String(error?.message ?? error?.response?.data?.message ?? ''))) {
                 // La publicación no es candidata a descuentos: se anota para no insistir cada día.
                 if (firmaIntentada) link.lastPromoSynced = rechazoDe(firmaIntentada, hoyEnLima());
+                link.salePrice = null as any;
                 link.lastError = MENSAJE_DESCUENTO_RECHAZADO_MELI;
             } else {
                 link.lastError = `Descuento no aplicado en Mercado Libre: ${this.describeApiError(error)}`.slice(0, 300);
@@ -4775,7 +4783,8 @@ export class SyncService implements OnModuleInit {
         enlace.lastStockSynced = fila.stock;
         enlace.lastPriceSynced = fila.regularPrice as any;
         enlace.regularPrice = fila.regularPrice;
-        enlace.salePrice = fila.salePrice;
+        // La promoción que Synkro le puso no aparece en el precio de la publicación: se toma de lo anotado (para el precio tachado).
+        enlace.salePrice = (fila.salePrice ?? precioDeLaPromocionActiva(enlace.lastPromoSynced, hoyEnLima())) as any;
         enlace.imageUrl = fila.imageUrl;
         enlace.variation = fila.variation;
         enlace.qualityScore = fila.quality;
@@ -5173,6 +5182,9 @@ export class SyncService implements OnModuleInit {
             parentSku: l.parentSku,
             webPrice: l.product.webPrice,
             promo: { price: l.product.salePrice, start: l.product.saleStartDate, end: l.product.saleEndDate },
+            // Lo fijado solo para esta cuenta (manda sobre el descuento general): la pantalla de descuentos lo muestra y permite quitarlo.
+            ownPromo: l.salePriceOverride != null ? { price: l.salePriceOverride, start: l.saleStartOverride, end: l.saleEndOverride } : null,
+            ownPrice: l.priceOverride ?? null,
             lastSyncedAt: l.lastSyncedAt,
             lastError: l.lastError,
         }));

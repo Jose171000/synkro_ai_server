@@ -36,6 +36,26 @@ describe('descuento de Mercado Libre rechazado por «No candidates found»', () 
         expect(enlace.lastError).toMatch(/no es candidata a descuentos/);
     });
 
+    it('un descuento aplicado deja anotado el precio con descuento (el tablero lo muestra tachado) y el rechazo lo limpia', async () => {
+        const { svc, producto, enlace } = armar();
+        svc.meliApi.aplicarDescuento.mockResolvedValueOnce(undefined);
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.salePrice).toBe(165);
+        // Un cambio que Mercado Libre rechaza deja la publicación sin descuento anotado.
+        producto.salePrice = 200;
+        svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('No candidates found for item'));
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.salePrice).toBeNull();
+        // Quitar el descuento también lo limpia.
+        const otra = armar();
+        otra.enlace.lastPromoSynced = `165|${enDias(-2)}|${enDias(5)}`;
+        otra.enlace.salePrice = 165;
+        otra.producto.salePrice = null;
+        await otra.svc.sincronizarDescuentoMeli('tok', otra.enlace, otra.producto, 350);
+        expect(otra.svc.meliApi.quitarDescuento).toHaveBeenCalled();
+        expect(otra.enlace.salePrice).toBeNull();
+    });
+
     it('otro error de Mercado Libre no se anota como rechazo: se reintenta y se muestra tal cual', async () => {
         const { svc, producto, enlace } = armar();
         svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('timeout'));
