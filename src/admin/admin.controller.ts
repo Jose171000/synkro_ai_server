@@ -10,7 +10,7 @@ import { ReportsService } from '../reports/reports.service';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateClientDto } from './dto/create-client.dto';
-import { UpdateAccessDto, ResetClientPasswordDto } from './dto/update-access.dto';
+import { UpdateAccessDto, ResetClientPasswordDto, UpdateRoleDto } from './dto/update-access.dto';
 import { SignupsService } from './signups.service';
 import { Inject } from '@nestjs/common';
 import type Redis from 'ioredis';
@@ -88,6 +88,15 @@ export class AdminController {
     @ApiOperation({ summary: 'Define a qué secciones accede el usuario y si su cuenta está activa' })
     updateAccess(@Param('id') id: string, @Body() dto: UpdateAccessDto) {
         return this.adminService.updateAccess(id, dto);
+    }
+
+    @Patch('clients/:id/role')
+    @ApiOperation({
+        summary: 'Cambia el rol de una cuenta (superadmin, contador o cliente)',
+        description: 'No sobre uno mismo, no deja al sistema sin superadmin y cierra las sesiones de la cuenta para que el cambio rija al instante.',
+    })
+    updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto, @Req() req) {
+        return this.adminService.updateRole(id, dto.role, req.user.id);
     }
 
     @Post('clients/:id/reset-password')

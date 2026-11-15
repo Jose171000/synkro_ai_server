@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsBoolean, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { APP_SECTIONS } from '../../common/app-sections';
 
@@ -11,6 +11,15 @@ export class ResetClientPasswordDto {
     @IsString()
     @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
     newPassword?: string;
+}
+
+export class UpdateRoleDto {
+    @ApiProperty({
+        description: 'Rol de la cuenta: admin (superadmin: ve y gestiona todos los clientes), contador (solo finanzas) o user (cliente).',
+        enum: ['admin', 'contador', 'user'],
+    })
+    @IsIn(['admin', 'contador', 'user'], { message: 'El rol debe ser admin, contador o user' })
+    role: 'admin' | 'contador' | 'user';
 }
 
 export class UpdateAccessDto {

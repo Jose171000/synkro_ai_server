@@ -174,6 +174,35 @@ export class AdminService implements OnModuleInit {
     }
 
     /**
+     * Cambia el rol de una cuenta. Solo lo hace un superadmin, y con tres frenos:
+     * no sobre sí mismo, no dejando al sistema sin superadmin y no sobre un correo de ADMIN_EMAILS
+     * (el servidor lo volvería a ascender al arrancar). El rol viaja dentro del token de sesión, así que se
+     * cierran sus sesiones para que el cambio rija de inmediato.
+     */
+    async updateRole(userId: string, role: 'admin' | 'contador' | 'user', requesterId: string) {
+        const user = await this.userRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('Cliente no encontrado');
+        if (userId === requesterId) throw new BadRequestException('No puedes cambiar tu propio rol.');
+
+        const nuevo = role === 'admin' ? UserRole.ADMIN : role === 'contador' ? UserRole.ACCOUNTANT : UserRole.USER;
+        if (user.role === nuevo) return { message: `${user.email} ya tiene ese rol.`, role: user.role };
+
+        if (user.role === UserRole.ADMIN) {
+            const declarados = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+            if (declarados.includes(user.email.toLowerCase())) {
+                throw new BadRequestException('Ese correo está en ADMIN_EMAILS (Railway): el servidor lo volvería a ascender al arrancar. Quítalo de la variable primero.');
+            }
+            const admins = await this.userRepository.count({ where: { role: UserRole.ADMIN, isActive: true } });
+            if (admins <= 1) throw new BadRequestException('No puedes quitar al único superadmin del sistema.');
+        }
+
+        user.role = nuevo;
+        await this.userRepository.save(user);
+        await this.dataSource.getRepository(RefreshToken).delete({ user: { id: userId } });
+        return { message: `Rol de ${user.email} cambiado a ${role}. Sus sesiones se cerraron.`, role: nuevo };
+    }
+
+    /**
      * Asigna una contraseña nueva a un cliente. Pensado para cuando la
      * persona pierde el acceso y no puede usar el correo de recuperación.
      * Se cierran sus sesiones abiertas para que el cambio sea efectivo.
