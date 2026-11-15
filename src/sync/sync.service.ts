@@ -3139,6 +3139,11 @@ export class SyncService implements OnModuleInit {
             if (plan.tipo === 'nada') {
                 // Mercado Libre ya rechazó este descuento: el aviso se mantiene a la vista aunque el envío de stock y precio lo haya limpiado.
                 if (plan.rechazada) link.lastError = MENSAJE_DESCUENTO_RECHAZADO_MELI;
+                // La promoción ya puesta sigue en curso: se anota su precio (el tablero lo muestra tachado) sin depender de la lectura del listado.
+                else {
+                    const enCurso = precioDeLaPromocionActiva(link.lastPromoSynced, hoyEnLima());
+                    if (enCurso !== null) link.salePrice = enCurso as any;
+                }
                 return;
             }
             if (plan.tipo === 'poner') firmaIntentada = plan.firma;

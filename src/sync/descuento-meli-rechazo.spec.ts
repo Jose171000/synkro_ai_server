@@ -56,6 +56,16 @@ describe('descuento de Mercado Libre rechazado por «No candidates found»', () 
         expect(otra.enlace.salePrice).toBeNull();
     });
 
+    it('una promoción ya puesta que sigue en curso anota su precio en cada envío, sin volver a pedirla a Mercado Libre', async () => {
+        const { svc, producto, enlace } = armar();
+        enlace.lastPromoSynced = `165|${enDias(-1)}|${enDias(10)}`;
+        producto.saleStartDate = enDias(-1);
+        enlace.salePrice = null;
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(svc.meliApi.aplicarDescuento).not.toHaveBeenCalled();
+        expect(enlace.salePrice).toBe(165);
+    });
+
     it('otro error de Mercado Libre no se anota como rechazo: se reintenta y se muestra tal cual', async () => {
         const { svc, producto, enlace } = armar();
         svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('timeout'));
