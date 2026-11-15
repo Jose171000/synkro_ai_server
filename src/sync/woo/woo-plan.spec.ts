@@ -19,6 +19,22 @@ describe('woo-plan · producto simple', () => {
         expect(preciosDe({ sku: 'a', price: 100, webPrice: null }).sale_price).toBe('');
     });
 
+    it('el descuento general vigente va como oferta, con sus fechas, y manda sobre el precio web', () => {
+        const hoy = '2026-11-14';
+        expect(preciosDe({ sku: 'a', price: 350, webPrice: 300, salePrice: 165, saleStartDate: '2026-11-14', saleEndDate: '2026-11-24' }, hoy)).toEqual({
+            regular_price: '350.00', sale_price: '165.00', date_on_sale_from: '2026-11-14T00:00:00', date_on_sale_to: '2026-11-24T23:59:59',
+        });
+        // Sin fecha de inicio solo lleva la de fin.
+        expect(preciosDe({ sku: 'a', price: 350, salePrice: 165, saleEndDate: '2026-11-24' }, hoy)).toEqual({ regular_price: '350.00', sale_price: '165.00', date_on_sale_to: '2026-11-24T23:59:59' });
+    });
+
+    it('un descuento vencido, inválido o no menor que el precio se ignora (cae al precio web, si hay)', () => {
+        const hoy = '2026-11-25';
+        expect(preciosDe({ sku: 'a', price: 350, webPrice: 300, salePrice: 165, saleEndDate: '2026-11-24' }, hoy)).toEqual({ regular_price: '350.00', sale_price: '300.00' });
+        expect(preciosDe({ sku: 'a', price: 350, salePrice: 400, saleEndDate: '2026-12-31' }, '2026-11-14').sale_price).toBe('');
+        expect(preciosDe({ sku: 'a', price: 350, salePrice: 165, saleStartDate: '2026-12-01', saleEndDate: '2026-11-20' }, '2026-11-14').sale_price).toBe('');
+    });
+
     it('sin precio no se publica: lo dice con el SKU', () => {
         expect(() => planificarWoo([producto({ price: null })])).toThrow(/SKU-1.*precio/);
         expect(() => planificarWoo([producto({ price: 0 })])).toThrow(PlanInvalido);
@@ -93,6 +109,13 @@ describe('woo-plan · grupo de variantes', () => {
     it('rechaza SKU repetidos y combinaciones repetidas', () => {
         expect(() => planificarWoo([variante(1, 'Rojo', '2P'), variante(1, 'Azul', '2P')], grupo)).toThrow(/repetido/);
         expect(() => planificarWoo([variante(1, 'Rojo', '2P'), variante(2, 'rojo', '2p')], grupo)).toThrow(/misma combinación/);
+    });
+
+    it('las variaciones de un grupo llevan el descuento general de cada variante', () => {
+        const futuro = { salePrice: 60, saleStartDate: '2999-01-01', saleEndDate: '2999-12-31' };
+        const plan = planificarWoo([variante(1, 'Rojo', '2P', { price: 120, ...futuro }), variante(2, 'Azul', '2P', { price: 80 })], grupo);
+        expect(plan.variaciones[0].body).toMatchObject({ regular_price: '120.00', sale_price: '60.00', date_on_sale_from: '2999-01-01T00:00:00', date_on_sale_to: '2999-12-31T23:59:59' });
+        expect(plan.variaciones[1].body).toMatchObject({ regular_price: '80.00', sale_price: '' });
     });
 
     it('cada variante lleva su propio precio y su oferta', () => {

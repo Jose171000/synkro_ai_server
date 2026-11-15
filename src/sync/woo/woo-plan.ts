@@ -4,8 +4,11 @@
  * - Un producto suelto es un producto «simple». Un grupo es UN producto «variable» y cada variante de Synkro es una variación
  *   (con su SKU, precio, stock y foto). Los ejes del grupo (Color, Talla…) pasan a ser atributos de variación.
  * - El cuerpo se crea como BORRADOR (oculto): WooPublicacionService lo publica al final, cuando ya tiene variaciones y fotos.
- * - Precio: el normal es `price`; si el producto tiene `webPrice` menor, ese va como precio de oferta.
+ * - Precio: el normal es `price`. Como oferta va el descuento general del producto (con sus fechas) si lo tiene vigente; si no, el `webPrice` menor.
  */
+
+import { promocionValida } from '../falabella/falabella-product-xml';
+import { hoyEnLima } from '../descuento-general';
 
 export const MAX_FOTOS_PADRE = 20;
 export const MAX_FOTOS_SIMPLE = 10;
@@ -22,6 +25,10 @@ export interface ProductoParaWoo {
     subCategory?: string | null;
     price: number | string | null;
     webPrice?: number | string | null;
+    /** Descuento general del producto: precio y fechas de vigencia (AAAA-MM-DD) */
+    salePrice?: number | string | null;
+    saleStartDate?: string | null;
+    saleEndDate?: string | null;
     stock: number;
     packageWidth?: number | null;
     packageLength?: number | null;
@@ -38,12 +45,14 @@ export interface GrupoParaWoo {
 
 export interface DimensionesWoo { length: string; width: string; height: string }
 
-export interface PreciosWoo { regular_price: string; sale_price: string }
+export interface PreciosWoo { regular_price: string; sale_price: string; date_on_sale_from?: string; date_on_sale_to?: string }
 
 export interface CuerpoDeVariacion {
     sku: string;
     regular_price: string;
     sale_price: string;
+    date_on_sale_from?: string;
+    date_on_sale_to?: string;
     manage_stock: true;
     stock_quantity: number;
     stock_status: 'instock' | 'outofstock';
@@ -82,10 +91,23 @@ export function fotosHttps(producto: Pick<ProductoParaWoo, 'images'>, max = MAX_
     return [...vistas].slice(0, max);
 }
 
-/** Precio normal y, si hay un precio web menor, el de oferta. */
-export function preciosDe(producto: Pick<ProductoParaWoo, 'price' | 'webPrice' | 'sku'>): PreciosWoo {
+/**
+ * Precio normal y el de oferta. La oferta es el descuento general del producto, con sus fechas, si sigue vigente (el de la cuenta, si lo
+ * hay, se manda aparte al enviar precios); sin él, el precio web si es menor. Así un producto que se publica con descuento sale con él.
+ */
+export function preciosDe(producto: Pick<ProductoParaWoo, 'price' | 'webPrice' | 'sku' | 'salePrice' | 'saleStartDate' | 'saleEndDate'>, hoy: string = hoyEnLima()): PreciosWoo {
     const regular = Number(producto.price);
     if (!(regular > 0)) throw new PlanInvalido(`${limpio(producto.sku)}: WooCommerce necesita un precio y este producto no tiene.`);
+    const promo = promocionValida(regular, { salePrice: producto.salePrice, saleStart: producto.saleStartDate, saleEnd: producto.saleEndDate });
+    // Un descuento que ya terminó no se manda.
+    if (promo && !(promo.end && promo.end < hoy)) {
+        return {
+            regular_price: dinero(regular),
+            sale_price: dinero(promo.salePrice),
+            ...(promo.start ? { date_on_sale_from: `${promo.start}T00:00:00` } : {}),
+            ...(promo.end ? { date_on_sale_to: `${promo.end}T23:59:59` } : {}),
+        };
+    }
     const web = Number(producto.webPrice);
     return { regular_price: dinero(regular), sale_price: web > 0 && web < regular ? dinero(web) : '' };
 }

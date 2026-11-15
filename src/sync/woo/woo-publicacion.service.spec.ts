@@ -49,6 +49,22 @@ describe('WooPublicacionService', () => {
         expect(notificaciones.notify).toHaveBeenCalledWith('u1', expect.objectContaining({ type: 'publish', marketplace: 'woocommerce', title: expect.stringContaining('ya está publicado') }));
     });
 
+    it('un producto con descuento general se publica con su oferta y fechas, y el enlace anota el precio con descuento', async () => {
+        const mañana = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+        const p = variante(1, 'Rojo', { group: null, variantValues: null, price: 350, salePrice: 165, saleEndDate: mañana });
+        const { servicio, api, enlacesGuardados } = armar({ familia: [p] });
+        await servicio.publish('p1', 'u1', 'c1');
+        expect(api.crearProducto.mock.calls[0][1]).toMatchObject({ regular_price: '350.00', sale_price: '165.00', date_on_sale_to: `${mañana}T23:59:59` });
+        expect(enlacesGuardados.get('p1')).toMatchObject({ regularPrice: 350, salePrice: 165, lastPromoSynced: expect.stringMatching(/^165\|/) });
+    });
+
+    it('si la oferta es solo el precio web, no se anota como descuento general', async () => {
+        const p = variante(1, 'Rojo', { group: null, variantValues: null, price: 350, webPrice: 300 });
+        const { servicio, enlacesGuardados } = armar({ familia: [p] });
+        await servicio.publish('p1', 'u1', 'c1');
+        expect(enlacesGuardados.get('p1')).toMatchObject({ salePrice: 300, lastPromoSynced: null });
+    });
+
     it('con WOO_PUBLICAR_COMO_BORRADOR=true se queda en borrador: no se publica y el enlace queda «pausado»', async () => {
         process.env.WOO_PUBLICAR_COMO_BORRADOR = 'true';
         const { servicio, api, enlacesGuardados, notificaciones } = armar({ familia: [variante(1, 'Rojo', { group: null, variantValues: null })] });

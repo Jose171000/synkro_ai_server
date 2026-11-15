@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { firmaDePromo, preciosParaCanal } from '../precios-por-canal';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from '../../products/entities/product.entity';
@@ -150,6 +151,13 @@ export class WooPublicacionService {
         return { externalId: wooId, creadas, publicado };
     }
 
+    /** «precio|desde|hasta» del descuento general si la oferta publicada es ese; null si es el precio web o no hay oferta. */
+    private firmaDelDescuento(p: Product, oferta: string): string | null {
+        if (!oferta) return null;
+        const promo = preciosParaCanal(p as any, null).promo;
+        return promo && Number(promo.salePrice) === Number(oferta) ? firmaDePromo(promo) : null;
+    }
+
     private datosDeEnlace(p: Product, regular: string, oferta: string, foto: string | undefined, variationId: string | null, wooId: string, permalink: string | null, variacion?: string): Partial<ListingLink> {
         return {
             externalId: wooId,
@@ -162,6 +170,8 @@ export class WooPublicacionService {
             lastStockSynced: p.stock,
             regularPrice: Number(regular),
             salePrice: oferta ? Number(oferta) : null,
+            // Si la oferta es el descuento general, se anota igual que al enviar precios (así un envío posterior sabe que ya está puesto).
+            lastPromoSynced: this.firmaDelDescuento(p, oferta) as any,
             imageUrl: foto ?? null,
             variation: variacion ?? null,
             parentSku: p.group?.parentSku ?? null,
