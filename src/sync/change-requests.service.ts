@@ -323,6 +323,16 @@ export class ChangeRequestsService {
             product.saleStartDate = desde as any;
             product.saleEndDate = hasta as any;
             await this.productRepository.save(product);
+            // Retirar el descuento general también limpia el de esta cuenta de Mercado Libre o WooCommerce (el de Falabella lo conserva el Seller Center).
+            if (quitar && request.marketplace !== 'falabella' && request.connection?.id && this.listingLinkRepository) {
+                const propio = await this.listingLinkRepository.findOne({ where: { product: { id: product.id }, connection: { id: request.connection.id } } });
+                if (propio) {
+                    propio.salePriceOverride = null as any;
+                    propio.saleStartOverride = null as any;
+                    propio.saleEndOverride = null as any;
+                    await this.listingLinkRepository.save(propio);
+                }
+            }
             return quitar;
         }
         const enlace = request.connection?.id && this.listingLinkRepository

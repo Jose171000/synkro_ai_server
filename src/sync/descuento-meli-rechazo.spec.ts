@@ -1,0 +1,58 @@
+import { SyncService } from './sync.service';
+import { hoyEnLima } from './descuento-general';
+
+/** Mercado Libre responde «No candidates found for item» (p. ej. cuenta con reputación roja): se anota y no se insiste cada día. */
+const enDias = (n: number) => new Date(Date.parse(`${hoyEnLima()}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+function armar() {
+    const svc: any = Object.create(SyncService.prototype);
+    svc.meliApi = { aplicarDescuento: jest.fn(), quitarDescuento: jest.fn() };
+    svc.listingLinkRepository = { findOne: jest.fn(async () => null) };
+    svc.describeApiError = (e: any) => String(e?.message ?? e);
+    const producto: any = { id: 'p1', price: 350, salePrice: 165, saleStartDate: hoyEnLima(), saleEndDate: enDias(10) };
+    const enlace: any = { id: 'l1', externalId: 'MPE1', variationId: null, lastPromoSynced: null, lastError: null, salePriceOverride: null };
+    return { svc, producto, enlace };
+}
+
+describe('descuento de Mercado Libre rechazado por «No candidates found»', () => {
+    const antes = { ...process.env };
+    beforeEach(() => { process.env.MELI_PROMOS_ACTIVAS = 'true'; });
+    afterEach(() => { process.env = { ...antes }; });
+
+    it('se anota el rechazo con un mensaje claro y no se vuelve a pedir en los días siguientes', async () => {
+        const { svc, producto, enlace } = armar();
+        svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('Mercado Libre respondió 400: No candidates found for item'));
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.lastPromoSynced).toMatch(/^x\|165\|/);
+        expect(enlace.lastError).toMatch(/no es candidata a descuentos/);
+        expect(enlace.lastError).toMatch(/reputación de la cuenta/);
+
+        // Otro envío de stock/precio (que limpia el error) vuelve a pasar por aquí: no se insiste y el aviso se mantiene.
+        enlace.lastError = null;
+        svc.meliApi.aplicarDescuento.mockClear();
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(svc.meliApi.aplicarDescuento).not.toHaveBeenCalled();
+        expect(svc.meliApi.quitarDescuento).not.toHaveBeenCalled();
+        expect(enlace.lastError).toMatch(/no es candidata a descuentos/);
+    });
+
+    it('otro error de Mercado Libre no se anota como rechazo: se reintenta y se muestra tal cual', async () => {
+        const { svc, producto, enlace } = armar();
+        svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('timeout'));
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.lastPromoSynced).toBeNull();
+        expect(enlace.lastError).toBe('Descuento no aplicado en Mercado Libre: timeout');
+    });
+
+    it('si cambia el descuento, se vuelve a intentar enseguida', async () => {
+        const { svc, producto, enlace } = armar();
+        svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('No candidates found for item'));
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        producto.salePrice = 200;
+        svc.meliApi.aplicarDescuento.mockResolvedValueOnce(undefined);
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(svc.meliApi.aplicarDescuento).toHaveBeenCalledTimes(2);
+        expect(svc.meliApi.aplicarDescuento).toHaveBeenLastCalledWith('tok', 'MPE1', expect.objectContaining({ dealPrice: 200 }));
+        expect(enlace.lastPromoSynced).toMatch(/^200\|/);
+    });
+});

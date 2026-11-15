@@ -35,7 +35,8 @@ export interface EntradaDePlanMeli {
 }
 
 export type PlanMeli =
-    | { tipo: 'nada' }
+    /** `rechazada`: Mercado Libre ya dijo que esta publicación no admite este descuento y todavía no toca volver a intentarlo. */
+    | { tipo: 'nada'; rechazada?: boolean }
     /** Hay una promoción puesta que ya no corresponde (se quitó el descuento o terminó). */
     | { tipo: 'quitar' }
     | { tipo: 'poner'; quitarAntes: boolean; dealPrice: number; desde: string; hasta: string; firma: string }
@@ -44,8 +45,26 @@ export type PlanMeli =
 
 export const firmaDeTramo = (salePrice: number, t: Tramo) => `${salePrice}|${t.desde}|${t.hasta}`;
 
+/** Días que se espera antes de volver a pedirle a Mercado Libre un descuento que ya rechazó (p. ej. por la reputación de la cuenta). */
+export const DIAS_SIN_REINTENTO = 7;
+const MARCA_RECHAZO = 'x|';
+
+/** Lo que se anota en la publicación cuando Mercado Libre rechaza un descuento: «x|<descuento>|<día>». */
+export const rechazoDe = (firma: string, hoy: string) => `${MARCA_RECHAZO}${firma}|${hoy}`;
+export const esRechazo = (ultima: string | null | undefined) => !!ultima && ultima.startsWith(MARCA_RECHAZO);
+
+function rechazoVigente(ultima: string | null, firma: string, hoy: string): boolean {
+    if (!esRechazo(ultima)) return false;
+    const resto = ultima!.slice(MARCA_RECHAZO.length);
+    if (!resto.startsWith(firma + '|')) return false; // otro descuento: se vuelve a intentar
+    const dia = resto.slice(firma.length + 1);
+    const dias = (Date.parse(`${hoy}T00:00:00Z`) - Date.parse(`${dia}T00:00:00Z`)) / 86_400_000;
+    return Number.isFinite(dias) && dias < DIAS_SIN_REINTENTO;
+}
+
 export function planDeDescuentoMeli(e: EntradaDePlanMeli): PlanMeli {
-    const hayPrevia = !!(e.ultima && e.ultima.trim());
+    // Un rechazo anotado no es una promoción puesta en Mercado Libre: no hay nada que quitar.
+    const hayPrevia = !!(e.ultima && e.ultima.trim()) && !esRechazo(e.ultima);
     if (!e.promo) return hayPrevia ? { tipo: 'quitar' } : { tipo: 'nada' };
 
     const { salePrice } = e.promo;
@@ -72,5 +91,6 @@ export function planDeDescuentoMeli(e: EntradaDePlanMeli): PlanMeli {
 
     const firma = firmaDeTramo(salePrice, tramo);
     if (e.ultima === firma) return { tipo: 'nada' };
+    if (rechazoVigente(e.ultima, firma, e.hoy)) return { tipo: 'nada', rechazada: true };
     return { tipo: 'poner', quitarAntes: hayPrevia, dealPrice: salePrice, desde: tramo.desde, hasta: tramo.hasta, firma };
 }

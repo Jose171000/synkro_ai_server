@@ -184,6 +184,23 @@ describe('aprobar y rechazar', () => {
             expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'woocommerce', connectionId: 'cw1' }));
         });
 
+        it('retirar el descuento GENERAL en Mercado Libre limpia el del producto y el de la cuenta, y se manda', async () => {
+            const enlace: any = { id: 'lm', salePriceOverride: 165, saleStartOverride: '2026-11-14', saleEndOverride: '2026-11-24' };
+            const { service, productos, enlaces, cola } = construir({ solicitud: promoFa({ marketplace: 'mercadolibre', connection: { id: 'cm1' }, newValue: 'quitar|g' }), producto: { ...producto, salePrice: 165 }, enlace });
+            await service.approve('f1', SCOPE);
+            expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ salePrice: null, saleStartDate: null, saleEndDate: null }));
+            expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: null, saleStartOverride: null, saleEndOverride: null }));
+            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'mercadolibre', connectionId: 'cm1' }));
+        });
+
+        it('retirar el descuento general en Falabella limpia el del producto y no toca la oferta propia de la cuenta (la conserva el Seller Center)', async () => {
+            const { service, productos, enlaces, cola } = construir({ solicitud: promoFa({ newValue: 'quitar|g' }), producto: { ...producto, salePrice: 165 }, enlace: { id: 'lf', salePriceOverride: 165 } });
+            await service.approve('f1', SCOPE);
+            expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ salePrice: null }));
+            expect(enlaces.save).not.toHaveBeenCalled();
+            expect(cola.add).not.toHaveBeenCalled();
+        });
+
         it('quitar el descuento en Mercado Libre sí se manda (el canal lo quita solo); en Falabella no', async () => {
             const enlace: any = { id: 'lm', salePriceOverride: 70 };
             const { service, enlaces, cola, repo } = construir({ solicitud: promoFa({ marketplace: 'mercadolibre', connection: { id: 'cm1' }, newValue: 'quitar' }), producto: { ...producto }, enlace });

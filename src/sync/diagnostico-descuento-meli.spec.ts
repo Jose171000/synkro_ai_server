@@ -27,15 +27,21 @@ describe('diagnóstico de descuento de Mercado Libre (solo lectura)', () => {
         expect(r.hallazgos).toEqual([expect.stringMatching(/No se ve un motivo claro/)]);
     });
 
-    it('señala reputación que no es verde, exposición gratuita, sin ventas y estado no activo', async () => {
-        const svc = armar({ ...bueno, status: 'paused', listing_type_id: 'free', sold_quantity: 0, condition: 'used' }, { id: 999, seller_reputation: { level_id: '3_yellow' } });
+    it('señala reputación baja (roja), exposición gratuita y estado no activo', async () => {
+        const svc = armar({ ...bueno, status: 'paused', listing_type_id: 'free', condition: 'used' }, { id: 999, seller_reputation: { level_id: '1_red' } });
         const r = await svc.diagnosticoDeDescuentoMeli(SCOPE, 'l1');
         const texto = r.hallazgos.join(' | ');
-        expect(texto).toMatch(/3_yellow/);
+        expect(texto).toMatch(/1_red/);
+        expect(texto).toMatch(/motivo más probable/);
         expect(texto).toMatch(/estado «paused»/);
         expect(texto).toMatch(/condición es «used»/);
         expect(texto).toMatch(/exposición gratuita/);
-        expect(texto).toMatch(/no tiene ventas/);
+    });
+
+    it('la reputación amarilla y la falta de ventas NO se marcan como problema (Mercado Libre aceptó descuentos así)', async () => {
+        const svc = armar({ ...bueno, sold_quantity: 0 }, { id: 999, seller_reputation: { level_id: '3_yellow' } });
+        const r = await svc.diagnosticoDeDescuentoMeli(SCOPE, 'l1');
+        expect(r.hallazgos).toEqual([expect.stringMatching(/No se ve un motivo claro/)]);
     });
 
     it('una cuenta sin nivel de reputación se avisa', async () => {

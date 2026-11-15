@@ -6,7 +6,7 @@ import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './rip
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
-import { maxDiasPromoMeli, planDeDescuentoMeli, promosMeliActivas } from './meli/descuento-meli';
+import { maxDiasPromoMeli, planDeDescuentoMeli, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
 import { calcularDescuento, hoyEnLima } from './descuento-general';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
@@ -122,6 +122,9 @@ export interface OpcionesDeEnvio {
 }
 
 const sku0 = (f: { SellerSku?: string }) => String(f.SellerSku ?? '').trim();
+
+/** Lo que se muestra cuando Mercado Libre responde que la publicación no es candidata a un descuento. */
+const MENSAJE_DESCUENTO_RECHAZADO_MELI = 'Descuento no aplicado en Mercado Libre: respondió que esta publicación no es candidata a descuentos (suele deberse a la reputación de la cuenta). Se vuelve a intentar en unos días.';
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -3123,12 +3126,18 @@ export class SyncService implements OnModuleInit {
      */
     private async sincronizarDescuentoMeli(accessToken: string, link: ListingLink, product: Product, precio: number): Promise<void> {
         if (!promosMeliActivas() || !link.externalId) return;
+        let firmaIntentada: string | null = null;
         try {
             const precios = preciosParaCanal(product, link);
             // Lo que Mercado Libre ya muestra por su cuenta no es del descuento general: no se toca.
             const promo = precios.origen.promo === 'canal' ? null : precios.promo;
             const plan = planDeDescuentoMeli({ precio, promo, ultima: link.lastPromoSynced, hoy: hoyEnLima(), maxDias: maxDiasPromoMeli() });
-            if (plan.tipo === 'nada') return;
+            if (plan.tipo === 'nada') {
+                // Mercado Libre ya rechazó este descuento: el aviso se mantiene a la vista aunque el envío de stock y precio lo haya limpiado.
+                if (plan.rechazada) link.lastError = MENSAJE_DESCUENTO_RECHAZADO_MELI;
+                return;
+            }
+            if (plan.tipo === 'poner') firmaIntentada = plan.firma;
 
             if (plan.tipo === 'poner' && link.variationId) {
                 // Las variantes comparten la publicación: si otra ya tiene este mismo tramo, no se repite.
@@ -3147,7 +3156,13 @@ export class SyncService implements OnModuleInit {
             }
         } catch (error: any) {
             console.warn(`[Sync] Descuento de Mercado Libre (${link.externalId}): ${error?.message}`);
-            link.lastError = `Descuento no aplicado en Mercado Libre: ${this.describeApiError(error)}`.slice(0, 300);
+            if (/No candidates found/i.test(String(error?.message ?? error?.response?.data?.message ?? ''))) {
+                // La publicación no es candidata a descuentos: se anota para no insistir cada día.
+                if (firmaIntentada) link.lastPromoSynced = rechazoDe(firmaIntentada, hoyEnLima());
+                link.lastError = MENSAJE_DESCUENTO_RECHAZADO_MELI;
+            } else {
+                link.lastError = `Descuento no aplicado en Mercado Libre: ${this.describeApiError(error)}`.slice(0, 300);
+            }
         }
     }
 
@@ -5204,7 +5219,10 @@ export class SyncService implements OnModuleInit {
                 }
             }
             // Sin marca «general»: lo aprobado queda solo en la publicación de esa cuenta y no se filtra a los demás canales.
-            const nuevo = valorDeDescuento(quitarGeneral ? { precio: null } : { precio: Number(dto.salePrice), desde: inicio, hasta: fin });
+            // Poner un descuento queda solo en la cuenta aprobada; quitarlo es del descuento general (también limpia el del producto).
+            const nuevo = quitarGeneral
+                ? conMarcaGeneral(valorDeDescuento({ precio: null }))
+                : valorDeDescuento({ precio: Number(dto.salePrice), desde: inicio, hasta: fin });
             for (const enlace of cuentasConRevision) {
                 if (!enlace.connection) continue;
                 await this.changeRequests.createPromoRequest(scope, product, {
@@ -5353,12 +5371,11 @@ export class SyncService implements OnModuleInit {
         const rep = vendedor?.seller_reputation ?? {};
         const nivel: string | null = rep.level_id ?? null;
         const hallazgos: string[] = [];
-        if (!nivel) hallazgos.push('La cuenta no tiene nivel de reputación (Mercado Libre pide reputación verde para los descuentos).');
-        else if (!/green/i.test(nivel)) hallazgos.push(`La reputación de la cuenta es «${nivel}»: Mercado Libre pide reputación verde para los descuentos.`);
+        if (!nivel) hallazgos.push('La cuenta no tiene nivel de reputación: Mercado Libre podría no admitir descuentos.');
+        else if (/red|orange/i.test(nivel)) hallazgos.push(`La reputación de la cuenta es «${nivel}» (baja): es el motivo más probable del rechazo. En otra cuenta con reputación amarilla sí se aceptó un descuento.`);
         if (item.status !== 'active') hallazgos.push(`La publicación está en estado «${item.status}»: debe estar activa.`);
         if (item.condition !== 'new') hallazgos.push(`La condición es «${item.condition}»: debe ser nueva.`);
         if (item.listing_type_id === 'free') hallazgos.push('La publicación tiene exposición gratuita: no admite descuentos.');
-        if (!(Number(item.sold_quantity) > 0)) hallazgos.push('La publicación no tiene ventas: Mercado Libre puede exigir al menos una venta al precio actual.');
         if (!hallazgos.length) hallazgos.push('No se ve un motivo claro en los datos de la publicación ni de la cuenta; puede que Mercado Libre no la haya incluido como candidata.');
 
         return {

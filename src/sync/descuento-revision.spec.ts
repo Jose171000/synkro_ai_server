@@ -79,7 +79,8 @@ describe('descuento general con el modo revisión', () => {
         const { svc } = armar([enlace('mercadolibre', 'cm', { salePrice: 165 }), enlace('woocommerce', 'cw')]);
         const r = await svc.setPromo(SCOPE, 'p1', { salePrice: null });
         expect(svc.changeRequests.createPromoRequest).toHaveBeenCalledTimes(2);
-        expect(svc.changeRequests.createPromoRequest.mock.calls[0][2].next).toBe('quitar');
+        // El retiro es del descuento general: va con la marca «|g» para que al aprobarlo también se limpie el del producto.
+        expect(svc.changeRequests.createPromoRequest.mock.calls[0][2].next).toBe('quitar|g');
         expect(r.message).toMatch(/Quitar el descuento quedó en revisión/);
     });
 

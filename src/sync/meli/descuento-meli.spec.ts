@@ -1,4 +1,4 @@
-import { planDeDescuentoMeli, maxDiasPromoMeli, promosMeliActivas } from './descuento-meli';
+import { planDeDescuentoMeli, maxDiasPromoMeli, promosMeliActivas, rechazoDe } from './descuento-meli';
 
 const base = { precio: 265, ultima: null as string | null, hoy: '2026-11-14', maxDias: 14 };
 const promo = (salePrice: number, start: string | null, end: string | null) => ({ salePrice, start, end });
@@ -48,6 +48,31 @@ describe('planDeDescuentoMeli', () => {
 
     it('sin fecha de fin no pone nada', () => {
         expect(planDeDescuentoMeli({ ...base, promo: promo(225, null, null) })).toMatchObject({ tipo: 'omitir' });
+    });
+});
+
+describe('rechazo recordado de Mercado Libre', () => {
+    const promoLarga = promo(225, '2026-11-14', '2027-11-13');
+    const firma = '225|2026-11-14|2026-11-27';
+
+    it('un descuento rechazado hace poco no se vuelve a pedir y se avisa', () => {
+        const p = planDeDescuentoMeli({ ...base, promo: promoLarga, ultima: rechazoDe(firma, '2026-11-14') });
+        expect(p).toEqual({ tipo: 'nada', rechazada: true });
+        expect(planDeDescuentoMeli({ ...base, hoy: '2026-11-20', promo: promoLarga, ultima: rechazoDe(firma, '2026-11-14') })).toEqual({ tipo: 'nada', rechazada: true });
+    });
+
+    it('pasados 7 días se vuelve a intentar, sin intentar quitar nada (no había promoción puesta)', () => {
+        const p = planDeDescuentoMeli({ ...base, hoy: '2026-11-21', promo: promoLarga, ultima: rechazoDe(firma, '2026-11-14') });
+        expect(p).toMatchObject({ tipo: 'poner', quitarAntes: false, firma });
+    });
+
+    it('si el descuento cambió, se vuelve a intentar enseguida', () => {
+        const p = planDeDescuentoMeli({ ...base, promo: promo(200, '2026-11-14', '2027-11-13'), ultima: rechazoDe(firma, '2026-11-14') });
+        expect(p).toMatchObject({ tipo: 'poner', quitarAntes: false, dealPrice: 200 });
+    });
+
+    it('si el descuento se quitó, un rechazo anotado no genera un borrado', () => {
+        expect(planDeDescuentoMeli({ ...base, promo: null, ultima: rechazoDe(firma, '2026-11-14') })).toEqual({ tipo: 'nada' });
     });
 });
 
