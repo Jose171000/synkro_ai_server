@@ -6,7 +6,7 @@ import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './rip
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
-import { maxDiasPromoMeli, planDeDescuentoMeli, precioDeLaPromocionActiva, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
+import { esRechazo, maxDiasPromoMeli, planDeDescuentoMeli, precioDeLaPromocionActiva, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
 import { calcularDescuento, hoyEnLima } from './descuento-general';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
@@ -3139,6 +3139,8 @@ export class SyncService implements OnModuleInit {
             if (plan.tipo === 'nada') {
                 // Mercado Libre ya rechazó este descuento: el aviso se mantiene a la vista aunque el envío de stock y precio lo haya limpiado.
                 if (plan.rechazada) link.lastError = MENSAJE_DESCUENTO_RECHAZADO_MELI;
+                // Sin descuento que aplicar, un rechazo anotado ya no tiene sentido: se limpia (y con él, el aviso).
+                else if (!promo && esRechazo(link.lastPromoSynced)) link.lastPromoSynced = null;
                 // La promoción ya puesta sigue en curso: se anota su precio (el tablero lo muestra tachado) sin depender de la lectura del listado.
                 else {
                     const enCurso = precioDeLaPromocionActiva(link.lastPromoSynced, hoyEnLima());
@@ -4794,9 +4796,10 @@ export class SyncService implements OnModuleInit {
         enlace.variation = fila.variation;
         enlace.qualityScore = fila.quality;
         enlace.lastSyncedAt = new Date();
+        // El aviso de «no es candidata a descuentos» no se borra con la lectura: sigue a la vista hasta que se vuelva a intentar o se quite el descuento.
         enlace.lastError = fila.status === 'error'
             ? 'Mercado Libre bloqueó o suspendió la publicación.'
-            : (null as any);
+            : esRechazo(enlace.lastPromoSynced) ? MENSAJE_DESCUENTO_RECHAZADO_MELI : (null as any);
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -66,6 +66,34 @@ describe('descuento de Mercado Libre rechazado por «No candidates found»', () 
         expect(enlace.salePrice).toBe(165);
     });
 
+    it('la lectura del listado no borra el aviso de «no es candidata a descuentos» mientras el rechazo siga anotado', () => {
+        const { svc, enlace } = armar();
+        enlace.lastPromoSynced = `x|165|${enDias(-1)}|${enDias(9)}|${enDias(0)}`;
+        const fila = { externalId: 'MPE1', variationId: null, permalink: null, status: 'published', stock: 10, regularPrice: 350, salePrice: null, imageUrl: null, variation: null, quality: null };
+        svc.aplicarFilaMeli(enlace, fila);
+        expect(enlace.lastError).toMatch(/no es candidata a descuentos/);
+        // Sin rechazo anotado, la lectura limpia el error como siempre.
+        enlace.lastPromoSynced = null;
+        svc.aplicarFilaMeli(enlace, fila);
+        expect(enlace.lastError).toBeNull();
+        // Un bloqueo real de la publicación sigue mostrándose.
+        svc.aplicarFilaMeli(enlace, { ...fila, status: 'error' });
+        expect(enlace.lastError).toMatch(/bloqueó o suspendió/);
+    });
+
+    it('si el descuento se quita, el rechazo anotado y su aviso se limpian en el siguiente envío', async () => {
+        const { svc, producto, enlace } = armar();
+        svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('No candidates found for item'));
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.lastError).toMatch(/no es candidata/);
+        producto.salePrice = null;
+        enlace.lastError = null;
+        await svc.sincronizarDescuentoMeli('tok', enlace, producto, 350);
+        expect(enlace.lastPromoSynced).toBeNull();
+        expect(enlace.lastError).toBeNull();
+        expect(svc.meliApi.quitarDescuento).not.toHaveBeenCalled();
+    });
+
     it('otro error de Mercado Libre no se anota como rechazo: se reintenta y se muestra tal cual', async () => {
         const { svc, producto, enlace } = armar();
         svc.meliApi.aplicarDescuento.mockRejectedValueOnce(new Error('timeout'));
