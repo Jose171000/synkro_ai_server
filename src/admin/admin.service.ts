@@ -13,6 +13,9 @@ import { ListingLink } from '../sync/entities/listing-link.entity';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
 import { ClientProfile } from './entities/client-profile.entity';
 import { Payment } from './entities/payment.entity';
+import { MonthlyBilling } from './entities/monthly-billing.entity';
+import { ProductGroup } from '../products/entities/product-group.entity';
+import { MarketplaceFeed } from '../sync/falabella/entities/marketplace-feed.entity';
 import { UpdateClientProfileDto } from './dto/update-client-profile.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { Store } from '../stores/entities/store.entity';
@@ -266,11 +269,14 @@ export class AdminService implements OnModuleInit {
 
             // Primero lo que referencia al usuario sin borrado en cascada
             await manager.delete(Payment, { client: { id: userId } });
+            await manager.delete(MonthlyBilling, { client: { id: userId } });
+            await manager.delete(MarketplaceFeed, { owner: { id: userId } });
             await manager.delete(MarketplaceOrder, { owner: { id: userId } });
             await manager.delete(MarketplaceConnection, { owner: { id: userId } });
             await manager.delete(ClientProfile, { user: { id: userId } });
             // Los productos arrastran sus imágenes y publicaciones en cascada
             await manager.delete(Product, { owner: { id: userId } });
+            await manager.delete(ProductGroup, { owner: { id: userId } });
             // El usuario arrastra tokens de sesión y de recuperación
             await manager.delete(User, { id: userId });
         });
