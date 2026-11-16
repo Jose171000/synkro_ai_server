@@ -388,7 +388,7 @@ export class ProductsController {
     description: 'Genera la ficha HTML, la descripción, el título y los atributos que falten de cada producto; un grupo de variantes se regenera una sola vez. No pisa lo que ya tiene valor ni envía nada a los canales. Corre en segundo plano: consulta el avance con GET ai-batch/:id. Hay un tope por tanda.',
   })
   async regenerateMany(@Body() dto: RegeneracionMasivaDto, @Req() req) {
-    const lote = await this.regeneracionMasiva.iniciar({ userId: req.user.id, storeId: req.store.storeId }, dto.productIds, { tone: dto.tone, marketplaces: dto.targetMarketplaces });
+    const lote = await this.regeneracionMasiva.iniciar({ userId: req.user.id, storeId: req.store.storeId }, dto.productIds, { tone: dto.tone, marketplaces: dto.targetMarketplaces, sobrescribir: dto.sobrescribir === true });
     return this.regeneracionMasiva.estado({ userId: req.user.id, storeId: req.store.storeId }, lote.id);
   }
 

@@ -75,7 +75,7 @@ export class RegeneracionMasivaService {
     ) {}
 
     /** Prepara la tanda y la deja corriendo en segundo plano. Devuelve enseguida con todos «en cola». */
-    async iniciar(ambito: Ambito, productIds: string[], opciones: { tone?: string; marketplaces?: string[] } = {}): Promise<LoteDeRegeneracion> {
+    async iniciar(ambito: Ambito, productIds: string[], opciones: { tone?: string; marketplaces?: string[]; sobrescribir?: boolean } = {}): Promise<LoteDeRegeneracion> {
         const ids = [...new Set((productIds ?? []).filter(Boolean))];
         if (!ids.length) throw new BadRequestException('Selecciona al menos un producto.');
 
@@ -136,7 +136,7 @@ export class RegeneracionMasivaService {
         return { ...lote, items: lote.items.map((i) => ({ ...i })), total: lote.items.length, terminados, terminado: terminados === lote.items.length };
     }
 
-    private async ejecutar(lote: LoteDeRegeneracion, opciones: { tone?: string; marketplaces?: string[] }): Promise<void> {
+    private async ejecutar(lote: LoteDeRegeneracion, opciones: { tone?: string; marketplaces?: string[]; sobrescribir?: boolean }): Promise<void> {
         const ambito = { userId: lote.userId, storeId: lote.storeId };
         try {
             await Promise.all(lote.items.map(async (item) => {
@@ -144,10 +144,13 @@ export class RegeneracionMasivaService {
                 try {
                     await this.marcar(lote, item, 'generando', null);
                     const r = item.grupoId
-                        ? await this.groups.regenerarContenido(item.grupoId, { tone: opciones.tone, marketplaces: opciones.marketplaces, soloVacio: true }, ambito)
-                        : await this.products.generateAIContent(item.productId, lote.userId, { tone: opciones.tone, marketplaces: opciones.marketplaces, soloVacio: true }, lote.storeId);
+                        ? await this.groups.regenerarContenido(item.grupoId, { tone: opciones.tone, marketplaces: opciones.marketplaces, soloVacio: !opciones.sobrescribir }, ambito)
+                        : await this.products.generateAIContent(item.productId, lote.userId, { tone: opciones.tone, marketplaces: opciones.marketplaces, soloVacio: !opciones.sobrescribir }, lote.storeId);
                     const llenado: string[] = (r as any)?.llenado ?? [];
-                    if (llenado.length) {
+                    if (opciones.sobrescribir) {
+                        const alcance = item.grupoId && item.variantes > 1 ? ` en las ${item.variantes} variantes` : '';
+                        await this.marcar(lote, item, 'listo', `Rehice el contenido${alcance}.`);
+                    } else if (llenado.length) {
                         const alcance = item.grupoId && item.variantes > 1 ? ` (en las ${item.variantes} variantes)` : '';
                         await this.marcar(lote, item, 'listo', `Llené: ${llenado.join(', ')}${alcance}.`);
                     } else {

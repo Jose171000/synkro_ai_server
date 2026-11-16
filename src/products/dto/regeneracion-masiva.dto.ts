@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsOptional, IsString } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsOptional, IsString, IsBoolean } from 'class-validator';
 
 export class RegeneracionMasivaDto {
     @ApiProperty({ description: 'Productos seleccionados (un grupo de variantes cuenta como uno)', type: [String] })
@@ -19,4 +19,9 @@ export class RegeneracionMasivaDto {
     @IsOptional()
     @IsString()
     tone?: string;
+
+    @ApiPropertyOptional({ description: 'true: la IA rehace también lo que ya tiene valor (título, descripción, ficha HTML, atributos). Por defecto solo llena lo vacío.' })
+    @IsOptional()
+    @IsBoolean()
+    sobrescribir?: boolean;
 }
