@@ -274,7 +274,12 @@ export class VariantCompatService {
             }
             if (canal === 'mercadolibre') {
                 const ejes = await this.sync.ejesDeVariacionMeli(categoryId);
-                return { canal, categoryId, admite: ejes.length > 0, ejes };
+                // Datos de color o talla con lista cerrada que no son el eje («Color principal»): Mercado Libre rechaza un color que no esté en su lista.
+                let listas: { id: string; label: string; options: string[] }[] = [];
+                // Sin esa lista el canal se revisa igual, solo con los ejes.
+                try { listas = await this.sync.listasCerradasMeli(categoryId); } catch { /* se sigue sin extras */ }
+                const extras = listas.filter((l) => !ejes.some((e) => e.id === l.id) && ['color', 'talla'].includes(claseDeEje(l.label || l.id)));
+                return { canal, categoryId, admite: ejes.length > 0, ejes, ...(extras.length ? { extras } : {}) };
             }
         } catch (error: any) {
             this.logger.warn(`No se pudo saber qué variantes admite la categoría ${categoryId} de ${canal}: ${error?.message}`);

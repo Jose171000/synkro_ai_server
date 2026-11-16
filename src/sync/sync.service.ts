@@ -1060,6 +1060,19 @@ export class SyncService implements OnModuleInit {
             });
     }
 
+    /** Los atributos de lista cerrada de una categoría de Mercado Libre, con sus opciones (color principal, material…). Solo consulta. */
+    async listasCerradasMeli(categoryId: string): Promise<{ id: string; label: string; options: string[] }[]> {
+        const atributos = await this.meliApi.getCategoryAttributes(categoryId);
+        return (atributos ?? [])
+            .filter((a: any) => a?.value_type === 'list')
+            .map((a: any) => ({
+                id: String(a.id),
+                label: String(a.name ?? a.id),
+                options: (Array.isArray(a?.values) ? a.values : []).map((v: any) => String(v?.name ?? '')).filter(Boolean),
+            }))
+            .filter((a) => a.options.length);
+    }
+
     /** De cada categoría de las publicaciones, qué atributos admite Mercado Libre como variación (una consulta por categoría). */
     private async atributosDeVariacionMeli(items: any[]): Promise<Map<string, Set<string>>> {
         const salida = new Map<string, Set<string>>();

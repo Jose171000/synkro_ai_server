@@ -158,7 +158,11 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
     const derivadosSinOpcion: string[] = [];
     for (const par of mapeo) {
         const atributo = info.ejes.find((a) => a.id === par.atributo);
-        if (!atributo?.options?.length) continue;
+        if (!atributo) continue;
+        const hayLista = !!atributo.options?.length;
+        // Un canal puede dejar libre el eje (Mercado Libre: «Color») y cerrar con lista otro dato de la misma clase («Color principal»).
+        const extrasDelEje = (info.extras ?? []).filter((x) => x.id !== atributo.id && x.options?.length && claseDeEje(x.label || x.id) === claseDeEje(par.eje));
+        if (!hayLista && !extrasDelEje.length) continue;
         const valores = ejesDelProducto.find((e) => e.name === par.eje)?.values ?? [];
         const guardados = info.ajustes?.[claseDeEje(par.eje)] ?? {};
         // La misma regla que usa el canal al publicar (valorConAjuste): el ajuste de la persona si es válido en esta lista, el ajuste llevado
@@ -179,11 +183,11 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
             const cercana = automatico(v, opciones);
             return cercana ? { opcion: cercana, estado: 'aproximado' } : { opcion: null, estado: 'sin' };
         };
-        const opcionDe = (v: string): string | null => resolver(v, atributo.options!).opcion;
+        const opcionDe = (v: string): string | null => (hayLista ? resolver(v, atributo.options!).opcion : v);
         const limpio = (e: EjeDeCanal) => String(e.label || e.id).replace(/s*variant$/i, '').trim();
         const unicos = [...new Set(valores.map((x) => String(x).trim()).filter(Boolean))];
-        detalle.push({ eje: par.eje, atributo: limpio(atributo), atributoId: atributo.id, derivado: false, opciones: atributo.options, items: unicos.map((v) => ({ valor: v, ...resolver(v, atributo.options!) })) });
-        for (const extra of (info.extras ?? []).filter((x) => x.id !== atributo.id && x.options?.length && claseDeEje(x.label || x.id) === claseDeEje(par.eje))) {
+        if (hayLista) detalle.push({ eje: par.eje, atributo: limpio(atributo), atributoId: atributo.id, derivado: false, opciones: atributo.options!, items: unicos.map((v) => ({ valor: v, ...resolver(v, atributo.options!) })) });
+        for (const extra of extrasDelEje) {
             const especificos = info.ajustes?.[`${claseDeEje(par.eje)}@${normalizar(extra.label || extra.id)}`];
             const items = unicos.map((v) => ({ valor: v, ...resolver(v, extra.options!, especificos) }));
             detalle.push({ eje: par.eje, atributo: limpio(extra), atributoId: extra.id, derivado: true, claveDeAjuste: `${claseDeEje(par.eje)}@${normalizar(extra.label || extra.id)}`, opciones: extra.options!, items });
@@ -192,6 +196,7 @@ export function revisarCompatibilidad(ejes: EjeSynkro[], info: InfoVariantesDeCa
             if (sinOpcion.length) derivadosSinOpcion.push(`En ${nombreDelCanal}, «${limpio(extra)}» no tiene opción para ${lista(sinOpcion)} (${par.eje}). Elígela una vez para que todas las tallas de ese color salgan iguales.`);
         }
 
+        if (!hayLista) continue;
         const malos = valores.filter((v) => opcionDe(v) === null);
         if (malos.length) sinEquivalente.push({ eje: par.eje, valores: malos });
         const porOpcion = new Map<string, string[]>();
