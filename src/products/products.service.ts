@@ -134,6 +134,10 @@ export class ProductsService {
     private static readonly CON_ERROR = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l."syncStatus" = 'error')`;
     /** El producto tiene una publicación real en ese canal (no una que se quitó). Es lo que filtra «Todos los canales». */
     private static readonly EN_CANAL = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l.marketplace = :mp AND l."syncStatus" <> 'removed')`;
+    /** Sin ninguna foto cargada en Synkro: ningún canal puede mostrar lo que nunca recibió. */
+    private static readonly SIN_FOTOS = `NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = {p}.id)`;
+    /** Falabella rechazó la ficha por sus imágenes («Images Missing»): es lo único a lo que se le reenvían las fotos. */
+    private static readonly FALTA_IMAGEN = `EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = {p}.id AND l.marketplace = 'falabella' AND l."syncStatus" = 'error' AND l."lastError" ILIKE '%image%')`;
     private static readonly INCOMPLETO = `(NOT EXISTS (SELECT 1 FROM product_images i WHERE i."productId" = {p}.id) OR {p}.price IS NULL OR COALESCE(TRIM({p}.description), '') = '' OR ${ProductsService.SIN_CATEGORIA})`;
 
     /**
@@ -154,6 +158,8 @@ export class ProductsService {
             case 'sin-publicar': return this.conVariantes(ProductsService.SIN_PUBLICAR);
             case 'con-error': return this.conVariantes(ProductsService.CON_ERROR);
             case 'incompletos': return this.conVariantes(ProductsService.INCOMPLETO);
+            case 'sin-fotos': return this.conVariantes(ProductsService.SIN_FOTOS);
+            case 'falta-imagen': return this.conVariantes(ProductsService.FALTA_IMAGEN);
             default: return null;
         }
     }
@@ -167,9 +173,11 @@ export class ProductsService {
             .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('sin-publicar')})`, 'sinPublicar')
             .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('con-error')})`, 'conError')
             .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('incompletos')})`, 'incompletos')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('sin-fotos')})`, 'sinFotos')
+            .addSelect(`COUNT(*) FILTER (WHERE ${this.filtroDeEstado('falta-imagen')})`, 'faltaImagen')
             .getRawOne();
         const n = (v: any) => Number(v ?? 0);
-        return { total: n(fila?.total), sinCategoria: n(fila?.sinCategoria), sinPublicar: n(fila?.sinPublicar), conError: n(fila?.conError), incompletos: n(fila?.incompletos) };
+        return { total: n(fila?.total), sinCategoria: n(fila?.sinCategoria), sinPublicar: n(fila?.sinPublicar), conError: n(fila?.conError), incompletos: n(fila?.incompletos), sinFotos: n(fila?.sinFotos), faltaImagen: n(fila?.faltaImagen) };
     }
 
     async findAll(scope: SkuScope, query: QueryProductsDto) {

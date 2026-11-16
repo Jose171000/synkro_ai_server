@@ -63,10 +63,10 @@ export class QueryProductsDto {
     @IsUUID()
     groupId?: string;
 
-    @ApiPropertyOptional({ description: 'Situación del producto', enum: ['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'] })
+    @ApiPropertyOptional({ description: 'Situación del producto', enum: ['sin-categoria', 'sin-publicar', 'con-error', 'incompletos', 'sin-fotos', 'falta-imagen'] })
     @IsOptional()
-    @IsIn(['sin-categoria', 'sin-publicar', 'con-error', 'incompletos'])
-    estado?: 'sin-categoria' | 'sin-publicar' | 'con-error' | 'incompletos';
+    @IsIn(['sin-categoria', 'sin-publicar', 'con-error', 'incompletos', 'sin-fotos', 'falta-imagen'])
+    estado?: 'sin-categoria' | 'sin-publicar' | 'con-error' | 'incompletos' | 'sin-fotos' | 'falta-imagen';
 
     @ApiPropertyOptional({
         description: 'Campo por el que ordenar',

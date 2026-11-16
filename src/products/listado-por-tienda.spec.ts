@@ -90,7 +90,11 @@ describe('lista de productos por tienda', () => {
     it('el resumen cuenta con las mismas condiciones y devuelve números', async () => {
         const { servicio, qb } = construir();
         const r = await servicio.resumen({ userId: 'u1', storeId: 's1' });
-        expect(r).toEqual({ total: 10, sinCategoria: 3, sinPublicar: 4, conError: 1, incompletos: 5 });
+        // Las dos últimas cuentas (sin fotos, falta imagen en Falabella) no están en la fila simulada: salen en 0.
+        expect(r).toEqual({ total: 10, sinCategoria: 3, sinPublicar: 4, conError: 1, incompletos: 5, sinFotos: 0, faltaImagen: 0 });
+        const sqlFotos = qb.addSelect.mock.calls.map((c: any[]) => c[0]).join(' ');
+        expect(sqlFotos).toContain('product_images');
+        expect(sqlFotos).toContain('%image%');
         const sql = qb.addSelect.mock.calls.map((c: any[]) => c[0]).join(' ');
         expect(sql).toContain('falabella_category_id');
         expect(sql).toContain('listing_links');

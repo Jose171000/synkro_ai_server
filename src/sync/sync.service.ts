@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { planearGruposDeMeli } from './meli/variantes-meli';
@@ -13,6 +13,7 @@ import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { valorConAjuste } from '../products/ajustes-de-canal';
 import { mencionaOtroCanal } from '../ai/otro-canal';
+import { MAX_PRODUCTOS_POR_PETICION, anotarReenvio, decidirReenvio, segundosParaOtraPeticion } from './falabella/control-de-reenvio-de-fotos';
 import { fusionarAtributos } from './falabella/fusionar-atributos';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
@@ -2556,27 +2557,52 @@ export class SyncService implements OnModuleInit {
      * Vuelve a mandar a Falabella las fotos de fichas que ya existen allí (p. ej. rechazadas por «Images Missing»), sin tocar su estado
      * en Synkro. Solo envía los productos de la tienda con enlace a esa cuenta y con fotos; el resto se devuelve con su motivo.
      */
+    /** Última petición de reenvío de fotos por cuenta de Falabella: entre dos peticiones hay una pausa por los límites de llamadas de Falabella. */
+    private readonly ultimoReenvioDeFotos = new Map<string, number>();
+
     async reenviarFotosAFalabella(scope: SyncScope, connectionId: string | undefined, productIds: string[]) {
         if (!productIds?.length) throw new BadRequestException('Selecciona al menos un producto.');
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         const credentials = this.credentialsOf(connection);
+        // Control: Falabella limita las llamadas de toda la cuenta; reenviar a cada momento no acelera nada y puede frenar el stock y el precio.
+        const espera = segundosParaOtraPeticion(this.ultimoReenvioDeFotos.get(connection.id));
+        if (espera > 0) throw new HttpException(`Ya se mandaron fotos a Falabella hace poco. Espera ${espera} segundos antes de volver a enviar: Falabella limita las llamadas de la cuenta.`, HttpStatus.TOO_MANY_REQUESTS);
+        const excedentes = productIds.slice(MAX_PRODUCTOS_POR_PETICION);
+        productIds = productIds.slice(0, MAX_PRODUCTOS_POR_PETICION);
         const productos = await this.productRepository.find({ where: { id: In(productIds), store: { id: scope.storeId } } as any });
-        const enlaces = new Set(
-            (await this.listingLinkRepository.find({
-                where: { marketplace: 'falabella', connection: { id: connection.id }, product: { id: In(productos.map(p => p.id)) } },
-                relations: { product: true },
-            })).map(l => l.product.id),
-        );
+        const enlacesDeFalabella = await this.listingLinkRepository.find({
+            where: { marketplace: 'falabella', connection: { id: connection.id }, product: { id: In(productos.map(p => p.id)) } },
+            relations: { product: true },
+        });
+        const enlaces = new Set(enlacesDeFalabella.map(l => l.product.id));
+        // Solo a quien Falabella rechazó por sus imágenes: lo demás ya las tiene o las está procesando, y reenviarlas solo gasta llamadas.
+        const faltaImagen = new Set(enlacesDeFalabella.filter(l => l.syncStatus === 'error' && /image/i.test(l.lastError ?? '')).map(l => l.product.id));
         const omitidos: { sku: string; motivo: string }[] = [];
         const paraEnviar: Product[] = [];
         for (const p of productos) {
             if (!enlaces.has(p.id)) omitidos.push({ sku: p.sku, motivo: 'no está enlazado a esta cuenta de Falabella' });
+            else if (!faltaImagen.has(p.id)) omitidos.push({ sku: p.sku, motivo: 'a Falabella no le falta la imagen de este producto (ya las tiene o las está procesando)' });
             else if (!(p.images ?? []).some(i => i?.url)) omitidos.push({ sku: p.sku, motivo: 'no tiene fotos en Synkro' });
-            else paraEnviar.push(p);
+            else {
+                // Espera entre reenvíos del mismo producto y tope de intentos: si con varios no entran, el problema no es de tiempo.
+                const decision = decidirReenvio((p.aiAttributes as any)?._fotosReenvio);
+                if (decision.permitido) paraEnviar.push(p);
+                else omitidos.push({ sku: p.sku, motivo: decision.motivo });
+            }
         }
+        if (excedentes.length) omitidos.push({ sku: `(+${excedentes.length} más)`, motivo: `se aceptan hasta ${MAX_PRODUCTOS_POR_PETICION} productos por envío: vuelve a pedirlo en unos minutos para el resto` });
         // Un envío por cada 100 productos: así un lote grande no se rechaza entero por tamaño.
         for (let i = 0; i < paraEnviar.length; i += 100) {
             await this.enviarImagenesAFalabella(connection.id, credentials, scope.userId, paraEnviar.slice(i, i + 100));
+        }
+        if (paraEnviar.length) {
+            this.ultimoReenvioDeFotos.set(connection.id, Date.now());
+            // Se anota cuándo y cuántas veces, para no repetirlo a cada momento.
+            for (const p of paraEnviar) {
+                const atributos: Record<string, any> = { ...((p.aiAttributes as any) || {}) };
+                atributos._fotosReenvio = anotarReenvio(atributos._fotosReenvio);
+                await this.productRepository.update(p.id, { aiAttributes: atributos } as any);
+            }
         }
         return { enviados: paraEnviar.length, omitidos };
     }
