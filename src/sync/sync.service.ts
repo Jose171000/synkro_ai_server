@@ -3127,8 +3127,8 @@ export class SyncService implements OnModuleInit {
     }
 
     /** Programa el envío de stock y precio (con su descuento) de un producto a una cuenta de un canal. */
-    async programarEnvioDeInventario(userId: string, productId: string, marketplace: string, connectionId: string): Promise<void> {
-        await this.syncQueue.add('inventory', { productId, userId, marketplace, connectionId });
+    async programarEnvioDeInventario(userId: string, productId: string, marketplace: string, connectionId: string, opciones: { conPrecio?: boolean; conStock?: boolean; conDescuento?: boolean; descuento?: { precio: number | null; desde?: string | null; hasta?: string | null } } = {}): Promise<void> {
+        await this.syncQueue.add('inventory', { productId, userId, marketplace, connectionId, ...opciones });
     }
 
     /** Executed by the queue processor: pushes current stock/price to Mercado Libre. */

@@ -9,6 +9,7 @@ import { FalabellaApiService } from './falabella/falabella-api.service';
 import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
 import { SyncScope, SyncService } from './sync.service';
 import { preciosParaCanal } from './precios-por-canal';
+import { ripleyEnviaPrecio, skuPermitidoParaRipley } from './ripley/ripley-oferta';
 import { fechaDeFalabella } from './falabella/falabella-product-xml';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
@@ -22,14 +23,11 @@ const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
 /** Ripley y WooCommerce solo se MUESTRAN en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
 const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley', 'woocommerce'];
 
-/**
- * Cuentas que se editan en el formulario de precios por canal. WooCommerce entra solo con el DESCUENTO propio: al enviar usa siempre el
- * precio del producto, así que un precio propio por cuenta no tendría efecto allí.
- */
-const CANALES_CON_PRECIO_DE_CUENTA = [...CANALES_CON_FICHA, 'woocommerce'];
+/** Cuentas que se editan en el formulario de precios por canal: todas donde el producto puede estar publicado, con el mismo formato. */
+const CANALES_CON_PRECIO_DE_CUENTA = [...CANALES_CON_FICHA, 'woocommerce', 'ripley'];
 
 /** Canales cuyo descuento propio por cuenta se puede fijar desde Synkro. */
-const CANALES_CON_DESCUENTO = ['falabella', 'mercadolibre', 'woocommerce'];
+const CANALES_CON_DESCUENTO = ['falabella', 'mercadolibre', 'woocommerce', 'ripley'];
 
 export interface SheetChannel {
     /** La publicación (para pausarla, reanudarla o quitarla) y si la pausó la persona (no es lo mismo que «sin stock»). */
@@ -359,8 +357,14 @@ export class ProductSheetService {
                 marketplace: lista[0].marketplace,
                 account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
                 canSetSale: CANALES_CON_DESCUENTO.includes(lista[0].marketplace),
-                // WooCommerce no usa un precio propio por cuenta: solo su descuento.
-                canSetPrice: lista[0].marketplace !== 'woocommerce',
+                // Ripley solo recibe precios con el envío habilitado y para los SKU del piloto: se avisa en pantalla en vez de prometer un envío que no sale.
+                avisoDeEnvio: lista[0].marketplace !== 'ripley'
+                    ? null
+                    : !ripleyEnviaPrecio()
+                        ? 'El envío de precios a Ripley está apagado: el precio y el descuento se guardan en Synkro pero no se mandan a Ripley.'
+                        : lista.some((e) => !skuPermitidoParaRipley(e.product?.sku ?? ''))
+                            ? 'Algunas variantes todavía no están habilitadas para enviar a Ripley (piloto): en ellas el cambio se guarda pero no se manda.'
+                            : null,
                 variantes: lista.length,
                 own: comun!.valor,
                 differs: comun!.distintos > 1,
@@ -524,8 +528,7 @@ export class ProductSheetService {
                 throw new BadRequestException('Esa cuenta no tiene este producto publicado.');
             }
             const vacio = (v: unknown) => v === null || v === undefined || v === '';
-            // WooCommerce solo admite el descuento propio: un precio propio no se guarda (al enviar siempre se usa el del producto).
-            const precio = vacio(p.price) || enlace.marketplace === 'woocommerce' ? null : Number(p.price);
+            const precio = vacio(p.price) ? null : Number(p.price);
             // El descuento propio de la cuenta que ya tenga se conserva al guardar el precio (se cambia desde el bloque de descuento).
             const conDescuento = !vacio(p.salePrice);
             const descuento = conDescuento ? Number(p.salePrice) : null;
@@ -552,7 +555,15 @@ export class ProductSheetService {
             await this.links.save(enlace);
             // Si el precio cambió, el siguiente envío debe mandarlo aunque coincida con el último anotado.
             if (enlace.syncStatus === 'published' || enlace.syncStatus === 'paused') {
-                await this.sync.programarEnvioDeInventario(scope.userId, product.id, enlace.marketplace, enlace.connection!.id);
+                if (enlace.marketplace === 'ripley') {
+                    // Ripley manda un solo dato por envío: el precio y el descuento van por separado, cada uno solo si cambió.
+                    if (antes[0] !== despues[0]) await this.sync.programarEnvioDeInventario(scope.userId, product.id, 'ripley', enlace.connection!.id, { conPrecio: true });
+                    if (antes.slice(1).some((v, i) => v !== despues[i + 1])) {
+                        await this.sync.programarEnvioDeInventario(scope.userId, product.id, 'ripley', enlace.connection!.id, { conDescuento: true, descuento: { precio: descuento, desde: inicio, hasta: fin } });
+                    }
+                } else {
+                    await this.sync.programarEnvioDeInventario(scope.userId, product.id, enlace.marketplace, enlace.connection!.id);
+                }
                 enviados.push(enlace.marketplace);
             }
         }

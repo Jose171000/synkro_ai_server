@@ -512,7 +512,9 @@ export class EcommerceSyncService implements OnModuleInit {
         }
         const descuento = conDescuento ? opciones!.descuento! : null;
         // El precio normal de este canal: el fijado para la cuenta o, si no hay, el del producto (la rebaja de Ripley no se toca).
-        const precio = esRipley ? Number(preciosParaCanal(product as any, link as any).price) : (product.price != null ? Number(product.price) : null);
+        // En todos los canales, el precio fijado para esta cuenta; si no hay, el del producto.
+        const precioDeCuenta = preciosParaCanal(product as any, link as any).price;
+        const precio = precioDeCuenta != null ? Number(precioDeCuenta) : null;
 
         // WooCommerce: el descuento general viaja con cada envío. Solo se quita si lo puso Synkro antes (lastPromoSynced):
         // una oferta que la tienda tenga por su cuenta no se borra.
@@ -546,7 +548,7 @@ export class EcommerceSyncService implements OnModuleInit {
             }
             if (conStock) link.lastStockSynced = product.stock;
             if (conPrecio) {
-                link.lastPriceSynced = (esRipley ? precio : product.price) as any;
+                link.lastPriceSynced = precio as any;
                 if (esRipley) link.regularPrice = precio;
             }
             if (descuento) {
