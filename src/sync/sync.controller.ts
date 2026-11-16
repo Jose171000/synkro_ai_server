@@ -16,6 +16,7 @@ import { ConnectRipleyDto } from './dto/connect-ripley.dto';
 import { EcommerceSyncService } from './channels/ecommerce-sync.service';
 import { ECOMMERCE_CHANNELS, EcommerceChannel } from './channels/channel-types';
 import { PublishFalabellaDto } from './dto/publish-falabella.dto';
+import { CompletarCategoriaDeGrupoDto } from './dto/completar-categoria-de-grupo.dto';
 import { SetBrandDto } from './dto/set-brand.dto';
 import { LinkMeliListingDto } from './dto/link-meli-listing.dto';
 import { SaveSheetDto } from './dto/save-sheet.dto';
@@ -373,6 +374,28 @@ export class SyncController {
     })
     searchFalabellaCategories(@Query('search') search: string, @Req() req, @Query('connectionId') connectionId?: string) {
         return this.syncService.searchFalabellaCategories(scopeOf(req), search || '', connectionId);
+    }
+
+    @Get('falabella/groups/:groupId/category-status')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.ver')
+    @ApiOperation({ summary: 'Categoría de Falabella de cada variante de un grupo: cuántas no tienen y si el grupo mezcla categorías (solo lee)' })
+    falabellaGroupCategoryStatus(@Param('groupId') groupId: string, @Req() req) {
+        return this.syncService.estadoDeCategoriaDeGrupo(scopeOf(req), groupId);
+    }
+
+    @Post('falabella/groups/:groupId/complete-category')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Da una categoría de Falabella solo a las variantes del grupo que no tienen ninguna',
+        description: 'Sin categoryId usa la de las variantes ya publicadas. No cambia la categoría de las que ya la tienen y no envía nada a Falabella.',
+    })
+    completeFalabellaGroupCategory(@Param('groupId') groupId: string, @Body() dto: CompletarCategoriaDeGrupoDto, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.completarCategoriaDeGrupo(scopeOf(req), groupId, dto.categoryId, connectionId);
     }
 
     @Post('falabella/categories/refresh')

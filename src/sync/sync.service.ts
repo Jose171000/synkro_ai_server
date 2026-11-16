@@ -13,6 +13,7 @@ import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { valorConAjuste } from '../products/ajustes-de-canal';
 import { mencionaOtroCanal } from '../ai/otro-canal';
+import { estadoDeCategoriaDeGrupo } from './falabella/categoria-de-grupo';
 import { MAX_PRODUCTOS_POR_PETICION, anotarReenvio, decidirReenvio, segundosParaOtraPeticion } from './falabella/control-de-reenvio-de-fotos';
 import { fusionarAtributos } from './falabella/fusionar-atributos';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
@@ -1660,6 +1661,41 @@ export class SyncService implements OnModuleInit {
     async searchFalabellaCategories(scope: SyncScope, term: string, connectionId?: string): Promise<FalabellaCategory[]> {
         const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
         return this.falabellaApi.searchCategories(this.credentialsOf(connection), term);
+    }
+
+    /** La categoría de Falabella de cada variante de un grupo: cuántas no tienen, cuántas usan cada una y cuál conviene dar a las que faltan. Solo consulta. */
+    async estadoDeCategoriaDeGrupo(scope: SyncScope, groupId: string) {
+        const variantes = await this.productRepository.find({ where: { group: { id: groupId }, store: { id: scope.storeId } } as any });
+        if (!variantes.length) throw new NotFoundException('No se encontró ese grupo de variantes en esta tienda.');
+        const enlaces = await this.listingLinkRepository.find({
+            where: { marketplace: 'falabella', product: { id: In(variantes.map(v => v.id)) } },
+            relations: { product: true },
+        });
+        const enFalabella = new Set(enlaces.filter(l => ['published', 'paused', 'pending'].includes(l.syncStatus)).map(l => l.product.id));
+        return estadoDeCategoriaDeGrupo(variantes.map(v => ({ id: v.id, categoria: this.categoriaFalabella(v) != null ? String(this.categoriaFalabella(v)) : null, publicada: enFalabella.has(v.id) })));
+    }
+
+    /**
+     * Da una categoría de Falabella SOLO a las variantes del grupo que no tienen ninguna. No toca las que ya la tienen (las publicadas
+     * conservan la de su ficha en Falabella) ni envía nada al canal.
+     */
+    async completarCategoriaDeGrupo(scope: SyncScope, groupId: string, categoryId?: string, connectionId?: string) {
+        const estado = await this.estadoDeCategoriaDeGrupo(scope, groupId);
+        const categoria = String(categoryId ?? estado.recomendada ?? '').trim();
+        if (!categoria) throw new BadRequestException('No hay una categoría que usar: elígela en «Preparar para Falabella».');
+        if (!estado.sinCategoria.length) return { asignadas: 0, categoryId: categoria };
+        // Una categoría que Falabella ya no tiene como final no sirve: se comprueba contra su árbol actual.
+        const valida = await this.describeFalabellaCategory(scope, categoria, connectionId);
+        if (!valida.valida) throw new BadRequestException(`La categoría ${categoria} ya no existe en Falabella: elige otra en «Preparar para Falabella».`);
+        const sin = await this.productRepository.find({ where: { id: In(estado.sinCategoria), store: { id: scope.storeId } } as any });
+        for (const p of sin) {
+            p.marketplaceIds = { ...((p.marketplaceIds as any) || {}), falabella_category_id: categoria } as any;
+            const atributos: Record<string, any> = { ...((p.aiAttributes as any) || {}) };
+            delete atributos._categoriaDudosa;
+            p.aiAttributes = atributos as any;
+            await this.productRepository.save(p);
+        }
+        return { asignadas: sin.length, categoryId: categoria, ruta: valida.path ?? null };
     }
 
     /** Vuelve a pedir el árbol de categorías a Falabella, saltándose el caché. */

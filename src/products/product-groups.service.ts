@@ -218,6 +218,9 @@ export class ProductGroupsService {
         const delGrupo = sinAtributosDeEje(molde.aiAttributes, vista.axes);
         const titulo = String(molde.aiTitle ?? '').trim();
 
+        // Ninguna variante tenía título de IA: el nombre del grupo es el que escribió la persona o el de la carga, y los canales usan el del grupo
+        // antes que el título de IA. Sin título previo, el de IA pasa a ser el nombre del grupo (el nombre original se conserva en cada variante).
+        const teniaTituloIA = variantes.some((v) => String(v.aiTitle ?? '').trim() !== '');
         let llenado: string[] | undefined;
         for (const v of variantes) {
             const antesDeLaVariante = { aiTitle: v.aiTitle, aiDescription: v.aiDescription, aiKeywords: v.aiKeywords, aiAttributes: v.aiAttributes as any };
@@ -248,8 +251,8 @@ export class ProductGroupsService {
             await this.productRepository.save(v);
         }
         // El título común es también el nombre del grupo: de ahí sale el nombre compartido de las variantes agrupadas.
-        // «Solo lo vacío» no rebautiza un grupo que ya tiene nombre.
-        if (titulo && (!opciones.soloVacio || !String(grupo.name ?? '').trim())) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
+        // «Solo lo vacío» no rebautiza un grupo con nombre cuando ya había un título de IA (que la persona pudo haber revisado).
+        if (titulo && (!opciones.soloVacio || !String(grupo.name ?? '').trim() || !teniaTituloIA)) await this.groupRepository.update(grupoId, { name: titulo.slice(0, 250) } as any);
         return { variantes: variantes.length, titulo: titulo || null, ...(llenado ? { llenado } : {}) };
     }
 

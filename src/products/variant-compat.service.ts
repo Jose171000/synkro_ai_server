@@ -30,6 +30,8 @@ export interface SugerenciaDeAjustes {
 
 /** Lo que un canal rechazó de UNA variante: un dato de lista cerrada cuyo valor no está en la lista, con lo que propone la IA. */
 export interface CorreccionDeVariante {
+    /** La variante no tiene categoría en ese canal: sin ella no hay listas que revisar. */
+    sinCategoria?: boolean;
     items: { atributo: string; valor: string; opciones: string[]; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | 'actual' | null }[];
 }
 
@@ -179,6 +181,7 @@ export class VariantCompatService {
     async sugerirCorreccion(productId: string, marketplace: string, ambito: AmbitoDeGrupo): Promise<CorreccionDeVariante> {
         const canal = String(marketplace ?? '').toLowerCase();
         const product = await this.variante(productId, ambito);
+        if (!categoriasElegidas(product.marketplaceIds as any, product.aiAttributes as any)[canal]) return { sinCategoria: true, items: [] };
         const rechazados = await this.datosRechazados(product, canal, ambito);
         const imagen = product.images?.find((i) => i.url)?.url ?? null;
         const items: CorreccionDeVariante['items'] = [];
