@@ -22,6 +22,12 @@ const CANALES_CON_FICHA = ['falabella', 'mercadolibre'];
 /** Ripley y WooCommerce solo se MUESTRAN en la ficha (lo enviado y su estado): sus precios y su contenido aún no se editan desde aquí. */
 const CANALES_QUE_SE_MUESTRAN = [...CANALES_CON_FICHA, 'ripley', 'woocommerce'];
 
+/**
+ * Cuentas que se editan en el formulario de precios por canal. WooCommerce entra solo con el DESCUENTO propio: al enviar usa siempre el
+ * precio del producto, así que un precio propio por cuenta no tendría efecto allí.
+ */
+const CANALES_CON_PRECIO_DE_CUENTA = [...CANALES_CON_FICHA, 'woocommerce'];
+
 /** Canales cuyo descuento propio por cuenta se puede fijar desde Synkro. */
 const CANALES_CON_DESCUENTO = ['falabella', 'mercadolibre', 'woocommerce'];
 
@@ -339,7 +345,7 @@ export class ProductSheetService {
         const porCuenta = new Map<string, ListingLink[]>();
         for (const e of enlaces) {
             const cuenta = e.connection;
-            if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(e.marketplace)) continue;
+            if (!cuenta || cuenta.store?.id !== scope.storeId || !CANALES_CON_PRECIO_DE_CUENTA.includes(e.marketplace)) continue;
             porCuenta.set(cuenta.id, [...(porCuenta.get(cuenta.id) ?? []), e]);
         }
         const dia = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v).slice(0, 10));
@@ -353,6 +359,8 @@ export class ProductSheetService {
                 marketplace: lista[0].marketplace,
                 account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
                 canSetSale: CANALES_CON_DESCUENTO.includes(lista[0].marketplace),
+                // WooCommerce no usa un precio propio por cuenta: solo su descuento.
+                canSetPrice: lista[0].marketplace !== 'woocommerce',
                 variantes: lista.length,
                 own: comun!.valor,
                 differs: comun!.distintos > 1,
@@ -512,11 +520,12 @@ export class ProductSheetService {
                 where: { product: { id: product.id }, connection: { id: p.connectionId } },
                 relations: { connection: { store: true } },
             });
-            if (!enlace || enlace.connection?.store?.id !== scope.storeId || !CANALES_CON_FICHA.includes(enlace.marketplace)) {
+            if (!enlace || enlace.connection?.store?.id !== scope.storeId || !CANALES_CON_PRECIO_DE_CUENTA.includes(enlace.marketplace)) {
                 throw new BadRequestException('Esa cuenta no tiene este producto publicado.');
             }
             const vacio = (v: unknown) => v === null || v === undefined || v === '';
-            const precio = vacio(p.price) ? null : Number(p.price);
+            // WooCommerce solo admite el descuento propio: un precio propio no se guarda (al enviar siempre se usa el del producto).
+            const precio = vacio(p.price) || enlace.marketplace === 'woocommerce' ? null : Number(p.price);
             // El descuento propio de la cuenta que ya tenga se conserva al guardar el precio (se cambia desde el bloque de descuento).
             const conDescuento = !vacio(p.salePrice);
             const descuento = conDescuento ? Number(p.salePrice) : null;
