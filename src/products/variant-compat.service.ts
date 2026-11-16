@@ -12,7 +12,8 @@ import { VectorSearchService } from '../categories/vector-search.service';
 import { categoriasElegidas } from '../ai/categorias-elegidas';
 import { EjeSynkro, InfoVariantesDeCategoria, NOMBRE_DE_CANAL, ResultadoDeCompatibilidad, claseDeEje, revisarCompatibilidad } from './compatibilidad-variantes';
 import { normalizar } from '../ai/ripley-atributos';
-import { ajustesDe, guardarAjustes, opcionDeLaLista } from './ajustes-de-canal';
+import { ajustesDe, guardarAjustes, opcionDeLaLista, valorConAjuste } from './ajustes-de-canal';
+import { atributosConVariante } from './titulos-de-variante';
 import { opcionCercana } from '../common/opcion-cercana';
 import { ejesQueSeparanFamilias } from '../sync/falabella/falabella-fields';
 
@@ -25,6 +26,11 @@ export interface SugerenciaDeAjustes {
     items: { valor: string; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | 'actual' | null; conflicto: boolean }[];
     /** Dato de la misma clase que el principal (Falabella: «Color básico»): su ajuste es propio, solo vale para ese dato. */
     derivado?: boolean;
+}
+
+/** Lo que un canal rechazó de UNA variante: un dato de lista cerrada cuyo valor no está en la lista, con lo que propone la IA. */
+export interface CorreccionDeVariante {
+    items: { atributo: string; valor: string; opciones: string[]; opcion: string | null; motivo: string; origen: 'ia' | 'foto' | 'actual' | null }[];
 }
 
 /** Cuántas categorías parecidas se verifican con la IA al buscar una recomendación (cada verificación es una consulta). */
@@ -123,6 +129,96 @@ export class VariantCompatService {
             for (const [clase, valores] of Object.entries(ajustesDe(v.aiAttributes as any, canal))) ajustes[clase] = { ...(ajustes[clase] ?? {}), ...valores };
         }
         return { ...info, ajustes, ...(canal === 'falabella' || canal === 'mercadolibre' ? { automatico: (valor: string, opciones: string[]) => opcionCercana(valor, opciones) } : {}) };
+    }
+
+    /**
+     * Los datos de lista cerrada del canal cuyo valor, EN ESTA VARIANTE, no está en la lista (con la misma regla que usa el canal al
+     * publicar: el ajuste confirmado si lo hay y, si no, la opción más cercana). Son justo los que el canal rechaza.
+     */
+    private async datosRechazados(product: Product, canal: string, ambito: AmbitoDeGrupo): Promise<{ atributo: string; valor: string; opciones: string[] }[]> {
+        const categoria = categoriasElegidas(product.marketplaceIds as any, product.aiAttributes as any)[canal];
+        if (!categoria) return [];
+        const guardados = (product.aiAttributes as any) || {};
+        const salida: { atributo: string; valor: string; opciones: string[] }[] = [];
+        if (canal === 'mercadolibre') {
+            const listas = await this.sync.listasCerradasMeli(String(categoria));
+            const actuales = this.sync.atributosParaMeli(product);
+            for (const d of listas) {
+                const valor = actuales.find((x) => x.id === d.id)?.value_name;
+                if (!valor || !String(valor).trim()) continue;
+                const ok = valorConAjuste({ canal, atributos: guardados, atributo: d.label, valor: String(valor), opciones: d.options, automatico: (v, o) => opcionCercana(v, o) });
+                if (ok === undefined) salida.push({ atributo: d.label, valor: String(valor), opciones: d.options });
+            }
+        } else if (canal === 'falabella') {
+            const campos = await this.sync.getFalabellaCategoryFields(ambito, String(categoria));
+            const conVariante = atributosConVariante(guardados, product.variantValues);
+            for (const c of campos) {
+                if (!c.options?.length) continue;
+                const valor = this.sync.buscarAtributo(conVariante, c.name);
+                if (valor === undefined || valor === null || !String(valor).trim()) continue;
+                const ok = valorConAjuste({ canal, atributos: guardados, atributo: c.label || c.name, valor: String(valor), opciones: c.options, automatico: (v, o) => opcionCercana(v.trim(), o) });
+                if (ok === undefined) salida.push({ atributo: c.label || c.name, valor: String(valor), opciones: c.options });
+            }
+        } else {
+            throw new BadRequestException('Por ahora solo Mercado Libre y Falabella.');
+        }
+        return salida;
+    }
+
+    private async variante(productId: string, ambito: AmbitoDeGrupo): Promise<Product> {
+        await this.sync.findScopedProduct(ambito, productId); // comprueba que es de esta tienda
+        const p = await this.productos.findOne({ where: { id: productId }, relations: { images: true, group: true } });
+        if (!p) throw new BadRequestException('Producto no encontrado.');
+        return p;
+    }
+
+    /**
+     * Qué rechazó el canal de UNA variante y qué opción válida corresponde: la IA propone (mirando el nombre y la foto) y, si no puede,
+     * se devuelven igual las opciones que el canal sí acepta para que la persona elija ahí mismo. Solo consulta.
+     */
+    async sugerirCorreccion(productId: string, marketplace: string, ambito: AmbitoDeGrupo): Promise<CorreccionDeVariante> {
+        const canal = String(marketplace ?? '').toLowerCase();
+        const product = await this.variante(productId, ambito);
+        const rechazados = await this.datosRechazados(product, canal, ambito);
+        const imagen = product.images?.find((i) => i.url)?.url ?? null;
+        const items: CorreccionDeVariante['items'] = [];
+        for (const r of rechazados) {
+            const [s] = await Promise.resolve(this.ai.sugerirOpcionesDeLista({
+                canal: NOMBRE_DE_CANAL[canal] ?? canal, producto: product.name, dato: r.atributo.replace(/\s*variant$/i, '').trim(),
+                opciones: r.opciones, valores: [{ valor: r.valor, imagen }],
+            })).catch(() => []);
+            items.push({
+                atributo: r.atributo, valor: r.valor, opciones: r.opciones,
+                opcion: s?.opcion ?? null,
+                motivo: s?.opcion ? s.motivo : 'La IA no encontró una opción clara: elige una de las que acepta el canal.',
+                origen: s?.opcion ? s.origen : null,
+            });
+        }
+        return { items };
+    }
+
+    /** Guarda, solo para ese canal, la opción elegida para cada dato rechazado. El valor de la persona no cambia en Synkro ni en otros canales. */
+    async aplicarCorreccion(productId: string, marketplace: string, cambios: { atributo: string; valor: string; opcion: string }[], ambito: AmbitoDeGrupo): Promise<{ aplicados: number }> {
+        const canal = String(marketplace ?? '').toLowerCase();
+        const product = await this.variante(productId, ambito);
+        const rechazados = await this.datosRechazados(product, canal, ambito);
+        const validos: { clase: string; valor: string; opcion: string }[] = [];
+        for (const c of cambios ?? []) {
+            const r = rechazados.find((x) => normalizar(x.atributo) === normalizar(c.atributo) && x.valor === c.valor);
+            if (!r) throw new BadRequestException(`«${c.atributo}» ya no tiene un valor rechazado en ${NOMBRE_DE_CANAL[canal] ?? canal}.`);
+            const opcion = opcionDeLaLista(c.opcion, r.opciones);
+            if (!opcion) throw new BadRequestException(`«${c.opcion}» no es una opción válida de ${NOMBRE_DE_CANAL[canal] ?? canal} para «${c.atributo}».`);
+            // Mercado Libre: el ajuste vale para el color en general; Falabella: solo para ese dato («Color básico»), con su propia lista.
+            const clase = canal === 'falabella' ? `${claseDeEje(c.atributo)}@${normalizar(c.atributo)}` : claseDeEje(c.atributo);
+            validos.push({ clase, valor: c.valor, opcion });
+        }
+        if (!validos.length) return { aplicados: 0 };
+        const variantes = product.group ? await this.productos.find({ where: { group: { id: product.group.id } } }) : [product];
+        for (const v of variantes) {
+            v.aiAttributes = guardarAjustes(v.aiAttributes as any, canal, validos) as any;
+            await this.productos.save(v);
+        }
+        return { aplicados: validos.length };
     }
 
     /**

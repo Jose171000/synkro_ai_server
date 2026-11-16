@@ -144,6 +144,8 @@ const TABLA: Record<string, string> = {
     'Products PATCH /products/groups/:id': 'productos.editar',
     'Products GET /products/groups/:id/variant-compat': 'canales.publicar',
     'Products POST /products/groups/:id/channel-values/suggest': 'canales.publicar',
+    'Products POST /products/channel-fix/:id/suggest': 'canales.publicar',
+    'Products POST /products/channel-fix/:id/apply': 'canales.publicar',
     'Products POST /products/groups/:id/channel-values/apply': 'canales.publicar',
     'Products POST /products/groups/:id/generate-ai': 'productos.editar',
     'Products POST /products/groups/:id/align-axes': 'productos.editar',

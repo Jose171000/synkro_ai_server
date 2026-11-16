@@ -20,7 +20,7 @@ import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { RegeneracionMasivaDto } from './dto/regeneracion-masiva.dto';
 import { RegeneracionMasivaService } from './regeneracion-masiva.service';
 import { RenombrarEjeDto } from './dto/renombrar-eje.dto';
-import { AplicarAjustesDto, SugerirAjustesDto } from './dto/ajustes-de-canal.dto';
+import { AplicarAjustesDto, AplicarCorreccionDto, SugerirAjustesDto } from './dto/ajustes-de-canal.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
@@ -181,6 +181,28 @@ export class ProductsController {
   })
   suggestChannelValues(@Param('id') id: string, @Body() dto: SugerirAjustesDto, @Req() req) {
     return this.variantCompat.sugerirAjustes(id, dto.marketplace, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('channel-fix/:id/suggest')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'Qué dato de lista cerrada rechazó el canal de UNA variante y qué opción válida corresponde',
+    description: 'La IA propone la opción (mirando el nombre y la foto); si no puede, devuelve igual las opciones que el canal acepta para elegir. Solo consulta.',
+  })
+  suggestChannelFix(@Param('id') id: string, @Body() dto: SugerirAjustesDto, @Req() req) {
+    return this.variantCompat.sugerirCorreccion(id, dto.marketplace, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('channel-fix/:id/apply')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('canales.publicar')
+  @ApiOperation({
+    summary: 'Guarda la opción elegida para el dato que el canal rechazó de una variante',
+    description: 'Solo vale para ese canal: el valor de la persona no cambia en Synkro ni en los demás canales. No envía nada al canal.',
+  })
+  applyChannelFix(@Param('id') id: string, @Body() dto: AplicarCorreccionDto, @Req() req) {
+    return this.variantCompat.aplicarCorreccion(id, dto.marketplace, dto.cambios, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post('groups/:id/channel-values/apply')

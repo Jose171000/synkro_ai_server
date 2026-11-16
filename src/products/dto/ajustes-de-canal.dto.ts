@@ -26,6 +26,30 @@ export class CambioDeAjusteDto {
     atributo?: string;
 }
 
+export class CambioDeCorreccionDto {
+    @ApiProperty({ description: 'Dato del canal que rechazó el valor («Color principal»).' })
+    @IsString() @MinLength(1) @MaxLength(120)
+    atributo: string;
+
+    @ApiProperty({ description: 'Valor rechazado de la variante («Coral»).' })
+    @IsString() @MinLength(1) @MaxLength(120)
+    valor: string;
+
+    @ApiProperty({ description: 'Opción de la lista del canal que se usará en su lugar.' })
+    @IsString() @MinLength(1) @MaxLength(120)
+    opcion: string;
+}
+
+export class AplicarCorreccionDto {
+    @ApiProperty({ example: 'mercadolibre' })
+    @IsString() @MinLength(1) @MaxLength(40)
+    marketplace: string;
+
+    @ApiProperty({ type: [CambioDeCorreccionDto] })
+    @IsArray() @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => CambioDeCorreccionDto)
+    cambios: CambioDeCorreccionDto[];
+}
+
 export class AplicarAjustesDto {
     @ApiProperty({ example: 'falabella' })
     @IsString() @MinLength(1) @MaxLength(40)
