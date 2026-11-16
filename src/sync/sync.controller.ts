@@ -375,6 +375,36 @@ export class SyncController {
         return this.syncService.searchFalabellaCategories(scopeOf(req), search || '', connectionId);
     }
 
+    @Post('falabella/categories/refresh')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({ summary: 'Vuelve a pedir a Falabella su árbol de categorías (salta el caché de 12 horas)' })
+    refreshFalabellaCategories(@Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.refreshFalabellaCategories(scopeOf(req), connectionId);
+    }
+
+    @Get('falabella/categories/obsoletas')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.ver')
+    @ApiOperation({
+        summary: 'Productos cuya categoría de Falabella ya no existe',
+        description: 'Solo consulta. Compara la categoría guardada en cada producto con el árbol actual de Falabella y los agrupa por categoría.',
+    })
+    obsoleteFalabellaCategories(@Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.obsoleteFalabellaCategories(scopeOf(req), connectionId);
+    }
+
+    @Get('falabella/categories/:categoryId')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({ summary: 'Nombre y ruta de una categoría de Falabella, o si ya no existe' })
+    describeFalabellaCategory(@Param('categoryId') categoryId: string, @Req() req, @Query('connectionId') connectionId?: string) {
+        return this.syncService.describeFalabellaCategory(scopeOf(req), categoryId, connectionId);
+    }
+
     @Get('falabella/categories/:categoryId/fields')
     @ApiBearerAuth()
     @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)

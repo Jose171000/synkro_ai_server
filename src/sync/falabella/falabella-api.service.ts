@@ -625,9 +625,9 @@ export class FalabellaApiService {
      * en una intermedia. Cada una lleva su ruta completa porque hay nombres
      * que se repiten y sin el camino no se distinguen.
      */
-    async getCategories(credentials: FalabellaCredentials): Promise<FalabellaCategory[]> {
+    async getCategories(credentials: FalabellaCredentials, forzar = false): Promise<FalabellaCategory[]> {
         const enCache = this.categoryCache.get(credentials.userId);
-        if (enCache && Date.now() - enCache.at < CATEGORY_CACHE_MS) {
+        if (!forzar && enCache && Date.now() - enCache.at < CATEGORY_CACHE_MS) {
             return enCache.categories;
         }
 
@@ -654,6 +654,20 @@ export class FalabellaApiService {
         this.categoryCache.set(credentials.userId, { at: Date.now(), categories });
         this.logger.log(`Árbol de categorías de Falabella cargado: ${categories.length} categorías finales.`);
         return categories;
+    }
+
+    /** Vuelve a pedir el árbol a Falabella sin esperar a que venza el caché (publican categorías nuevas y retiran otras). */
+    async refrescarCategorias(credentials: FalabellaCredentials): Promise<FalabellaCategory[]> {
+        for (const clave of [...this.attributeCache.keys()]) {
+            if (clave.startsWith(`${credentials.userId}:`)) this.attributeCache.delete(clave);
+        }
+        return this.getCategories(credentials, true);
+    }
+
+    /** ¿Esta categoría sigue existiendo como final en el árbol actual? Si sí, devuelve su nombre y ruta. */
+    async describirCategoria(credentials: FalabellaCredentials, id: string | number): Promise<{ id: string; valida: boolean; name?: string; path?: string }> {
+        const categoria = (await this.getCategories(credentials)).find(c => c.id === String(id));
+        return categoria ? { id: categoria.id, valida: true, name: categoria.name, path: categoria.path } : { id: String(id), valida: false };
     }
 
     /**

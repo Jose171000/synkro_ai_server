@@ -1646,6 +1646,41 @@ export class SyncService implements OnModuleInit {
         return this.falabellaApi.searchCategories(this.credentialsOf(connection), term);
     }
 
+    /** Vuelve a pedir el árbol de categorías a Falabella, saltándose el caché. */
+    async refreshFalabellaCategories(scope: SyncScope, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const categorias = await this.falabellaApi.refrescarCategorias(this.credentialsOf(connection));
+        return { total: categorias.length, message: `Categorías actualizadas: ${categorias.length} categorías finales.` };
+    }
+
+    /** Nombre y ruta de una categoría guardada, o que ya no existe en Falabella. */
+    async describeFalabellaCategory(scope: SyncScope, categoryId: string, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        return this.falabellaApi.describirCategoria(this.credentialsOf(connection), categoryId);
+    }
+
+    /**
+     * Productos de la tienda cuya categoría de Falabella guardada ya no existe como categoría final en el árbol actual.
+     * Solo consulta: no cambia nada. Agrupados por categoría para corregirlos de a una.
+     */
+    async obsoleteFalabellaCategories(scope: SyncScope, connectionId?: string) {
+        const connection = await this.resolveConnection(scope.storeId, 'falabella', connectionId);
+        const vigentes = new Set((await this.falabellaApi.getCategories(this.credentialsOf(connection))).map(c => c.id));
+        const productos = await this.productRepository
+            .createQueryBuilder('p')
+            .where('p."storeId" = :storeId', { storeId: scope.storeId })
+            .andWhere("COALESCE(NULLIF(p.\"marketplaceIds\"->>'falabella_category_id', ''), NULLIF(p.\"aiAttributes\"->>'falabella_category_id', '')) IS NOT NULL")
+            .getMany();
+        const porCategoria = new Map<string, { id: string; sku: string; name: string }[]>();
+        for (const p of productos) {
+            const categoria = String(this.categoriaFalabella(p) ?? '');
+            if (!categoria || vigentes.has(categoria)) continue;
+            porCategoria.set(categoria, [...(porCategoria.get(categoria) ?? []), { id: p.id, sku: p.sku, name: p.name }]);
+        }
+        const categorias = [...porCategoria.entries()].map(([categoryId, items]) => ({ categoryId, total: items.length, productos: items.slice(0, 50) }));
+        return { revisados: productos.length, obsoletos: categorias.reduce((n, c) => n + c.total, 0), categorias };
+    }
+
     /**
      * Datos que pide una categoría, para poder dibujar el formulario:
      * cuáles son obligatorios, cómo se llaman en castellano y qué valores
