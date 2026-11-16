@@ -81,6 +81,15 @@ describe('dejar un producto listo para Falabella con un paso', () => {
         expect(r).toMatchObject({ message: 'enviado', sent: true });
     });
 
+    it('si la IA no logra redactar la ficha HTML, lo avisa en vez de dejarla vacía sin decir nada', async () => {
+        const { service, guardados, ai } = construir(producto());
+        ai.generarDescripcionHtml.mockResolvedValue(null as any);
+        const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');
+        expect(r.descriptionGenerated).toBe(false);
+        expect(r.descriptionFailed).toBe(true);
+        expect(guardados[0].aiAttributes.descriptionHtml).toBeUndefined();
+    });
+
     it('elige categoría, cambia una marca inexistente por GENERICO, estima medidas y completa lo obligatorio', async () => {
         const { service, guardados, ai, canales } = construir(producto());
         const r = await service.preparar({ userId: 'u', storeId: 's' }, 'p1');

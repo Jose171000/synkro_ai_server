@@ -381,6 +381,19 @@ Responde únicamente: { "packageWidth": cm, "packageLength": cm, "packageHeight"
     nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
     imagenesDelProducto: string[]; urlsDelCliente: string[]; ejes?: EjeParaIA[];
   }): Promise<{ html: string; title: string; texto: string } | null> {
+    // Un fallo pasajero de la IA (límite de llamadas, respuesta mal formada) no debe dejar la ficha sin HTML: se intenta una segunda vez.
+    for (let intento = 1; intento <= 2; intento++) {
+      const ficha = await this.generarDescripcionHtmlUnaVez(datos);
+      if (ficha) return ficha;
+      if (intento < 2) await new Promise((r) => setTimeout(r, 1500));
+    }
+    return null;
+  }
+
+  private async generarDescripcionHtmlUnaVez(datos: {
+    nombre: string; textoCliente: string; vision?: ProductVision | null; atributos?: Record<string, any>;
+    imagenesDelProducto: string[]; urlsDelCliente: string[]; ejes?: EjeParaIA[];
+  }): Promise<{ html: string; title: string; texto: string } | null> {
     try {
       const conOpciones = !!datos.ejes?.some((e) => e.values?.length);
       const opcionesDelPrompt = conOpciones ? ',\n  "options": [ { "value": "valor exacto de una opción", "includes": "qué incluye o trae esa opción, SOLO si el cliente lo dijo" } ]' : '';

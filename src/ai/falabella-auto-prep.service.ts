@@ -34,6 +34,8 @@ export interface FalabellaPrepReport {
     estimatedAttributes: string[];
     /** Se redactó la descripción HTML estándar en este paso. */
     descriptionGenerated: boolean;
+    /** Se intentó redactar la ficha HTML y la IA no respondió (ni en el reintento): se avisa en vez de dejarla vacía sin decir nada. */
+    descriptionFailed?: boolean;
     /** Cuántos atributos de la categoría tienen valor tras este paso, de cuántos hay. */
     attributes: { filled: number; total: number };
 }
@@ -287,6 +289,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         // Usa lo que escribió el cliente, el texto que ya tenga el producto, los atributos, lo que muestran las fotos y los GIFs
         // o imágenes cuyos enlaces pegó en el nombre o la descripción.
         let descripcionGenerada = false;
+        let descripcionFallida = false;
         if (opciones.regenerar) delete attrs.descriptionHtml;
         if (!attrs.descriptionHtml) {
             const ficha = await this.ai.generarDescripcionHtml({
@@ -297,6 +300,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 imagenesDelProducto: (product.images ?? []).map((i) => i.url).filter(Boolean),
                 urlsDelCliente: extraerUrlsDeImagen(`${product.name} ${product.description ?? ''}`),
             });
+            if (!ficha) descripcionFallida = true;
             if (ficha) {
                 attrs.descriptionHtml = ficha.html;
                 marcasIA.push('descriptionHtml');
@@ -339,6 +343,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             },
             estimatedAttributes: (estimated.attributes.falabella ?? estimadosAhora).filter((n) => !sistema.has(claveDeAtributo(n))),
             descriptionGenerated: descripcionGenerada,
+            ...(descripcionFallida ? { descriptionFailed: true } : {}),
             attributes: { filled: llenos, total: totalAtributos },
         };
     }
