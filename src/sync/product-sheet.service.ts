@@ -10,6 +10,9 @@ import { RipleyCatalogoService } from './ripley/ripley-catalogo.service';
 import { SyncScope, SyncService } from './sync.service';
 import { preciosParaCanal } from './precios-por-canal';
 import { ripleyEnviaPrecio, skuPermitidoParaRipley } from './ripley/ripley-oferta';
+import { ajustesDe } from '../products/ajustes-de-canal';
+import { claseDeEje } from '../products/compatibilidad-variantes';
+import { normalizar } from '../ai/ripley-atributos';
 import { fechaDeFalabella } from './falabella/falabella-product-xml';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { atributosConVariante, nombreDeFamilia } from '../products/titulos-de-variante';
@@ -312,7 +315,11 @@ export class ProductSheetService {
                 titleEditable: false,
                 description: String(product.aiDescription || product.description || ''),
                 categoryId: (product.marketplaceIds as any)?.mercadolibre_category_id ?? attrs.mercadolibre_category_id ?? null,
-                attributes: this.sync.atributosParaMeli(product).map((a) => ({ id: a.id, value: a.value_name, origin: origenDeAtributo(attrs, 'mercadolibre', a.id, a.value_name) ?? null })),
+                attributes: this.sync.atributosParaMeli(product).map((a) => {
+                    // Un valor que Mercado Libre no tiene en su lista (un color «Coral») sale como la opción que la persona confirmó («Naranja»): se avisa en la ficha.
+                    const enviadoComo = ajustesDe(attrs, 'mercadolibre')[claseDeEje(a.id)]?.[normalizar(a.value_name)] ?? null;
+                    return { id: a.id, value: a.value_name, origin: origenDeAtributo(attrs, 'mercadolibre', a.id, a.value_name) ?? null, sentAs: enviadoComo && normalizar(enviadoComo) !== normalizar(a.value_name) ? enviadoComo : null };
+                }),
             },
             listo: true,
         };
