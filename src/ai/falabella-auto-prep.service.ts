@@ -1,4 +1,5 @@
 import { valorConAjuste } from '../products/ajustes-de-canal';
+import { mencionaOtroCanal } from './otro-canal';
 import { opcionCercana } from '../common/opcion-cercana';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -247,6 +248,8 @@ export class FalabellaAutoPrepService implements OnModuleInit {
             const sinValorValido = (a: { name: string; label?: string; options?: string[] }) => {
                 const v = this.sync.buscarAtributo(attrs, a.name);
                 if (v === null || v === undefined || String(v).trim() === '') return true;
+                // Un texto escrito para otro canal («…políticas de Mercado Libre») no vale aquí: la IA lo vuelve a decidir.
+                if (mencionaOtroCanal(v, 'falabella')) return true;
                 if (!a.options?.length) return false;
                 return valorConAjuste({ canal: 'falabella', atributos: attrs, atributo: a.label || a.name, valor: String(v), opciones: a.options, automatico: (x, o) => opcionCercana(x.trim(), o) }) === undefined;
             };
@@ -390,7 +393,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const faltantes = [] as { name: string; description: string; example: string; isRequired: boolean; options?: string[] }[];
         for (const a of definiciones) {
             const v = this.sync.buscarAtributo(attrs, a.name);
-            if (v !== null && v !== undefined && String(v).trim() !== '') {
+            if (v !== null && v !== undefined && String(v).trim() !== '' && !mencionaOtroCanal(v, 'falabella')) {
                 // En una lista cerrada, un valor que Falabella no tiene («Leopardo» como color) no cuenta como completo:
                 // la IA elige una opción válida (o queda vacío para que la persona la elija), nunca se muestra el inválido como bueno.
                 const valido = !a.options?.length

@@ -7,6 +7,7 @@ import { MarketplaceCategory, CategoryAttribute } from '../categories/entities/m
 import { ProductVisionService, ProductVision } from './product-vision.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { opcionCercana } from '../common/opcion-cercana';
+import { mencionaOtroCanal } from './otro-canal';
 import { ajustarAtributosDeRipley, conOpcionesParaLaIa } from './ripley-atributos';
 import { textoDeDatosConocidos } from './datos-conocidos';
 import { EjeParaIA, textoDeEjes } from './ejes-de-variacion';
@@ -841,6 +842,7 @@ Reglas:
 - Los campos de nombre en otro idioma (inglés, chino…) se llenan traduciendo el título del producto.
 - «Detalle de la condición»: si el producto es nuevo, "Producto nuevo".
 - Garantías (meses o condiciones), certificaciones, números de serie, códigos EAN/UPC y datos legales: solo si el cliente los escribió; si no, null.
+- Ignora las frases que nombran a un canal de venta (Mercado Libre, Falabella, Ripley, Amazon…), como «Garantía según las políticas de Mercado Libre»: son texto de OTRO canal, no un dato del producto. Nunca las copies a un dato.
 - OBLIGATORIO que no se puede deducir: ESTIMA el valor más probable (con lista de opciones, la más cercana; si no, un valor genérico típico) y añade su nombre a "_estimated".
 - Opcional que de verdad no se puede deducir: null. No inventes datos que cambian lo que compra el cliente (garantías, certificaciones).
 - Si el dato lleva unidad de medida (peso, capacidad, garantía), escríbela junto al número (ej. "9 kg", "12 meses"), tal como indique su descripción.
@@ -855,6 +857,8 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
       for (const a of atributos) {
         const v = json[a.name];
         if (v === null || v === undefined || String(v).trim() === '') continue;
+        // Un valor que nombra a un canal de venta es texto de ese canal, no un dato del producto.
+        if (mencionaOtroCanal(v)) continue;
         const k = (t: string) => t.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
         if (a.options?.length) {
           // Exacta o, si no, la más cercana de la lista («madera de pino» → «Madera»).

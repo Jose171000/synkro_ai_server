@@ -12,6 +12,8 @@ import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../prod
 import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { valorConAjuste } from '../products/ajustes-de-canal';
+import { mencionaOtroCanal } from '../ai/otro-canal';
+import { fusionarAtributos } from './falabella/fusionar-atributos';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
 import { planearFamiliasDeMeli } from './meli/familias-meli';
@@ -1982,8 +1984,8 @@ export class SyncService implements OnModuleInit {
         // Se conservan los atributos que ya tuviera: la IA pudo generar
         // algunos y no hay por qué perderlos al completar los de Falabella.
         product.aiAttributes = {
-            ...((product.aiAttributes as any) || {}),
-            ...(datos.attributes || {}),
+            // El valor que la persona acaba de escribir reemplaza a cualquier escritura equivalente ya guardada (Gramaje / gramaje).
+            ...fusionarAtributos((product.aiAttributes as any) || {}, datos.attributes || {}),
             // Una persona eligió esta categoría: se respeta y deja de marcarse como dudosa.
             _categoriaManual: String(datos.categoryId),
         };
@@ -2163,7 +2165,8 @@ export class SyncService implements OnModuleInit {
             if (!exigido && (noAplican.has(claveDeAtributo(attribute.feedName)) || noAplican.has(claveDeAtributo(attribute.name)))) continue;
 
             const bruto = this.buscarAtributo(attributes, attribute.name);
-            const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '';
+            // Un texto que nombra a otro canal («…políticas de Mercado Libre») no es un dato del producto: no se envía a Falabella.
+            const hayValor = bruto !== undefined && bruto !== null && String(bruto).trim() !== '' && !mencionaOtroCanal(bruto, 'falabella');
             // En una lista cerrada solo vale una de sus opciones (con la escritura de Falabella).
             // Si la persona confirmó a qué opción de Falabella corresponde este valor (un color que su lista no tiene), ese ajuste manda.
             let valor = hayValor
