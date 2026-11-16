@@ -42,3 +42,22 @@ describe('fusionarCategorias', () => {
         expect(fusionarCategorias(undefined, undefined)).toEqual({});
     });
 });
+
+import { categoriasDeConsenso } from './categorias-elegidas';
+
+describe('categoriasDeConsenso', () => {
+    it('toma la categoría que usan más variantes en cada canal', () => {
+        const r = categoriasDeConsenso([
+            { marketplaceIds: { falabella_category_id: '3223', ripley_category_id: 'R1' } },
+            { marketplaceIds: { falabella_category_id: '3223' } },
+            { marketplaceIds: { falabella_category_id: '4' } },
+            { marketplaceIds: {} },
+        ]);
+        expect(r).toEqual({ falabella: '3223', ripley: 'R1' });
+    });
+
+    it('si empatan, la de la primera variante; sin categorías, nada', () => {
+        expect(categoriasDeConsenso([{ marketplaceIds: { falabella_category_id: '4' } }, { marketplaceIds: { falabella_category_id: '3223' } }])).toEqual({ falabella: '4' });
+        expect(categoriasDeConsenso([{ marketplaceIds: {} }])).toEqual({});
+    });
+});

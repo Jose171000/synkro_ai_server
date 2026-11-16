@@ -35,3 +35,32 @@ export function estadoDeCategoriaDeGrupo(variantes: VarianteConCategoria[]): Est
     const categorias = [...cuenta.entries()].map(([id, e]) => ({ id, ...e })).sort((a, b) => b.publicadas - a.publicadas || b.total - a.total || a.id.localeCompare(b.id));
     return { variantes: variantes.length, sinCategoria, categorias, recomendada: categorias[0]?.id ?? null, mezcladas: categorias.length > 1 };
 }
+
+/** Qué hacer con cada variante para que el grupo use UNA sola categoría de un canal. */
+export interface PlanDeUnificacion {
+    /** La categoría única del grupo; null si ninguna variante tiene y no se indicó una. */
+    categoria: string | null;
+    /** Variantes sin categoría: reciben la del grupo. */
+    asignar: string[];
+    /** Variantes con otra categoría que todavía NO están en el canal: se alinean (nunca se enviaron con la otra). */
+    igualar: string[];
+    /** Variantes con otra categoría que YA están en el canal: conservan la de su ficha, porque allá no se puede cambiar. */
+    distintasPublicadas: string[];
+}
+
+/**
+ * Un producto con variantes tiene UNA categoría por canal: la de las variantes ya publicadas (es la que quedó en el canal) o, si no hay,
+ * la más usada. Las variantes sin categoría o con otra aún sin publicar se alinean; las ya publicadas con otra no se tocan.
+ */
+export function planDeUnificacion(variantes: VarianteConCategoria[], categoriaIndicada?: string | null): PlanDeUnificacion {
+    const estado = estadoDeCategoriaDeGrupo(variantes);
+    const categoria = String(categoriaIndicada ?? '').trim() || estado.recomendada;
+    if (!categoria) return { categoria: null, asignar: [], igualar: [], distintasPublicadas: [] };
+    const plan: PlanDeUnificacion = { categoria, asignar: [], igualar: [], distintasPublicadas: [] };
+    for (const v of variantes) {
+        const actual = String(v.categoria ?? '').trim();
+        if (!actual) plan.asignar.push(v.id);
+        else if (actual !== categoria) (v.publicada ? plan.distintasPublicadas : plan.igualar).push(v.id);
+    }
+    return plan;
+}

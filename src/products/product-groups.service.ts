@@ -12,7 +12,7 @@ import { atributosConVariante, atributosConVarianteEnCanales, tituloDeVariante }
 import { DeteccionDeVariantes, MAX_IMAGES, ProductVisionService } from '../ai/product-vision.service';
 import { fotosParaIA } from './fotos-para-ia';
 import { atributosTrasRegenerar, sinAtributosDeEje } from './regenerar-grupo';
-import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
+import { categoriasDeConsenso, categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
 import { renombrarClaveDeValores, renombrarEje } from './renombrar-eje';
 import {
     asignarSkus, claveDeCombinacion, etiquetaDe, MAX_VARIANTES, normalizar, normalizarEjes, valoresDeVariante, ValoresDeVariante,
@@ -337,6 +337,8 @@ export class ProductGroupsService {
 
         const codigo = grupo?.parentSku ?? producto.sku;
         const skus = await this.resolverSkus(codigo, nuevas, ejes, ambito);
+        // Un producto con variantes tiene UNA categoría por canal: las variantes nuevas nacen con la del grupo y no se categorizan aparte.
+        const categoriasDelGrupo = categoriasDeConsenso(grupo ? existentes : [producto]);
 
         const grupoId = await this.dataSource.transaction(async (manager) => {
             let g = grupo;
@@ -358,7 +360,7 @@ export class ProductGroupsService {
             for (let i = 0; i < nuevas.length; i++) {
                 await this.guardarVariante(manager, g, nuevas[i], skus[i], ejes, {
                     name: g.name, description: producto.description, category: producto.category,
-                    subCategory: producto.subCategory, targetMarketplaces: producto.targetMarketplaces,
+                    subCategory: producto.subCategory, targetMarketplaces: producto.targetMarketplaces, categoriasDeCanal: categoriasDelGrupo,
                 }, ambito);
             }
             return g.id;
@@ -499,7 +501,7 @@ export class ProductGroupsService {
         variante: { valores: ValoresDeVariante; original: VarianteEntrada },
         sku: string,
         ejes: EjeDeVariacion[],
-        comun: { name: string; description?: string | null; category?: string | null; subCategory?: string | null; targetMarketplaces?: string[] | null },
+        comun: { name: string; description?: string | null; category?: string | null; subCategory?: string | null; targetMarketplaces?: string[] | null; categoriasDeCanal?: Record<string, string> },
         ambito: AmbitoDeGrupo,
     ): Promise<Product> {
         const etiqueta = etiquetaDe(variante.valores, ejes);
@@ -511,6 +513,10 @@ export class ProductGroupsService {
             category: comun.category ?? undefined,
             subCategory: comun.subCategory ?? undefined,
             targetMarketplaces: comun.targetMarketplaces ?? undefined,
+            // La categoría de cada canal que ya usa el grupo (falabella_category_id, ripley_category_id…).
+            ...(comun.categoriasDeCanal && Object.keys(comun.categoriasDeCanal).length
+                ? { marketplaceIds: Object.fromEntries(Object.entries(comun.categoriasDeCanal).map(([canal, id]) => [`${canal}_category_id`, id])) }
+                : {}),
             price: variante.original?.price ?? undefined,
             stock: variante.original?.stock ?? 0,
             status: 'draft',

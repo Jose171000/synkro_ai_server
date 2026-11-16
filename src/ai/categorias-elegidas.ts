@@ -29,3 +29,25 @@ export function fusionarCategorias(previos: Record<string, any> | null | undefin
     }
     return salida;
 }
+
+/**
+ * La categoría única de un grupo de variantes, por canal: la que usan más variantes (si empatan, la de la primera). Sirve para que una
+ * variante nueva nazca con la categoría del grupo en vez de categorizarse aparte.
+ */
+export function categoriasDeConsenso(variantes: Array<{ marketplaceIds?: Record<string, any> | null; aiAttributes?: Record<string, any> | null }>): Record<string, string> {
+    const porCanal = new Map<string, Map<string, number>>();
+    for (const v of variantes ?? []) {
+        for (const [canal, id] of Object.entries(categoriasElegidas(v.marketplaceIds, v.aiAttributes))) {
+            const cuenta = porCanal.get(canal) ?? new Map<string, number>();
+            cuenta.set(id, (cuenta.get(id) ?? 0) + 1);
+            porCanal.set(canal, cuenta);
+        }
+    }
+    const salida: Record<string, string> = {};
+    for (const [canal, cuenta] of porCanal) {
+        let mejor: string | null = null;
+        for (const [id, n] of cuenta) if (mejor === null || n > (cuenta.get(mejor) ?? 0)) mejor = id;
+        if (mejor) salida[canal] = mejor;
+    }
+    return salida;
+}

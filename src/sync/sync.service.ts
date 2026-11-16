@@ -13,7 +13,8 @@ import { etiquetaDe } from '../products/variantes';
 import { EjeSynkro, revisarCompatibilidad } from '../products/compatibilidad-variantes';
 import { valorConAjuste } from '../products/ajustes-de-canal';
 import { mencionaOtroCanal } from '../ai/otro-canal';
-import { estadoDeCategoriaDeGrupo } from './falabella/categoria-de-grupo';
+import { estadoDeCategoriaDeGrupo, planDeUnificacion } from './falabella/categoria-de-grupo';
+import { categoriasElegidas } from '../ai/categorias-elegidas';
 import { MAX_PRODUCTOS_POR_PETICION, anotarReenvio, decidirReenvio, segundosParaOtraPeticion } from './falabella/control-de-reenvio-de-fotos';
 import { fusionarAtributos } from './falabella/fusionar-atributos';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
@@ -1672,7 +1673,10 @@ export class SyncService implements OnModuleInit {
             relations: { product: true },
         });
         const enFalabella = new Set(enlaces.filter(l => ['published', 'paused', 'pending'].includes(l.syncStatus)).map(l => l.product.id));
-        return estadoDeCategoriaDeGrupo(variantes.map(v => ({ id: v.id, categoria: this.categoriaFalabella(v) != null ? String(this.categoriaFalabella(v)) : null, publicada: enFalabella.has(v.id) })));
+        const items = variantes.map(v => ({ id: v.id, categoria: this.categoriaFalabella(v) != null ? String(this.categoriaFalabella(v)) : null, publicada: enFalabella.has(v.id) }));
+        const plan = planDeUnificacion(items);
+        // Cuántas se alinearían con un clic: las que no tienen y las que tienen otra pero nunca se enviaron; las ya publicadas con otra no se tocan.
+        return { ...estadoDeCategoriaDeGrupo(items), porAsignar: plan.asignar.length, porIgualar: plan.igualar.length, distintasPublicadas: plan.distintasPublicadas.length };
     }
 
     /**
@@ -1683,19 +1687,67 @@ export class SyncService implements OnModuleInit {
         const estado = await this.estadoDeCategoriaDeGrupo(scope, groupId);
         const categoria = String(categoryId ?? estado.recomendada ?? '').trim();
         if (!categoria) throw new BadRequestException('No hay una categoría que usar: elígela en «Preparar para Falabella».');
-        if (!estado.sinCategoria.length) return { asignadas: 0, categoryId: categoria };
         // Una categoría que Falabella ya no tiene como final no sirve: se comprueba contra su árbol actual.
         const valida = await this.describeFalabellaCategory(scope, categoria, connectionId);
         if (!valida.valida) throw new BadRequestException(`La categoría ${categoria} ya no existe en Falabella: elige otra en «Preparar para Falabella».`);
-        const sin = await this.productRepository.find({ where: { id: In(estado.sinCategoria), store: { id: scope.storeId } } as any });
-        for (const p of sin) {
-            p.marketplaceIds = { ...((p.marketplaceIds as any) || {}), falabella_category_id: categoria } as any;
-            const atributos: Record<string, any> = { ...((p.aiAttributes as any) || {}) };
-            delete atributos._categoriaDudosa;
-            p.aiAttributes = atributos as any;
-            await this.productRepository.save(p);
+        const variantes = await this.productRepository.find({ where: { group: { id: groupId }, store: { id: scope.storeId } } as any });
+        const r = await this.unificarCategoriasDeFamilia(variantes, { canal: 'falabella', categoryId: categoria });
+        return { asignadas: r.asignadas, igualadas: r.igualadas, distintasPublicadas: r.distintasPublicadas, categoryId: categoria, ruta: valida.path ?? null };
+    }
+
+    /** Qué variantes de la familia ya están en ese canal (publicadas, pausadas o enviándose): su categoría allá no se puede cambiar. */
+    private async variantesEnCanal(familia: Product[], canal: string): Promise<Set<string>> {
+        if (!familia.length) return new Set();
+        const enlaces = await this.listingLinkRepository.find({
+            where: { marketplace: canal, product: { id: In(familia.map(p => p.id)) } },
+            relations: { product: true },
+        });
+        return new Set(enlaces.filter(l => ['published', 'paused', 'pending'].includes(l.syncStatus)).map(l => l.product.id));
+    }
+
+    private ponerCategoriaDeCanal(p: Product, canal: string, categoria: string): void {
+        p.marketplaceIds = { ...((p.marketplaceIds as any) || {}), [`${canal}_category_id`]: categoria } as any;
+        const atributos: Record<string, any> = { ...((p.aiAttributes as any) || {}) };
+        // Si la categoría también estaba anotada en los atributos, no se deja la vieja.
+        if (atributos[`${canal}_category_id`] !== undefined) atributos[`${canal}_category_id`] = categoria;
+        if (canal === 'falabella') delete atributos._categoriaDudosa;
+        p.aiAttributes = atributos as any;
+    }
+
+    /**
+     * Un producto con variantes tiene UNA sola categoría por canal. Deja a todas las variantes con la misma: la que ya usan las variantes
+     * publicadas (o la más usada), o la indicada. Las que no tienen y las que aún no se enviaron con otra se alinean; las ya publicadas con
+     * otra conservan la de su ficha (el canal no deja cambiarla). No envía nada a ningún canal.
+     */
+    async unificarCategoriasDeFamilia(familia: Product[], opciones: { canal?: string; categoryId?: string } = {}): Promise<{ asignadas: number; igualadas: number; distintasPublicadas: number }> {
+        const total = { asignadas: 0, igualadas: 0, distintasPublicadas: 0 };
+        if (familia.length < 2) return total;
+        const canales = opciones.canal
+            ? [opciones.canal.toLowerCase()]
+            : [...new Set(familia.flatMap(p => Object.keys(categoriasElegidas(p.marketplaceIds as any, p.aiAttributes as any))))];
+        for (const canal of canales) {
+            const enCanal = await this.variantesEnCanal(familia, canal);
+            const plan = planDeUnificacion(
+                familia.map(p => ({ id: p.id, categoria: categoriasElegidas(p.marketplaceIds as any, p.aiAttributes as any)[canal] ?? null, publicada: enCanal.has(p.id) })),
+                opciones.categoryId,
+            );
+            if (!plan.categoria) continue;
+            for (const p of familia.filter(v => plan.asignar.includes(v.id) || plan.igualar.includes(v.id))) {
+                this.ponerCategoriaDeCanal(p, canal, plan.categoria);
+                await this.productRepository.save(p);
+            }
+            total.asignadas += plan.asignar.length;
+            total.igualadas += plan.igualar.length;
+            total.distintasPublicadas += plan.distintasPublicadas.length;
         }
-        return { asignadas: sin.length, categoryId: categoria, ruta: valida.path ?? null };
+        return total;
+    }
+
+    /** La categoría que ya usa la familia en un canal (la de las variantes publicadas o la más usada); null si ninguna tiene. */
+    async categoriaDeFamilia(familia: Product[], canal: string): Promise<string | null> {
+        if (familia.length < 2) return null;
+        const enCanal = await this.variantesEnCanal(familia, canal);
+        return planDeUnificacion(familia.map(p => ({ id: p.id, categoria: categoriasElegidas(p.marketplaceIds as any, p.aiAttributes as any)[canal] ?? null, publicada: enCanal.has(p.id) }))).categoria;
     }
 
     /** Vuelve a pedir el árbol de categorías a Falabella, saltándose el caché. */

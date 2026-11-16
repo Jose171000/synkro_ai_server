@@ -37,3 +37,34 @@ describe('categoría de Falabella de un grupo de variantes', () => {
         expect(r.sinCategoria).toEqual(['a']);
     });
 });
+
+import { planDeUnificacion } from './categoria-de-grupo';
+
+describe('plan para dejar una sola categoría por grupo', () => {
+    it('da la categoría a las que faltan y alinea las no publicadas, sin tocar las ya publicadas', () => {
+        const p = planDeUnificacion([
+            { id: 'a', categoria: '3223', publicada: true },
+            { id: 'b', categoria: '3223', publicada: true },
+            { id: 'c', categoria: '4', publicada: true },
+            { id: 'd', categoria: '4', publicada: false },
+            { id: 'e', categoria: null, publicada: false },
+        ]);
+        expect(p).toEqual({ categoria: '3223', asignar: ['e'], igualar: ['d'], distintasPublicadas: ['c'] });
+    });
+
+    it('una categoría indicada manda sobre la más usada', () => {
+        const p = planDeUnificacion([{ id: 'a', categoria: '3223', publicada: false }, { id: 'b', categoria: null, publicada: false }], '4');
+        expect(p.categoria).toBe('4');
+        expect(p.asignar).toEqual(['b']);
+        expect(p.igualar).toEqual(['a']);
+    });
+
+    it('un grupo ya consistente no cambia nada', () => {
+        const p = planDeUnificacion([{ id: 'a', categoria: '3223', publicada: true }, { id: 'b', categoria: '3223', publicada: false }]);
+        expect(p).toEqual({ categoria: '3223', asignar: [], igualar: [], distintasPublicadas: [] });
+    });
+
+    it('sin ninguna categoría y sin indicar una, no hay plan', () => {
+        expect(planDeUnificacion([{ id: 'a', categoria: null, publicada: false }]).categoria).toBeNull();
+    });
+});

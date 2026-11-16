@@ -149,6 +149,16 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const descartadas: string[] = (attrs._categoriasMalas?.falabella ?? []).map(String);
         let categoryId = this.sync.categoriaFalabella(product);
         let categoriaAuto = false;
+        // Un producto con variantes tiene UNA categoría: si el grupo ya la tiene, esta variante la hereda y no se vuelve a categorizar.
+        const familiaDeCategoria = await this.sync.familiaDe(scope, productId);
+        if (!categoryId && familiaDeCategoria.length > 1) {
+            const delGrupo = await this.sync.categoriaDeFamilia(familiaDeCategoria, 'falabella');
+            if (delGrupo && !descartadas.includes(delGrupo)) {
+                categoryId = delGrupo;
+                ids.falabella_category_id = delGrupo;
+                attrs._categoriaVerificada = delGrupo;
+            }
+        }
         let confianza: 'alta' | 'baja' | 'manual' | null = categoryId && String(attrs._categoriaManual) === String(categoryId) ? 'manual' : null;
 
         // Una categoría que aún nadie verificó (la puso la IA antes de esta comprobación) se revisa una vez.
@@ -183,6 +193,8 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 categoryId = r.id;
                 ids.falabella_category_id = r.id;
                 categoriaAuto = true;
+                // Se eligió UNA vez: el resto de variantes sin categoría (o aún sin publicar con otra) usan la misma.
+                if (familiaDeCategoria.length > 1) await this.sync.unificarCategoriasDeFamilia(familiaDeCategoria, { canal: 'falabella', categoryId: r.id }).catch(() => undefined);
                 attrs._categoriaVerificada = r.id;
                 confianza = r.confianza === 'alta' ? 'alta' : 'baja';
                 if (confianza === 'alta') delete attrs._categoriaDudosa;
