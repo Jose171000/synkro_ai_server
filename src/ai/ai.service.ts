@@ -55,6 +55,8 @@ export class AiService {
     htmlExistente?: string | null,
     /** Categorías que el producto YA tiene por canal ({ falabella: '3223', ripley: 'R14…' }): no se reclasifican, solo se usan para pedir los atributos. */
     categoriasElegidas?: Record<string, string>,
+    /** Redactar la ficha HTML general aunque el producto no apunte (aún) a un canal que la use: es información general y se reutiliza después. */
+    incluirHtml?: boolean,
   }) {
     let categoryRequirements: Record<string, CategoryAttribute[]> = {};
     let catJson: any = {};
@@ -257,7 +259,7 @@ export class AiService {
       }
 
       // Descripción HTML estándar de la agencia para los canales que aceptan HTML.
-      const aceptaHtml = dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce', 'ripley'].includes(m));
+      const aceptaHtml = !!dto.incluirHtml || dto.targetMarketplaces.map(m => m.toLowerCase()).some(m => ['falabella', 'shopify', 'woocommerce', 'ripley'].includes(m));
       const atributosParaFicha: Record<string, any> = { ...(vision ? this.atributosDeVision(vision) : {}) };
       for (const listing of Object.values<any>(finalJson ?? {})) Object.assign(atributosParaFicha, listing?.attributes ?? {});
       // Si el producto ya tiene su ficha HTML general se reutiliza tal cual: es información general, la misma en todos los canales.

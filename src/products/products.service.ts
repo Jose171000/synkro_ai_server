@@ -477,6 +477,8 @@ export class ProductsService {
             userId: cuentaDeCanales,
             // Regenerar no reabre la categoría de ningún canal: la que ya tiene se mantiene y solo se completan las que faltan.
             categoriasElegidas: categoriasElegidas(product.marketplaceIds as any, product.aiAttributes as any),
+            // La ficha HTML es información general: se redacta aunque el producto no apunte a un canal con HTML (si no, quedaba vacía sin avisar).
+            incluirHtml: true,
         });
 
         this.applyAiContent(product, aiContent);

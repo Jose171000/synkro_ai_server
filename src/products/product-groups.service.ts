@@ -204,6 +204,8 @@ export class ProductGroupsService {
             category: variantes.map((v) => v.category).find(Boolean),
             subcategory: variantes.map((v) => v.subCategory).find(Boolean),
             targetMarketplaces: opciones.marketplaces?.length ? opciones.marketplaces : (base.targetMarketplaces?.length ? base.targetMarketplaces : ['amazon', 'mercadolibre']),
+            // La ficha HTML es información general: se redacta aunque el grupo no apunte a un canal con HTML.
+            incluirHtml: true,
             tone: opciones.tone || 'professional',
             imageUrls: fotos,
             // Las cuentas de canales con las que la IA verifica categorías y atributos son las de quien subió el producto.
