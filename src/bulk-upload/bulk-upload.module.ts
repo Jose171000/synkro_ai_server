@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { BulkUploadController } from './bulk-upload.controller';
+import { CategoriaUnicaDeLote } from './categoria-unica-de-lote';
 import { AiProcessor } from './ai.processor';
 import { CategoryProcessor } from './category.processor';
 import { ProductEditProcessor } from './product-edit.processor';
@@ -48,6 +49,6 @@ import { EdicionMasivaService } from './edicion-masiva.service';
         CategoryProcessor,
         ProductEditProcessor,
         CategoryEditProcessor,
-        BatchNotificationService, BulkBatchService, EdicionMasivaService, SectionAccessGuard],
+        BatchNotificationService, BulkBatchService, EdicionMasivaService, SectionAccessGuard, CategoriaUnicaDeLote],
 })
 export class BulkUploadModule { }

@@ -12,6 +12,8 @@ export const COLUMNAS = {
     stock: ['stock', 'cantidad'],
     fotos: ['fotos', 'foto', 'imagenes', 'imágenes', 'image', 'imagen', 'img', 'photo'],
     nombre: ['nombre', 'productname', 'name', 'producto'],
+    /** Las filas con el mismo valor son variantes de un mismo producto: comparten UNA categoría por canal. */
+    grupo: ['sku_padre', 'sku padre', 'skupadre', 'parentsku', 'parent_sku', 'grupo'],
     descripcion: ['descripcion', 'descripción', 'description', 'detalle'],
     canales: ['canales', 'targetmarketplaces', 'marketplaces'],
     precioDescuento: ['precio_descuento', 'precio descuento', 'descuento', 'preciodescuento', 'saleprice'],

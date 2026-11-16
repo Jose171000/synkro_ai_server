@@ -13,7 +13,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
 import { datosConocidos } from '../ai/datos-conocidos';
-import { categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
+import { categoriasDeConsenso, categoriasElegidas, fusionarCategorias } from '../ai/categorias-elegidas';
 import { fotosParaIA } from './fotos-para-ia';
 import { EjeParaIA } from '../ai/ejes-de-variacion';
 import { ProductGroup } from './entities/product-group.entity';
@@ -358,6 +358,9 @@ export class ProductsService {
         const product = await this.buscarProducto(productId, userId, storeId, { owner: true });
         // Un grupo de variantes se analiza completo: información general, una foto de cada variante (hasta el límite) y todos los ejes.
         const { fotos, ejes, nombre } = await this.contextoDeGrupo(product, opciones.alGrupo);
+        // Las demás variantes del grupo: una sola categoría de Ripley sirve a todas.
+        const conGrupo = await this.productRepository.findOne({ where: { id: product.id }, relations: { group: true } });
+        const hermanasDelGrupo: Product[] = conGrupo?.group?.id ? await this.productRepository.find({ where: { group: { id: conGrupo.group.id } } as any }) : [];
         const aiContent: any = await this.aiService.generateProductContent({
             name: nombre,
             ejes,
@@ -375,8 +378,9 @@ export class ProductsService {
             }),
             // La ficha HTML es información general: si ya existe, Ripley usa esa misma.
             htmlExistente: String((product.aiAttributes as any)?.descriptionHtml ?? '').trim() || null,
-            // Si el producto ya tiene su categoría de Ripley no se vuelve a elegir: solo se rellenan sus atributos.
-            categoriasElegidas: Object.fromEntries(Object.entries(categoriasElegidas(product.marketplaceIds as any)).filter(([canal]) => canal === 'ripley')),
+            // Si el producto ya tiene su categoría de Ripley no se vuelve a elegir: solo se rellenan sus atributos. Una variante sin categoría
+            // usa la de su grupo (un producto con variantes tiene UNA sola categoría) y no se categoriza aparte.
+            categoriasElegidas: Object.fromEntries(Object.entries({ ...categoriasDeConsenso(hermanasDelGrupo), ...categoriasElegidas(product.marketplaceIds as any) }).filter(([canal]) => canal === 'ripley')),
         });
 
         const ripley = aiContent?.generatedListings?.ripley ?? {};
@@ -427,6 +431,13 @@ export class ProductsService {
             }
             product.marketplaceIds = ids as any;
             await this.productRepository.save(product);
+            // Se eligió UNA vez: las demás variantes del grupo que no tienen categoría de Ripley usan la misma.
+            if (ids.ripley_category_id) {
+                for (const h of hermanasDelGrupo.filter((x) => x.id !== product.id && !String((x.marketplaceIds as any)?.ripley_category_id ?? '').trim())) {
+                    h.marketplaceIds = { ...((h.marketplaceIds as any) || {}), ripley_category_id: ids.ripley_category_id, ...(ids.ripley_category_path ? { ripley_category_path: ids.ripley_category_path } : {}) } as any;
+                    await this.productRepository.save(h);
+                }
+            }
             guardado = true;
         }
 

@@ -4,12 +4,14 @@ import { AiService } from '../ai/ai.service';
 import { ProductsService } from '../products/products.service';
 import { SyncService } from '../sync/sync.service';
 import { FalabellaAutoPrepService } from '../ai/falabella-auto-prep.service';
-import { InternalServerErrorException } from '@nestjs/common';
+import { InternalServerErrorException, Optional } from '@nestjs/common';
 import { BatchNotificationService, BatchMeta } from './batch-notification.service';
 import { CuentasElegidas, cuentasParaPublicar, leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { CONCURRENCIA_IA } from './concurrencia-cola';
 import { BulkBatchService } from './bulk-batch.service';
 import { tamanoDeTandaFalabella } from './tanda-falabella';
+import { CategoriaUnicaDeLote, TurnoDeCategoria } from './categoria-unica-de-lote';
+import { categoriasElegidas } from '../ai/categorias-elegidas';
 
 @Processor('generate-listings-queue', { concurrency: CONCURRENCIA_IA })
 export class AiProcessor extends WorkerHost {
@@ -20,6 +22,8 @@ export class AiProcessor extends WorkerHost {
         private readonly falabellaPrep: FalabellaAutoPrepService,
         private readonly batchNotification: BatchNotificationService,
         private readonly bulkBatch: BulkBatchService,
+        // Opcional: sin él (pruebas, scripts) cada fila se categoriza por su cuenta, como antes.
+        @Optional() private readonly categoriaUnica?: CategoriaUnicaDeLote,
     ) {
         super();
         console.log(`[AiProcessor] Productos procesados a la vez: ${CONCURRENCIA_IA} (AI_QUEUE_CONCURRENCY)`);
@@ -50,6 +54,13 @@ export class AiProcessor extends WorkerHost {
         // Con reintentos, solo el último intento cuenta como fallo del lote; antes se vuelve a intentar sin contarlo.
         const ultimoIntento = job.attemptsMade + 1 >= (job.opts?.attempts ?? 1);
 
+        // Variantes de un mismo producto (mismo «sku_padre»): la categoría se decide UNA vez y las demás filas la usan.
+        const grupoClave = String(job.data.grupoClave ?? '').trim();
+        let turno: TurnoDeCategoria = { rol: 'solo' };
+        if (grupoClave && job.data.batchId && this.categoriaUnica) {
+            try { turno = await this.categoriaUnica!.turno(job.data.batchId, grupoClave, String(job.id)); } catch { turno = { rol: 'solo' }; }
+        }
+
         try {
             // 1. Create the product with the resolved image URL (if any). En un reintento ya existe: se retoma sin duplicar.
             // Un producto reenviado desde «Reintentar» pudo haberse creado en la carga anterior.
@@ -76,10 +87,16 @@ export class AiProcessor extends WorkerHost {
                 imageUrls: imagenes,
                 userId,
                 estimar: true,
+                // Quien llega después del primero del grupo usa la categoría ya decidida: no se vuelve a categorizar.
+                ...(turno.rol === 'seguidor' ? { categoriasElegidas: turno.categorias } : {}),
             });
 
             // 3. Misma lógica que la creación individual: atributos por canal, medidas y lo visto en las fotos.
             this.productsService.applyAiContent(product, aiContent);
+            // El primero del grupo publica sus categorías para las demás variantes.
+            if (turno.rol === 'jefe') {
+                await this.categoriaUnica!.publicar(job.data.batchId, grupoClave, categoriasElegidas(product.marketplaceIds as any, product.aiAttributes as any)).catch(() => undefined);
+            }
             product.status = 'synced';
             // Sin nombre o descripción en el Excel, los arma la IA a partir de las fotos.
             if (!productName) product.name = (product.aiTitle || aiContent.vision?.suggestedName || sku).slice(0, 255);
@@ -105,6 +122,8 @@ export class AiProcessor extends WorkerHost {
         } catch (error) {
             console.error(`[AiProcessor] Job ${job.id} failed (intento ${job.attemptsMade + 1}):`, error);
             if (!ultimoIntento) throw new InternalServerErrorException('Error processing AI background job');
+            // Si quien decidía la categoría del grupo falló del todo, las demás filas no esperan: se categorizan por su cuenta.
+            if (turno.rol === 'jefe') await this.categoriaUnica!.fallo(job.data.batchId, grupoClave).catch(() => undefined);
 
             // Track failed job too — batch must still complete
             if (batchMeta) {

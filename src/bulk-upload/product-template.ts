@@ -39,6 +39,7 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         { header: 'precio_descuento', key: 'precio_descuento', width: 18 },
         { header: 'descuento_desde', key: 'descuento_desde', width: 16 },
         { header: 'descuento_hasta', key: 'descuento_hasta', width: 16 },
+        { header: 'sku_padre', key: 'sku_padre', width: 16 },
     ];
     hoja.getRow(1).font = { bold: true };
     hoja.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCCB34' } };
@@ -86,6 +87,8 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         'canales: elige de la lista. Si la dejas vacía se usan los canales marcados en pantalla al subir el archivo (o todos los conectados, si no marcaste ninguno).',
         'precio_descuento: opcional. Debe ser menor que el precio. Se envía a Falabella como precio con descuento.',
         'descuento_desde / descuento_hasta: opcionales, fechas AAAA-MM-DD (por ejemplo 2026-11-30). Sin fechas, el descuento queda sin vigencia definida.',
+        'sku_padre: opcional. Escribe el mismo valor en las filas que son variantes de un mismo producto (talla, color…). Todas comparten UNA sola categoría por canal,',
+        '           que se decide una vez con la primera fila del grupo. Después, en Productos, se agrupan como variantes.',
     ];
     lineas.forEach(l => guia.addRow([l]));
     guia.getRow(1).font = { bold: true, size: 13 };

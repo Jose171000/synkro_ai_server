@@ -195,7 +195,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const existentes = await this.productsService.skusExistentes({ userId: req.user.id, storeId }, skusDelExcel);
             const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
-            type Fila = { i: number; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
+            type Fila = { i: number; grupo: string; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
             const validas: Fila[] = [];
             rows.forEach((row: any, i: number) => {
                 const sku = (this.getVal(row, COLUMNAS.sku) ?? '').trim();
@@ -226,7 +226,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 // Sin columna de canales se usan los marcados en pantalla o, si no hay, todos los conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
                 validas.push({
-                    i, sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
+                    i, grupo: (this.getVal(row, COLUMNAS.grupo) ?? '').trim(), sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
                     nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
                     descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
                     fotos: this.getVal(row, COLUMNAS.fotos),
@@ -264,6 +264,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const cuentas = leerCuentasElegidas(req.body?.cuentas);
             const trabajos = listas.map(({ fila, urls }) => ({
                 sku: fila.sku,
+                // Las filas con el mismo «sku_padre» son variantes de un producto: se categorizan UNA vez y comparten la categoría.
+                grupoClave: fila.grupo || null,
                 productName: fila.nombre,
                 description: fila.descripcion,
                 price: fila.precio,
