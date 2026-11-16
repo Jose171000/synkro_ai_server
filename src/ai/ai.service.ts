@@ -416,6 +416,7 @@ Reglas:
 - No inventes datos técnicos (medidas, materiales, certificaciones, garantías): usa solo lo que está en la información dada. Si falta un dato, no lo incluyas en "specs".
 - Sin precios, datos de contacto ni menciones a otras tiendas.
 - Español neutro, sin mayúsculas sostenidas ni signos de exclamación en exceso.
+- INTRODUCCIÓN CORTA Y PRECISA: "intro1" e "intro2" son frases breves y concretas, sin relleno ni rodeos ni promesas genéricas («tu cuerpo necesita…», «lleva tus metas al siguiente nivel»). Los detalles van en los beneficios y las especificaciones, no en la introducción: el texto inicial no debe tapar las imágenes de la ficha.
 
 Producto: ${datos.nombre}
 Información del cliente: ${datos.textoCliente || '(ninguna)'}
@@ -425,8 +426,8 @@ Datos conocidos: ${JSON.stringify(datos.atributos ?? {})}
 Responde únicamente este JSON:
 {
   "title": "título del producto optimizado para SEO, entre 40 y 100 caracteres",
-  "intro1": "párrafo 1: introducción persuasiva que conecta con el problema del cliente y presenta la solución",
-  "intro2": "párrafo 2: detalle sobre la experiencia de uso o el beneficio principal",
+  "intro1": "UNA sola frase de máximo 20 palabras: qué es el producto y su beneficio principal",
+  "intro2": "UNA sola frase de máximo 20 palabras con un dato concreto (uso, sabor, medida o compatibilidad); si no aporta nada nuevo, déjalo vacío",
   "benefits": [ { "subtitle": "beneficio", "text": "descripción corta e impactante", "alt": "texto alternativo SEO de la imagen" } ],
   "why": [ { "feature": "característica", "benefit": "beneficio que aporta" } ],
   "specs": [ { "label": "dato técnico", "value": "valor" } ]${opcionesDelPrompt}
