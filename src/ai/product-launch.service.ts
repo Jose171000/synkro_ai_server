@@ -7,6 +7,7 @@ import { quitarUrls } from './description-html';
 import { CuentasElegidas, cuentasParaPublicar } from '../sync/cuentas-elegidas';
 import { nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
+import { motivoRipleyNoDisponible } from '../sync/publicacion-masiva';
 
 export interface LaunchChannelResult {
     marketplace: string;
@@ -31,6 +32,8 @@ export interface LaunchVariant {
 export interface LaunchReport {
     channels: LaunchChannelResult[];
     falabella?: FalabellaPrepReport;
+    /** Ripley: la categoría con la que saldría (la IA la eligió al generar el contenido) y si el producto está listo para enviarse. */
+    ripley?: { category: { id: string; path: string } | null; listo: boolean; motivo?: string };
     /** Datos de Mercado Libre que la IA tuvo que estimar. */
     estimatedMeli: string[];
     /** Categoría de Mercado Libre con la que sale el producto; sin `id`, `options` son las recomendadas para que la persona elija. */
@@ -39,8 +42,8 @@ export interface LaunchReport {
     variants?: LaunchVariant[];
 }
 
-const CANALES = ['mercadolibre', 'falabella', 'woocommerce'];
-const NOMBRE: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', woocommerce: 'WooCommerce' };
+const CANALES = ['mercadolibre', 'falabella', 'woocommerce', 'ripley'];
+const NOMBRE: Record<string, string> = { mercadolibre: 'Mercado Libre', falabella: 'Falabella', woocommerce: 'WooCommerce', ripley: 'Ripley' };
 
 /**
  * «Lanzar» un producto: deja listo cada canal y lo publica, sin que la persona tenga que hacer nada más.
@@ -134,6 +137,23 @@ export class ProductLaunchService {
                 continue;
             }
 
+            // Ripley: la IA ya eligió su categoría y sus datos al generar el contenido. Aquí solo se comprueba que haya categoría y que el
+            // servidor tenga encendida la publicación; no se publica a ciegas.
+            if (canal === 'ripley') {
+                const ids: Record<string, any> = (familia[0].marketplaceIds as any) || {};
+                const categoriaId = String(ids.ripley_category_id ?? '').trim();
+                reporte.ripley = { category: categoriaId ? { id: categoriaId, path: String(ids.ripley_category_path ?? categoriaId) } : null, listo: !!categoriaId, ...(categoriaId ? {} : { motivo: 'no tiene categoría de Ripley' }) };
+                if (!categoriaId) {
+                    reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: 'Ripley: este producto todavía no tiene categoría de Ripley. Ábrelo en Productos → Ficha → Ripley → Preparar y vuelve a publicar.' });
+                    continue;
+                }
+                const apagado = motivoRipleyNoDisponible();
+                if (apagado) {
+                    reporte.channels.push({ marketplace: canal, accounts: 0, status: 'omitido', message: `Ripley: ${apagado} Queda preparado en Synkro y se publicará cuando se encienda.` });
+                    continue;
+                }
+            }
+
             // Falabella rechazaría un producto al que le falta algo que pide: se dice qué falta en vez de fingir que se publica.
             if (canal === 'falabella' && faltaFalabella) {
                 reporte.channels.push({
@@ -156,9 +176,11 @@ export class ProductLaunchService {
             let ultimoError = '';
             for (const cuenta of delCanal) {
                 let enEstaCuenta = 0;
-                for (const miembro of familia) {
+                // Ripley recibe el producto (o el grupo entero) en UN envío de catálogo, no uno por variante.
+                for (const miembro of canal === 'ripley' ? [familia[0]] : familia) {
                     try {
-                        await this.sync.enqueuePublish(scope, miembro.id, [canal], { [canal]: cuenta.id });
+                        if (canal === 'ripley') await this.sync.enqueuePublishFamilia(scope, miembro.id, [canal], { [canal]: cuenta.id });
+                        else await this.sync.enqueuePublish(scope, miembro.id, [canal], { [canal]: cuenta.id });
                         enEstaCuenta++;
                     } catch (error: any) {
                         ultimoError = error?.response?.message ?? error?.message ?? 'error desconocido';
