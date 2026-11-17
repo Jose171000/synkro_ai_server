@@ -136,7 +136,8 @@ export class ProductSheetService {
                 marketplace: enlace.marketplace,
                 connectionId: cuenta.id,
                 account: cuenta.label || cuenta.externalNickname || cuenta.externalUserId,
-                status: enlace.syncStatus,
+                // Un envío a Ripley sin oferta todavía espera su aprobación en el canal.
+                status: enlace.marketplace === 'ripley' && enlace.syncStatus === 'pending' ? 'enviado' : enlace.syncStatus,
                 lastError: enlace.lastError ?? null,
                 permalink: enlace.permalink ?? null,
             };

@@ -440,6 +440,8 @@ export class EcommerceSyncService implements OnModuleInit {
      */
     async refresh(connection: MarketplaceConnection): Promise<{ revisadas: number; actualizadas: number; ausentes: number }> {
         const canal = connection.marketplace as EcommerceChannel;
+        // Productos ya enviados a Ripley antes de que el envío dejara su publicación «en proceso»: se vinculan para que se vean.
+        if (canal === 'ripley') await this.vincularEnviosSinEnlace(connection).catch((error: any) => console.warn(`[Sync] Envíos a Ripley sin publicación: ${error?.message}`));
         const enlaces = await this.links.find({
             where: { connection: { id: connection.id }, marketplace: canal },
             relations: { product: true },
@@ -452,8 +454,17 @@ export class EcommerceSyncService implements OnModuleInit {
 
         let actualizadas = 0;
         let ausentes = 0;
+        let enviosRevisados = 0;
         for (const enlace of enlaces) {
             const fila = porId.get(`${enlace.externalId}:${enlace.variationId ?? ''}`) ?? porSku.get(enlace.product.sku);
+            // Ripley: un envío que espera su aprobación todavía no tiene oferta; no es «ausente». Se mira si Ripley lo rechazó.
+            if (!fila && canal === 'ripley' && enlace.syncStatus === 'pending') {
+                if (enviosRevisados < 10) {
+                    enviosRevisados++;
+                    await this.revisarEnvioPendienteDeRipley(connection, enlace).catch((error: any) => console.warn(`[Sync] Envío pendiente de Ripley (${enlace.product.sku}): ${error?.message}`));
+                }
+                continue;
+            }
             if (!fila) {
                 // Si la lectura quedó a medias, que falte no prueba nada.
                 if (!lectura.incompleto) {
@@ -469,6 +480,41 @@ export class EcommerceSyncService implements OnModuleInit {
             actualizadas++;
         }
         return { revisadas: enlaces.length, actualizadas, ausentes };
+    }
+
+    /** Los productos de la tienda que ya se enviaron a esta cuenta de Ripley y todavía no tienen publicación se registran como «en proceso». */
+    private async vincularEnviosSinEnlace(connection: MarketplaceConnection): Promise<void> {
+        const filas: { id: string }[] = await this.links.manager.query(
+            `SELECT p.id FROM products p JOIN marketplace_connections c ON c.id = $1
+             WHERE p."storeId" = c."storeId" AND (p."aiAttributes"::jsonb) ? 'ripley_envio'
+               AND NOT EXISTS (SELECT 1 FROM listing_links l WHERE l."productId" = p.id AND l."connectionId" = c.id)`,
+            [connection.id],
+        );
+        for (const f of filas) {
+            await this.links.save(this.links.create({ marketplace: 'ripley', externalId: '', product: { id: f.id } as any, connection: { id: connection.id } as any, syncStatus: 'pending' }));
+        }
+    }
+
+    /**
+     * Un producto enviado a Ripley que aún no tiene oferta: si Ripley rechazó su envío (ofertas o productos con errores), la publicación
+     * pasa a «error» con el motivo; si sigue en curso o terminó bien, se deja en proceso (la oferta aparecerá cuando lo apruebe).
+     */
+    private async revisarEnvioPendienteDeRipley(connection: MarketplaceConnection, enlace: ListingLink): Promise<void> {
+        const envio = ((enlace.product?.aiAttributes as any) ?? {}).ripley_envio as { importId?: string | number; productImportId?: string | number | null } | undefined;
+        if (!envio?.importId) return;
+        const api = this.clientOf('ripley') as RipleyApiService;
+        const auth = this.authOf(connection);
+        const ofertas = await api.estadoDeImportacion(auth, envio.importId);
+        const productos = envio.productImportId ? await api.estadoDeProductos(auth, envio.productImportId).catch(() => null) : null;
+        const falloOfertas = String(ofertas?.status ?? '').toUpperCase() === 'FAILED' || Number(ofertas?.lines_in_error) > 0;
+        const falloProductos = Number(productos?.lines_in_error ?? productos?.transform_lines_in_error) > 0;
+        if (!falloOfertas && !falloProductos) return;
+        const detalle = falloProductos && envio.productImportId
+            ? await api.reporteDeErrores(auth, 'productos', envio.productImportId, 3).catch(() => [] as string[])
+            : await api.reporteDeErrores(auth, 'ofertas', envio.importId, 3).catch(() => [] as string[]);
+        enlace.syncStatus = 'error';
+        enlace.lastError = `Ripley rechazó el envío (importación ${envio.importId})${detalle.length ? `: ${detalle.join(' · ')}` : '.'}`.slice(0, 500);
+        await this.links.save(enlace);
     }
 
     // ─────────────────────────────────────────────────────────────

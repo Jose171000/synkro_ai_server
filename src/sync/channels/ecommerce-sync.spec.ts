@@ -891,3 +891,34 @@ describe('enlazar UN producto con SU oferta de Ripley', () => {
         expect(enlaces).toHaveLength(0);
     });
 });
+
+describe('Ripley: un envío que espera su aprobación', () => {
+    const cuentaRipley = () => cuenta({ id: 'rp1', marketplace: 'ripley', secrets: { site: 'x.mirakl.net' } });
+    const producto = { id: 'p1', sku: 'PSI-0001', stock: 1, price: 1000, aiAttributes: { ripley_envio: { importId: 77, productImportId: 88, enviadoEn: '2026-11-17T18:00:00Z' } } };
+    const enviado = (over: any = {}) => ({ id: 'e1', marketplace: 'ripley', externalId: '', variationId: null, syncStatus: 'pending', lastStockSynced: null, product: producto, connection: { id: 'rp1' }, ...over });
+
+    it('mientras Ripley no tenga la oferta, sigue en proceso (no es «ausente» ni se pausa)', async () => {
+        const { service, cliente, enlaces } = construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enviado()] });
+        cliente.estadoDeImportacion = jest.fn(async () => ({ status: 'COMPLETE', lines_in_error: 0 }));
+        cliente.estadoDeProductos = jest.fn(async () => ({ import_status: 'RUNNING', transform_lines_in_error: 0 }));
+        const r = await service.refresh(cuentaRipley() as any);
+        expect(r.ausentes).toBe(0);
+        expect(enlaces[0].syncStatus).toBe('pending');
+    });
+
+    it('si Ripley rechazó el envío, pasa a error con el motivo', async () => {
+        const { service, cliente, enlaces } = construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enviado()] });
+        cliente.estadoDeImportacion = jest.fn(async () => ({ status: 'COMPLETE', lines_in_error: 0 }));
+        cliente.estadoDeProductos = jest.fn(async () => ({ transform_lines_in_error: 1 }));
+        cliente.reporteDeErrores = jest.fn(async () => ['Marca no permitida']);
+        await service.refresh(cuentaRipley() as any);
+        expect(enlaces[0]).toMatchObject({ syncStatus: 'error', lastError: expect.stringMatching(/Ripley rechazó el envío \(importación 77\): Marca no permitida/) });
+    });
+
+    it('cuando Ripley ya tiene la oferta, queda publicada con su id', async () => {
+        const { service, cliente, enlaces } = construir({ conexiones: [cuentaRipley()], productos: [producto], enlaces: [enviado()] });
+        cliente.listListings.mockResolvedValue({ rows: [fila({ sku: 'PSI-0001', externalId: '5551', stock: 1, regularPrice: 1000 })], sinSku: 0, productos: 1, incompleto: false });
+        await service.refresh(cuentaRipley() as any);
+        expect(enlaces[0]).toMatchObject({ syncStatus: 'published', externalId: '5551' });
+    });
+});

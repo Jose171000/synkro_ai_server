@@ -1343,6 +1343,22 @@ export class SyncService implements OnModuleInit {
         return resultado;
     }
 
+    /**
+     * Un envío a Ripley deja a cada producto con una publicación «en proceso» en esa cuenta: así aparece en la lista de productos y en
+     * sus canales mientras Ripley lo aprueba. La revisión periódica la pasa a «publicada» cuando la oferta existe, o a «error» si Ripley
+     * rechazó el envío. Lo que ya está publicado o pausado no se toca.
+     */
+    async registrarEnvioARipley(productIds: string[], connectionId: string): Promise<void> {
+        for (const id of [...new Set(productIds)]) {
+            const previo = await this.listingLinkRepository.findOne({ where: { product: { id }, connection: { id: connectionId } } });
+            if (previo && (previo.syncStatus === 'published' || previo.syncStatus === 'paused')) continue;
+            const enlace = previo ?? this.listingLinkRepository.create({ marketplace: 'ripley', externalId: '', product: { id } as any, connection: { id: connectionId } as any });
+            enlace.syncStatus = 'pending';
+            enlace.lastError = null as any;
+            await this.listingLinkRepository.save(enlace);
+        }
+    }
+
     /** Avisa a la persona cómo salió el envío de un producto a Ripley (lo hace la cola, no hay nadie mirando la pantalla). */
     async avisarEnvioARipley(userId: string, productId: string, resultado: { ok: boolean; texto: string; sku?: string }): Promise<void> {
         await this.notifications.notify(userId, {

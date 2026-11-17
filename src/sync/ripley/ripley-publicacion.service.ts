@@ -283,6 +283,8 @@ export class RipleyPublicacionService {
             // Se anota en el producto ANTES de soltar el cerrojo: desde este instante cualquier reenvío queda bloqueado.
             const familia: any[] = opciones.alGrupo ? await this.sync.familiaDe(scope, productId) : [await this.sync.findScopedProduct(scope, productId)];
             await this.anotarEnvio(familia, { importId: r.importId, productImportId: r.productImportId, enviadoEn: new Date().toISOString() });
+            // Queda como publicación «en proceso» de esa cuenta hasta que Ripley la apruebe (nunca interrumpe el envío ya hecho).
+            try { await this.sync.registrarEnvioARipley(familia.map((p) => p.id), conexion.id); } catch (error: any) { this.logger.warn(`No se pudo registrar el envío a Ripley en la lista de publicaciones: ${error?.message}`); }
         } finally {
             skus.forEach((s) => this.enVuelo.delete(s));
         }
