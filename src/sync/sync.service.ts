@@ -16,7 +16,7 @@ import { valorConAjuste } from '../products/ajustes-de-canal';
 import { mencionaOtroCanal } from '../ai/otro-canal';
 import { estadoDeCategoriaDeGrupo, planDeUnificacion } from './falabella/categoria-de-grupo';
 import { categoriasElegidas } from '../ai/categorias-elegidas';
-import { MAX_PRODUCTOS_POR_PETICION, anotarReenvio, decidirReenvio, segundosParaOtraPeticion } from './falabella/control-de-reenvio-de-fotos';
+import { ESPERA_ENTRE_REENVIOS_MS, MAX_PRODUCTOS_POR_PETICION, anotarReenvio, decidirAutoReenvio, decidirReenvio, segundosParaOtraPeticion } from './falabella/control-de-reenvio-de-fotos';
 import { fusionarAtributos } from './falabella/fusionar-atributos';
 import { descripcionDeTexto, descripcionParaActualizar } from './meli/descripcion-meli';
 import { aplicarContenidoImportado, contenidoDeFichaFalabella, contenidoDeItemMeli, resumenDeContenido } from './contenido-importado';
@@ -3745,6 +3745,36 @@ export class SyncService implements OnModuleInit {
                     enlace.product.aiAttributes = atributos as any;
                     await this.enviarImagenesAFalabella(connectionId, credenciales, userId, [enlace.product]);
                 }
+            } else if (estado.status === 'rejected' && /image/i.test(estado.reason) && userId && (enlace.product.images ?? []).some(i => i?.url)
+                && decidirAutoReenvio((enlace.product.aiAttributes as any)?._fotosReenvio).accion !== 'rendirse') {
+                // Fotos que Falabella aún no tiene: nadie debe tener que ocuparse. Synkro las reenvía solo, espaciado (30 min por producto, hasta
+                // 5 veces y con pausa entre peticiones de la cuenta) y mantiene la ficha «en proceso». Solo si no entran tras todos los intentos
+                // se muestra el error con su motivo.
+                const decision = decidirAutoReenvio((enlace.product.aiAttributes as any)?._fotosReenvio);
+                if (enlace.syncStatus !== 'pending') {
+                    enlace.syncStatus = 'pending';
+                    enlace.lastError = null as any;
+                    await this.listingLinkRepository.save(enlace);
+                }
+                let minutos = decision.accion === 'esperar' ? decision.minutos : Math.round(ESPERA_ENTRE_REENVIOS_MS / 60_000);
+                if (decision.accion === 'reenviar') {
+                    const pausa = segundosParaOtraPeticion(this.ultimoReenvioDeFotos.get(connectionId));
+                    if (pausa > 0) minutos = Math.max(1, Math.ceil(pausa / 60));
+                    else {
+                        await this.enviarImagenesAFalabella(connectionId, credenciales, userId, [enlace.product]);
+                        this.ultimoReenvioDeFotos.set(connectionId, Date.now());
+                        const atributos: Record<string, any> = { ...((enlace.product.aiAttributes as any) || {}) };
+                        atributos._fotosReenvio = anotarReenvio(atributos._fotosReenvio);
+                        await this.productRepository.update(enlace.product.id, { aiAttributes: atributos } as any);
+                        enlace.product.aiAttributes = atributos as any;
+                    }
+                }
+                const ventanaAuto = Math.floor(Date.now() / (minutos * 60_000)) + 1;
+                await this.syncQueue.add(
+                    'falabella-qc',
+                    { connectionId, skus: [enlace.product.sku], intento: intento + 1 },
+                    { delay: minutos * 60_000, jobId: `qc-fotos-auto-${connectionId}-${enlace.product.sku}-${ventanaAuto}` },
+                );
             } else if (estado.status === 'rejected') {
                 const categoriaMala = esCategoriaEquivocada(estado.reason);
                 if (categoriaMala) await this.descartarCategoria(enlace.product);

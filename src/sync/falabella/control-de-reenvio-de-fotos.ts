@@ -36,6 +36,24 @@ export function anotarReenvio(registro: RegistroDeReenvio | null | undefined, ah
     return { ultima: new Date(ahora).toISOString(), veces: Number(registro?.veces ?? 0) + 1 };
 }
 
+/** Qué hace Synkro SOLO cuando Falabella dice que a una ficha le faltan las fotos. */
+export type AccionAnteFotosFaltantes =
+    | { accion: 'reenviar' }
+    | { accion: 'esperar'; minutos: number }
+    | { accion: 'rendirse'; motivo: string };
+
+/**
+ * Reenvío AUTOMÁTICO de fotos: mismos límites que el manual (espera de 30 min entre reenvíos del mismo producto y tope de 5), para no
+ * saturar los límites de llamadas de Falabella. Si ya no quedan intentos, se rinde y la persona ve el motivo.
+ */
+export function decidirAutoReenvio(registro: RegistroDeReenvio | null | undefined, ahora: number = Date.now()): AccionAnteFotosFaltantes {
+    const d = decidirReenvio(registro, ahora);
+    if (d.permitido) return { accion: 'reenviar' };
+    if (Number(registro?.veces ?? 0) >= MAX_REENVIOS_POR_PRODUCTO) return { accion: 'rendirse', motivo: d.motivo };
+    const ultima = registro?.ultima ? Date.parse(registro.ultima) : ahora;
+    return { accion: 'esperar', minutos: Math.max(1, Math.ceil((ESPERA_ENTRE_REENVIOS_MS - (ahora - ultima)) / 60_000)) };
+}
+
 /** Segundos que faltan para poder hacer otra petición a la misma cuenta; 0 si ya se puede. */
 export function segundosParaOtraPeticion(ultimaPeticion: number | undefined, ahora: number = Date.now()): number {
     if (!ultimaPeticion) return 0;
