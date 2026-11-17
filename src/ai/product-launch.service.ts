@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { SyncScope, SyncService } from '../sync/sync.service';
 import { FalabellaAutoPrepService, FalabellaPrepReport } from './falabella-auto-prep.service';
 import { AiService } from './ai.service';
@@ -8,6 +8,8 @@ import { CuentasElegidas, cuentasParaPublicar } from '../sync/cuentas-elegidas';
 import { nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
 import { etiquetaDe } from '../products/variantes';
 import { motivoRipleyNoDisponible } from '../sync/publicacion-masiva';
+import { RipleyCatalogoService } from '../sync/ripley/ripley-catalogo.service';
+import { RipleyPublicacionService } from '../sync/ripley/ripley-publicacion.service';
 
 export interface LaunchChannelResult {
     marketplace: string;
@@ -33,7 +35,7 @@ export interface LaunchReport {
     channels: LaunchChannelResult[];
     falabella?: FalabellaPrepReport;
     /** Ripley: la categoría con la que saldría (la IA la eligió al generar el contenido) y si el producto está listo para enviarse. */
-    ripley?: { category: { id: string; path: string } | null; listo: boolean; motivo?: string };
+    ripley?: { category: { id: string; path: string } | null; brand: string | null; attributes?: { filled: number; total: number }; listo: boolean; motivo?: string; avisos: string[] };
     /** Datos de Mercado Libre que la IA tuvo que estimar. */
     estimatedMeli: string[];
     /** Categoría de Mercado Libre con la que sale el producto; sin `id`, `options` son las recomendadas para que la persona elija. */
@@ -60,6 +62,8 @@ export class ProductLaunchService {
         private readonly falabellaPrep: FalabellaAutoPrepService,
         private readonly ai: AiService,
         private readonly canales: ChannelAttributesService,
+        @Optional() private readonly ripleyCatalogo?: RipleyCatalogoService,
+        @Optional() private readonly ripleyPublicacion?: RipleyPublicacionService,
     ) { }
 
     /**
@@ -140,11 +144,9 @@ export class ProductLaunchService {
             // Ripley: la IA ya eligió su categoría y sus datos al generar el contenido. Aquí solo se comprueba que haya categoría y que el
             // servidor tenga encendida la publicación; no se publica a ciegas.
             if (canal === 'ripley') {
-                const ids: Record<string, any> = (familia[0].marketplaceIds as any) || {};
-                const categoriaId = String(ids.ripley_category_id ?? '').trim();
-                reporte.ripley = { category: categoriaId ? { id: categoriaId, path: String(ids.ripley_category_path ?? categoriaId) } : null, listo: !!categoriaId, ...(categoriaId ? {} : { motivo: 'no tiene categoría de Ripley' }) };
-                if (!categoriaId) {
-                    reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: 'Ripley: este producto todavía no tiene categoría de Ripley. Ábrelo en Productos → Ficha → Ripley → Preparar y vuelve a publicar.' });
+                reporte.ripley = await this.revisarRipley(scope, familia);
+                if (!reporte.ripley.listo) {
+                    reporte.channels.push({ marketplace: canal, accounts: 0, status: 'error', message: `Ripley: todavía ${reporte.ripley.motivo}. Corrígelo en Productos → Ficha → Ripley → Preparar y vuelve a pulsar Publicar.` });
                     continue;
                 }
                 const apagado = motivoRipleyNoDisponible();
@@ -198,6 +200,49 @@ export class ProductLaunchService {
         }
         reporte.variants = familia.map((m) => this.vistaDeVariante(m, pedidos));
         return reporte;
+    }
+
+    /**
+     * Lo que se vería de Ripley antes de publicar, con la misma estructura que Falabella: categoría, marca, atributos con valor y, si algo
+     * impide enviarlo, qué es. Usa la vista previa de Ripley (solo lee: no envía nada) para saber si el envío saldría.
+     */
+    private async revisarRipley(scope: SyncScope, familia: any[]): Promise<NonNullable<LaunchReport['ripley']>> {
+        const ids: Record<string, any> = (familia[0].marketplaceIds as any) || {};
+        const attrs: Record<string, any> = (familia[0].aiAttributes as any) || {};
+        const categoriaId = String(ids.ripley_category_id ?? '').trim();
+        const marca = String(attrs.ripley?.brand ?? attrs.brand ?? '').trim() || null;
+        if (!categoriaId) return { category: null, brand: marca, listo: false, motivo: 'no tiene categoría de Ripley', avisos: [] };
+
+        let ruta = String(ids.ripley_category_path ?? categoriaId);
+        let atributos: { filled: number; total: number } | undefined;
+        if (this.ripleyCatalogo) {
+            try {
+                const campos = await this.ripleyCatalogo.campos(categoriaId);
+                ruta = campos.path || ruta;
+                const pedidos = campos.campos.filter((c) => c.required && !c.isVariant);
+                const valores: Record<string, any> = attrs.ripley_attributes ?? {};
+                atributos = { filled: pedidos.filter((c) => String(valores[c.name] ?? '').trim() !== '').length, total: pedidos.length };
+            } catch { /* sin catálogo: se muestra lo que hay */ }
+        }
+
+        const avisos: string[] = [];
+        let listo = true;
+        let motivo: string | undefined;
+        if (this.ripleyPublicacion) {
+            try {
+                const v = await this.ripleyPublicacion.vistaPrevia(scope, familia[0].id, { alGrupo: familia.length > 1 });
+                avisos.push(...v.errores, ...v.productos.flatMap((p) => p.errores.map((e) => `${p.sku}: ${e}`)));
+                if (v.bloqueo) avisos.push(v.bloqueo.motivo);
+                if (v.yaEnRipley?.length) avisos.push(`Estos SKU ya existen en Ripley (${v.yaEnRipley.map((e) => e.sku).join(', ')}): enviarlos actualizaría esas fichas.`);
+                listo = v.puedeEnviar && !v.errores.length && !v.bloqueo && !(v.yaEnRipley?.length);
+                if (!listo) motivo = avisos[0] ?? 'faltan datos para enviarlo';
+            } catch (error: any) {
+                // La revisión no pudo hacerse (límite de peticiones, red): no se bloquea, pero se dice.
+                this.logger.warn(`Vista previa de Ripley para ${familia[0].sku}: ${error?.message}`);
+                avisos.push('No se pudo revisar con Ripley en este momento; se revisará de nuevo al enviar.');
+            }
+        }
+        return { category: { id: categoriaId, path: ruta }, brand: marca, ...(atributos ? { attributes: atributos } : {}), listo, ...(motivo ? { motivo } : {}), avisos };
     }
 
     /** Cómo saldría una variante en cada canal pedido (títulos incluidos). */
