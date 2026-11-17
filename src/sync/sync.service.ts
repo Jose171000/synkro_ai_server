@@ -5297,7 +5297,77 @@ export class SyncService implements OnModuleInit {
             } catch (error: any) {
                 console.warn(`[Sync] No se pudo revisar la calidad de las fichas de Falabella (${c.externalUserId}): ${error?.message}`);
             }
+            // Que la ficha tenga sus fotos no depende de que Falabella la rechace: se comprueba y, si faltan, se reenvían solas.
+            try {
+                await this.verificarFotosDeFalabella(c.id);
+            } catch (error: any) {
+                console.warn(`[Sync] No se pudieron comprobar las fotos de las fichas de Falabella (${c.externalUserId}): ${error?.message}`);
+            }
         }
+    }
+
+    /**
+     * Las fichas que Synkro creó en Falabella en las últimas 72 horas: con lo que Falabella dice tener de cada una se comprueba que ya
+     * tengan sus fotos. A las que no las tienen se les reenvían solas (30 min entre reenvíos por producto, hasta 5 veces y con pausa
+     * entre peticiones de la cuenta). Así nadie tiene que fijarse en «Imágenes: Pendiente» del Seller Center ni pulsar nada.
+     */
+    async verificarFotosDeFalabella(connectionId: string): Promise<{ revisadas: number; reenviadas: number }> {
+        const ahora = Date.now();
+        const enlaces = await this.listingLinkRepository.find({
+            where: { connection: { id: connectionId }, marketplace: 'falabella', syncStatus: In(['pending', 'published']), createdAt: MoreThan(new Date(ahora - 72 * 3_600_000)) },
+            relations: { product: true, connection: { owner: true } },
+            order: { createdAt: 'DESC' },
+            take: 100,
+        });
+        // Falabella necesita unos minutos para descargar las fotos; las ya comprobadas no se vuelven a mirar.
+        const candidatas = enlaces.filter(e =>
+            ahora - new Date(e.createdAt).getTime() > 10 * 60_000
+            && (e.product?.images ?? []).some(i => i?.url)
+            && !(e.product?.aiAttributes as any)?._fotosVerificadas);
+        if (!candidatas.length) return { revisadas: 0, reenviadas: 0 };
+
+        const conexion = await this.getValidConnectionById(connectionId);
+        const credenciales = this.credentialsOf(conexion);
+        const fichas = await this.falabellaApi.getProductsBySku(credenciales, candidatas.map(e => e.product.sku));
+        const porSku = new Map(fichas.map(f => [String(f.SellerSku ?? '').trim().toLowerCase(), f]));
+
+        const paraReenviar: { enlace: ListingLink; userId: string }[] = [];
+        let revisadas = 0;
+        for (const enlace of candidatas) {
+            const ficha = porSku.get(enlace.product.sku.trim().toLowerCase());
+            if (!ficha) continue; // la ficha todavía no existe en Falabella
+            revisadas++;
+            const atributos: Record<string, any> = { ...((enlace.product.aiAttributes as any) || {}) };
+            if (imagenesDeFicha(ficha).length > 0) {
+                atributos._fotosVerificadas = true;
+                await this.productRepository.update(enlace.product.id, { aiAttributes: atributos } as any);
+                continue;
+            }
+            const decision = decidirAutoReenvio(atributos._fotosReenvio);
+            if (decision.accion === 'rendirse') {
+                if (enlace.syncStatus !== 'error') {
+                    enlace.syncStatus = 'error';
+                    enlace.lastError = `Falabella sigue sin las fotos: ${decision.motivo}`.slice(0, 500);
+                    await this.listingLinkRepository.save(enlace);
+                }
+                continue;
+            }
+            const userId = enlace.connection?.owner?.id;
+            if (decision.accion === 'reenviar' && userId) paraReenviar.push({ enlace, userId });
+        }
+
+        // Un solo envío por tanda (Falabella limita las llamadas de toda la cuenta).
+        if (!paraReenviar.length || segundosParaOtraPeticion(this.ultimoReenvioDeFotos.get(connectionId)) > 0) return { revisadas, reenviadas: 0 };
+        const lote = paraReenviar.slice(0, 100);
+        await this.enviarImagenesAFalabella(connectionId, credenciales, lote[0].userId, lote.map(l => l.enlace.product));
+        this.ultimoReenvioDeFotos.set(connectionId, Date.now());
+        for (const { enlace } of lote) {
+            const atributos: Record<string, any> = { ...((enlace.product.aiAttributes as any) || {}) };
+            atributos._fotosReenvio = anotarReenvio(atributos._fotosReenvio);
+            await this.productRepository.update(enlace.product.id, { aiAttributes: atributos } as any);
+        }
+        console.log(`[Sync] Falabella: se reenviaron las fotos de ${lote.length} ficha(s) que no las tenían.`);
+        return { revisadas, reenviadas: lote.length };
     }
 
     /** «Actualizar publicaciones ahora»: lo mismo, solo para las cuentas de una tienda. */
