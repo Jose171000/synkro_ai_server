@@ -19,6 +19,7 @@ import { huellaDeFotos, necesitaVision } from './vision-fotos';
 import { fotosParaIA } from '../products/fotos-para-ia';
 import { textoDeEjes } from './ejes-de-variacion';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
+import { conUsoIa } from './uso-ia/uso-ia';
 
 export interface FalabellaPrepReport {
     sku?: string;
@@ -113,7 +114,11 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         return null;
     }
 
-    async preparar(scope: SyncScope, productId: string, connectionId?: string, opciones: { regenerar?: boolean } = {}): Promise<FalabellaPrepReport> {
+    preparar(scope: SyncScope, productId: string, connectionId?: string, opciones: { regenerar?: boolean } = {}): Promise<FalabellaPrepReport> {
+        return conUsoIa({ userId: scope.userId, operacion: 'preparar-falabella' }, () => this.prepararSinContexto(scope, productId, connectionId, opciones));
+    }
+
+    private async prepararSinContexto(scope: SyncScope, productId: string, connectionId?: string, opciones: { regenerar?: boolean } = {}): Promise<FalabellaPrepReport> {
         const product = await this.sync.findScopedProduct(scope, productId);
         const connection = await this.sync.resolveConnection(scope.storeId, 'falabella', connectionId);
         const creds = this.sync.credentialsOf(connection);

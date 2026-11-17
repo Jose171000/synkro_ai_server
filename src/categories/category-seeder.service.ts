@@ -5,6 +5,7 @@ import { MarketplaceCategory } from './entities/marketplace-category.entity';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import Redis from 'ioredis';
 import OpenAI from 'openai';
+import { medirUso } from '../ai/uso-ia/uso-ia';
 
 const SEED_CATEGORIES: Omit<MarketplaceCategory, 'id' | 'embedding' | 'createdAt' | 'updatedAt'>[] = [
     // ==================== AMAZON ====================
@@ -109,9 +110,7 @@ export class CategorySeederService implements OnApplicationBootstrap {
         @Inject(REDIS_CLIENT)
         private readonly redis: Redis,
     ) {
-        this.openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY,
-        });
+        this.openai = medirUso(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }), 'openai');
     }
 
     /**

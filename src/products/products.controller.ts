@@ -145,10 +145,10 @@ export class ProductsController {
   })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(AnyFilesInterceptor())
-  async detectVariants(@UploadedFiles() files: Express.Multer.File[], @Body('text') text?: string) {
+  async detectVariants(@UploadedFiles() files: Express.Multer.File[], @Body('text') text?: string, @Req() req?: any) {
     const imagenes = (files ?? []).filter((f) => f.fieldname === 'images' && /^image\//.test(f.mimetype)).slice(0, 8);
     const urls = imagenes.map((f) => `data:${f.mimetype};base64,${f.buffer.toString('base64')}`);
-    return { resultado: await this.groups.detectar(urls, text) };
+    return { resultado: await this.groups.detectar(urls, text, req?.user?.id) };
   }
 
   @Get('groups/:id')

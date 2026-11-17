@@ -2,6 +2,7 @@ import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import OpenAI from 'openai';
+import { medirUso } from '../ai/uso-ia/uso-ia';
 import { MarketplaceCategory } from './entities/marketplace-category.entity';
 import { MarketplaceValueList } from './entities/marketplace-value-list.entity';
 import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
@@ -47,7 +48,7 @@ export class RipleyCategoryImportService {
         private readonly ecommerce: EcommerceSyncService,
         private readonly sync: SyncService,
     ) {
-        this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        this.openai = medirUso(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }), 'openai');
     }
 
     private async embedBatch(textos: string[]): Promise<number[][]> {

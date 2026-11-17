@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
+import { conUsoIa, medirUso } from './uso-ia/uso-ia';
 import { normalizar } from '../products/variantes';
 
 /** Lo que la IA puede ver en las fotos de un producto. */
@@ -208,7 +209,7 @@ export class ProductVisionService {
     private client: OpenAI | null = null;
 
     private get openai(): OpenAI {
-        if (!this.client) this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        if (!this.client) this.client = medirUso(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }), 'openai');
         return this.client;
     }
 
@@ -216,7 +217,11 @@ export class ProductVisionService {
      * Filtro previo a crear un producto: ¿parece venderse en varias versiones? Lee también el texto que aparezca dentro de
      * las fotos («disponible en azul y negro»). Nunca lanza: si falla devuelve null y la creación sigue como producto simple.
      */
-    async detectarVariantes(imageUrls: string[], textoDelCliente?: string): Promise<DeteccionDeVariantes | null> {
+    detectarVariantes(imageUrls: string[], textoDelCliente?: string, userId?: string): Promise<DeteccionDeVariantes | null> {
+        return conUsoIa({ userId, operacion: 'detectar-variantes' }, () => this.detectarVariantesSinContexto(imageUrls, textoDelCliente));
+    }
+
+    private async detectarVariantesSinContexto(imageUrls: string[], textoDelCliente?: string): Promise<DeteccionDeVariantes | null> {
         // Direcciones web o imágenes en base64 (el detector corre antes de subir las fotos a ningún lado).
         const urls = (imageUrls ?? []).filter((u) => /^(https?:\/\/|data:image\/)/i.test(u)).slice(0, MAX_FOTOS_DETECCION);
         const texto = (textoDelCliente ?? '').trim().slice(0, 1500);

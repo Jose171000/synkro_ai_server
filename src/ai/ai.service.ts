@@ -17,6 +17,7 @@ import { medidasQueFaltan } from '../sync/meli/unidades-meli';
 import { FalabellaCategoryImportService } from '../categories/falabella-category-import.service';
 import { modeloDeepseek } from './modelo-deepseek';
 import OpenAI from 'openai';
+import { conUsoIa, medirUso } from './uso-ia/uso-ia';
 
 @Injectable()
 export class AiService {
@@ -29,17 +30,22 @@ export class AiService {
     private readonly channelAttributes: ChannelAttributesService,
     private readonly falabellaImport: FalabellaCategoryImportService,
   ) {
-    this.openai = new OpenAI({
+    this.openai = medirUso(new OpenAI({
       baseURL: 'https://api.deepseek.com',
       apiKey: process.env.DEEPSEEK_API_KEY,
-    });
+    }), 'deepseek');
   }
 
   /**
    * ORCHESTRATOR: generateProductContent
    * Orchestrates Phase A and Phase B to generate the final listings using DeepSeek.
    */
-  public async generateProductContent(dto: {
+  public generateProductContent(dto: Parameters<AiService['generarContenidoDelProducto']>[0]) {
+    // Todo lo que la IA gasta en este producto (fotos, categorías, ficha, medidas) se anota a su dueño como una sola ejecución.
+    return conUsoIa({ userId: dto.userId, operacion: 'generar-producto' }, () => this.generarContenidoDelProducto(dto));
+  }
+
+  public async generarContenidoDelProducto(dto: {
     name: string, description: string, category?: string, subcategory?: string, targetMarketplaces: string[], tone?: string,
     /** Fotos del producto: la IA las mira para completar lo que el cliente no escribió. */
     imageUrls?: string[],
@@ -902,7 +908,11 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
    * cambia la categoría, no toca lo que ya tiene valor y no reescribe el contenido. Los valores de lista se llevan a la escritura
    * exacta de Ripley; el que no tiene equivalente queda sin llenar (`sinEquivalente`). No guarda nada: devuelve los valores.
    */
-  public async rellenarAtributosDeRipley(e: {
+  public rellenarAtributosDeRipley(e: Parameters<AiService['rellenarAtributosDeRipleySinContexto']>[0]) {
+    return conUsoIa({ userId: e.userId, operacion: 'llenar-atributos-ripley' }, () => this.rellenarAtributosDeRipleySinContexto(e));
+  }
+
+  public async rellenarAtributosDeRipleySinContexto(e: {
     nombre: string;
     descripcion: string;
     categoryId: string;

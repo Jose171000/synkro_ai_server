@@ -14,11 +14,13 @@ import { FalabellaPrepController } from './falabella-prep.controller';
 import { ProductLaunchService } from './product-launch.service';
 import { StoresModule } from '../stores/stores.module';
 import { Product } from '../products/entities/product.entity';
+import { AiUsageLog } from './uso-ia/ai-usage.entity';
+import { UsoIaController, UsoIaService } from './uso-ia/uso-ia.service';
 
 @Module({
-  imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, MarketplaceValueList, Product])],
-  controllers: [AiController, FalabellaPrepController],
-  providers: [AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService, ProductLaunchService],
+  imports: [CategoryModule, SyncModule, StoresModule, TypeOrmModule.forFeature([MarketplaceConnection, MarketplaceCategory, MarketplaceValueList, Product, AiUsageLog])],
+  controllers: [AiController, FalabellaPrepController, UsoIaController],
+  providers: [UsoIaService, AiService, ProductVisionService, ChannelAttributesService, FalabellaAutoPrepService, ProductLaunchService],
   exports: [AiService, ProductVisionService, FalabellaAutoPrepService, ProductLaunchService],
 })
 export class AiModule { }

@@ -120,8 +120,8 @@ export class ProductGroupsService {
     }
 
     /** Filtro previo: ¿las fotos y el texto indican que el producto tiene variantes? Devuelve null si no se pudo comprobar. */
-    async detectar(imageUrls: string[], texto?: string): Promise<DeteccionDeVariantes | null> {
-        return this.vision.detectarVariantes(imageUrls ?? [], texto);
+    async detectar(imageUrls: string[], texto?: string, userId?: string): Promise<DeteccionDeVariantes | null> {
+        return this.vision.detectarVariantes(imageUrls ?? [], texto, userId);
     }
 
     /**

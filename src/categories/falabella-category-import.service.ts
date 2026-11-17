@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import OpenAI from 'openai';
+import { medirUso } from '../ai/uso-ia/uso-ia';
 import { MarketplaceCategory } from './entities/marketplace-category.entity';
 import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
@@ -44,7 +45,7 @@ export class FalabellaCategoryImportService {
         private readonly falabellaApi: FalabellaApiService,
         private readonly syncService: SyncService,
     ) {
-        this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        this.openai = medirUso(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }), 'openai');
     }
 
     /**
