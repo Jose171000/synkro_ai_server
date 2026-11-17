@@ -1,9 +1,11 @@
+import { Optional } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job, UnrecoverableError } from 'bullmq';
 import { SyncService } from './sync.service';
 import { ChangeRequestsService } from './change-requests.service';
 import { YavendioSyncService } from './yavendio/yavendio-sync.service';
 import { PlanInvalido, WooPublicacionService } from './woo/woo-publicacion.service';
+import { RipleyPublicacionService } from './ripley/ripley-publicacion.service';
 
 /**
  * Background worker for every marketplace-sync job:
@@ -21,6 +23,7 @@ export class SyncProcessor extends WorkerHost {
         private readonly changeRequests: ChangeRequestsService,
         private readonly yavendio: YavendioSyncService,
         private readonly woo: WooPublicacionService,
+        @Optional() private readonly ripley?: RipleyPublicacionService,
     ) {
         super();
     }
@@ -101,6 +104,20 @@ export class SyncProcessor extends WorkerHost {
                         }
                         if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) await this.woo.marcarFallida(productId, connectionId, userId, error?.message ?? 'error desconocido');
                         throw error;
+                    }
+                }
+                if (marketplace === 'ripley') {
+                    // Mismo camino que «Publicar» en Ripley desde su pantalla: vista previa, validaciones y los interruptores del servidor.
+                    // Lo que la persona confirmó al pulsar Publicar es la confirmación expresa. Un fallo no mejora reintentando.
+                    if (!this.ripley) throw new UnrecoverableError('La publicación en Ripley no está disponible en este servidor.');
+                    try {
+                        const r = await this.ripley.publicar({ userId, storeId }, productId, { alGrupo: job.data.alGrupo === true, confirmar: true, connectionId });
+                        await this.syncService.avisarEnvioARipley(userId, productId, { ok: true, texto: `Se envió a Ripley (${(r.enviados ?? []).length} producto(s), importación ${r.importId}). Ripley lo revisa y lo aprueba antes de mostrarlo.`, sku: r.enviados?.[0] });
+                        return { status: 'enviado', importId: r.importId, enviados: r.enviados };
+                    } catch (error: any) {
+                        const motivo = String(error?.response?.message ?? error?.message ?? 'error desconocido');
+                        await this.syncService.avisarEnvioARipley(userId, productId, { ok: false, texto: motivo });
+                        throw new UnrecoverableError(motivo);
                     }
                 }
                 throw new Error(`Marketplace no soportado aún: ${marketplace}`);

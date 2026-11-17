@@ -6,6 +6,7 @@ import { DescuentoPedido, skuPermitidoParaRipley, valorDeDescuento } from './rip
 import { conMarcaGeneral } from './change-requests.service';
 import { Diferencia, contarPasadas, debeAvisar, diferenciasDe, firmaDe, resumenDeAviso } from './conciliacion';
 import { conUnidadMeli, medidaInvalidaMeli } from './meli/unidades-meli';
+import { atributosRechazadosPorMeli, sinAtributosRechazados } from './meli/atributos-rechazados';
 import { esRechazo, maxDiasPromoMeli, planDeDescuentoMeli, precioDeLaPromocionActiva, promosMeliActivas, rechazoDe } from './meli/descuento-meli';
 import { calcularDescuento, hoyEnLima } from './descuento-general';
 import { atributosConVariante, nombreDeFamilia, tituloDeVariante } from '../products/titulos-de-variante';
@@ -1204,6 +1205,16 @@ export class SyncService implements OnModuleInit {
             if (marketplace === 'falabella') {
                 // Falabella limita las llamadas de envío (50 seguidas y luego 2 minutos): si se pasa, se reintenta más tarde.
                 opciones = { attempts: 5, backoff: { type: 'exponential', delay: 120_000 } };
+            } else if (marketplace === 'ripley') {
+                // Ripley recibe el producto (o el grupo entero) en UN envío de catálogo: sin reintentos automáticos (un reintento
+                // podría duplicar fichas) y con un mismo id por cuenta y grupo para que no salgan dos a la vez.
+                const conGrupoR = await this.productRepository.findOne({ where: { id: productId }, relations: { group: true } });
+                opciones = {
+                    attempts: 1,
+                    jobId: `ripley-publish-${connection.id}-${conGrupoR?.group?.id ?? productId}`,
+                    removeOnComplete: true,
+                    removeOnFail: true,
+                };
             } else if (marketplace === 'woocommerce') {
                 // WooCommerce publica el grupo entero en un solo trabajo: con un mismo id, las variantes de un grupo no lo repiten
                 // (dos trabajos a la vez crearían el producto dos veces). El id se libera al terminar para poder volver a publicar.
@@ -1222,6 +1233,7 @@ export class SyncService implements OnModuleInit {
                 storeId: scope.storeId,
                 marketplace,
                 connectionId: connection.id,
+                ...(marketplace === 'ripley' ? { alGrupo: false } : {}),
             }, opciones);
         }
 
@@ -1247,7 +1259,20 @@ export class SyncService implements OnModuleInit {
         // Falabella: todas las variantes en UN solo envío. De a una, 32 altas (más sus fotos) pasan el límite de llamadas de Falabella y
         // varias altas a la vez de la misma familia pueden terminar en familias separadas.
         const aparte = marketplaces.includes('falabella');
-        const resto = marketplaces.filter((m) => m !== 'falabella');
+        // Ripley: el grupo entero va en UN envío (cada variante es una fila del mismo archivo), no un envío por variante.
+        if (marketplaces.includes('ripley')) {
+            try {
+                const conexion = await this.resolveConnection(scope.storeId, 'ripley', connectionIds['ripley']);
+                const grupoId = (familia[0] as any).group?.id ?? familia[0].id;
+                await this.syncQueue.add('publish', {
+                    productId: familia[0].id, userId: scope.userId, storeId: scope.storeId, marketplace: 'ripley', connectionId: conexion.id, alGrupo: true,
+                }, { attempts: 1, jobId: `ripley-publish-${conexion.id}-${grupoId}`, removeOnComplete: true, removeOnFail: true });
+                encoladas = Math.max(encoladas, familia.length);
+            } catch (error) {
+                ultimoError = error;
+            }
+        }
+        const resto = marketplaces.filter((m) => m !== 'falabella' && m !== 'ripley');
         if (aparte) {
             try {
                 const n = await this.encolarFamiliaEnFalabella(scope, familia, connectionIds['falabella']);
@@ -1318,6 +1343,18 @@ export class SyncService implements OnModuleInit {
         return resultado;
     }
 
+    /** Avisa a la persona cómo salió el envío de un producto a Ripley (lo hace la cola, no hay nadie mirando la pantalla). */
+    async avisarEnvioARipley(userId: string, productId: string, resultado: { ok: boolean; texto: string; sku?: string }): Promise<void> {
+        await this.notifications.notify(userId, {
+            type: resultado.ok ? 'publish' : 'publish-error',
+            severity: resultado.ok ? 'success' : 'error',
+            title: resultado.ok ? 'Enviado a Ripley' : 'No se pudo enviar a Ripley',
+            body: resultado.texto.slice(0, 500),
+            marketplace: 'ripley',
+            meta: { productId, sku: resultado.sku },
+        }).catch(() => undefined);
+    }
+
     /** El producto y, si es una variante, todas las de su grupo: en un canal se lanzan juntas. Sin grupo, solo él. */
     async familiaDe(scope: SyncScope, productId: string): Promise<Product[]> {
         const producto = await this.findScopedProduct(scope, productId);
@@ -1367,7 +1404,19 @@ export class SyncService implements OnModuleInit {
                 const categoryId = await this.resolveMeliCategory(product, connection.accessToken);
                 const payload = this.buildMeliItemPayload(product, categoryId, await this.variantesVanSeparadasEnMeli(product, categoryId));
                 payload.attributes = await this.llevarAListasDeMeli(product, categoryId, payload.attributes);
-                const created = await this.meliApi.createItem(connection.accessToken, payload);
+                let created;
+                let sinEsosDatos: string[] = [];
+                try {
+                    created = await this.meliApi.createItem(connection.accessToken, payload);
+                } catch (error: any) {
+                    // Mercado Libre rechaza a veces un dato opcional (p. ej. «550 MB/s») y la publicación entera falla por eso:
+                    // se reintenta UNA vez sin los atributos que él mismo dice haber omitido (nunca marca, modelo ni SKU).
+                    const rechazados = atributosRechazadosPorMeli(this.describeApiError(error));
+                    const reintento = sinAtributosRechazados(payload.attributes ?? [], rechazados);
+                    if (!reintento.quitados.length) throw error;
+                    created = await this.meliApi.createItem(connection.accessToken, { ...payload, attributes: reintento.atributos });
+                    sinEsosDatos = reintento.quitados;
+                }
 
                 // El ítem ya existe en Mercado Libre: se anota ya, para que un fallo posterior no lo deje huérfano (un reintento lo duplicaría).
                 link.externalId = created.id;
@@ -1389,7 +1438,8 @@ export class SyncService implements OnModuleInit {
                 link.lastStockSynced = product.stock;
                 link.lastPriceSynced = product.price;
                 link.lastSyncedAt = new Date();
-                link.lastError = avisoDescripcion as any;
+                const avisoDeDatos = sinEsosDatos.length ? `Publicado sin estos datos que Mercado Libre rechazó: ${sinEsosDatos.join(', ')}. Corrígelos en la ficha y se enviarán después.` : null;
+                link.lastError = ([avisoDeDatos, avisoDescripcion].filter(Boolean).join(' · ') || null) as any;
 
                 // Keep the product's quick-view fields in sync with reality
                 product.marketplaceIds = { ...(product.marketplaceIds || {}), mercadolibre: created.id };

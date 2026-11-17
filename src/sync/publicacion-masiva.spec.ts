@@ -1,4 +1,4 @@
-import { EnlaceDeCanal, MiembroParaPublicar, estadoDeMiembro, evaluarFamilia } from './publicacion-masiva';
+import { EnlaceDeCanal, MiembroParaPublicar, estadoDeMiembro, evaluarFamilia, motivoRipleyNoDisponible } from './publicacion-masiva';
 import { PublicacionMasivaService, MAX_PUBLICACION_MASIVA } from './publicacion-masiva.service';
 
 const miembro = (id: string, extra: Partial<MiembroParaPublicar> = {}): MiembroParaPublicar => ({ id, sku: `SKU-${id}`, price: 50, fotos: 2, categorias: { falabella: '3223' }, ...extra });
@@ -32,6 +32,20 @@ describe('estado de un producto en un canal', () => {
         expect(estadoDeMiembro('falabella', sinCat, undefined, ahora).motivos[0]).toMatch(/categoría de Falabella/);
         expect(estadoDeMiembro('mercadolibre', sinCat, undefined, ahora).estado).toBe('listo');
         expect(estadoDeMiembro('woocommerce', sinCat, undefined, ahora).estado).toBe('listo');
+    });
+});
+
+describe('Ripley en la publicación masiva', () => {
+    it('exige categoría de Ripley y no repite un envío que ya salió', () => {
+        expect(estadoDeMiembro('ripley', miembro('a', { categorias: {} }), undefined, ahora).motivos[0]).toMatch(/categoría de Ripley/);
+        expect(estadoDeMiembro('ripley', miembro('a', { categorias: { ripley: 'R1901' } }), undefined, ahora).estado).toBe('listo');
+        expect(estadoDeMiembro('ripley', miembro('a', { categorias: { ripley: 'R1901' }, ripleyEnviado: true }), undefined, ahora).estado).toBe('en_proceso');
+    });
+
+    it('solo está disponible con el interruptor encendido y SKU permitidos', () => {
+        expect(motivoRipleyNoDisponible({})).toMatch(/apagada/);
+        expect(motivoRipleyNoDisponible({ RIPLEY_PUBLISH_ENABLED: 'true' } as any)).toMatch(/SKU permitidos/);
+        expect(motivoRipleyNoDisponible({ RIPLEY_PUBLISH_ENABLED: 'true', RIPLEY_PUBLISH_SKUS: '*' } as any)).toBeNull();
     });
 });
 
@@ -102,7 +116,7 @@ describe('PublicacionMasivaService', () => {
 
     it('rechaza Ripley, cuentas ajenas y selecciones vacías', async () => {
         const { servicio } = armar({ productos: [producto('1')], cuentas: [falabella, ripley] });
-        await expect(servicio.publicar(scope, ['1'], ['c-rip'])).rejects.toThrow(/piloto/);
+        await expect(servicio.publicar(scope, ['1'], ['c-rip'])).rejects.toThrow(/apagada/);
         await expect(servicio.publicar(scope, ['1'], ['otra'])).rejects.toThrow(/no está conectada/);
         await expect(servicio.publicar(scope, ['1'], [])).rejects.toThrow(/al menos una cuenta/);
         await expect(servicio.vista(scope, [])).rejects.toThrow(/al menos un producto/);

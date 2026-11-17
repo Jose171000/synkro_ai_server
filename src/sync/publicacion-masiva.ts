@@ -3,8 +3,18 @@
  * Son funciones puras (sin base de datos) para poder probarlas; el servicio solo las alimenta y encola lo que sale «listo».
  */
 
-/** Canales donde la publicación masiva puede enviar hoy. Ripley sigue en piloto (interruptor y lista de SKU): queda fuera. */
-export const CANALES_DE_PUBLICACION_MASIVA = ['mercadolibre', 'falabella', 'woocommerce'] as const;
+/** Canales donde la publicación masiva puede enviar. Ripley además depende de los interruptores del servidor (ver `ripleyDisponible`). */
+export const CANALES_DE_PUBLICACION_MASIVA = ['mercadolibre', 'falabella', 'woocommerce', 'ripley'] as const;
+
+/**
+ * Ripley solo recibe envíos con RIPLEY_PUBLISH_ENABLED=true y una lista de SKU permitidos (RIPLEY_PUBLISH_SKUS, o «*» para todos).
+ * Devuelve por qué no está disponible, o null si lo está.
+ */
+export function motivoRipleyNoDisponible(env: NodeJS.ProcessEnv = process.env): string | null {
+    if (env.RIPLEY_PUBLISH_ENABLED !== 'true') return 'La publicación en Ripley está apagada en el servidor (RIPLEY_PUBLISH_ENABLED).';
+    if (!String(env.RIPLEY_PUBLISH_SKUS ?? '').trim()) return 'No hay SKU permitidos para publicar en Ripley (RIPLEY_PUBLISH_SKUS).';
+    return null;
+}
 
 /** Un producto con lo que hace falta mirar de él. */
 export interface MiembroParaPublicar {
@@ -14,6 +24,8 @@ export interface MiembroParaPublicar {
     fotos: number;
     /** Categorías ya elegidas por canal: { falabella: '3223' } */
     categorias: Record<string, string>;
+    /** Ripley: ya se le mandó un envío de catálogo (queda pendiente de que Ripley lo apruebe): no se repite. */
+    ripleyEnviado?: boolean;
 }
 
 export interface EnlaceDeCanal {
@@ -31,10 +43,12 @@ export function estadoDeMiembro(canal: string, m: MiembroParaPublicar, enlace: E
         if (enlace.syncStatus === 'published' || enlace.syncStatus === 'paused') return { estado: 'publicado', motivos: [] };
         if (enlace.syncStatus === 'pending' && ahora - new Date(enlace.updatedAt).getTime() < MINUTOS_EN_PROCESO * 60_000) return { estado: 'en_proceso', motivos: [] };
     }
+    if (canal === 'ripley' && m.ripleyEnviado) return { estado: 'en_proceso', motivos: [] };
     const motivos: string[] = [];
     if (m.price === null || m.price === undefined || m.price === '' || !(Number(m.price) > 0)) motivos.push('sin precio');
     if (!(m.fotos > 0)) motivos.push('sin fotos');
     if (canal === 'falabella' && !String(m.categorias?.falabella ?? '').trim()) motivos.push('sin categoría de Falabella (usa «Preparar para Falabella»)');
+    if (canal === 'ripley' && !String(m.categorias?.ripley ?? '').trim()) motivos.push('sin categoría de Ripley (usa «Preparar para Ripley»)');
     return motivos.length ? { estado: 'incompleto', motivos } : { estado: 'listo', motivos: [] };
 }
 

@@ -6,7 +6,7 @@ import { categoriasElegidas } from '../ai/categorias-elegidas';
 import { ListingLink } from './entities/listing-link.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { SyncScope, SyncService } from './sync.service';
-import { CANALES_DE_PUBLICACION_MASIVA, EnlaceDeCanal, MiembroParaPublicar, evaluarFamilia } from './publicacion-masiva';
+import { CANALES_DE_PUBLICACION_MASIVA, EnlaceDeCanal, MiembroParaPublicar, evaluarFamilia, motivoRipleyNoDisponible } from './publicacion-masiva';
 
 /** Cuántos productos (un grupo de variantes cuenta como uno) caben en una tanda. */
 export const MAX_PUBLICACION_MASIVA = 25;
@@ -63,7 +63,7 @@ export class PublicacionMasivaService {
         }
 
         const cuentas = await this.conexiones.find({ where: { store: { id: scope.storeId }, status: 'active' } as any, order: { createdAt: 'ASC' } });
-        const publicables = cuentas.filter((c) => (CANALES_DE_PUBLICACION_MASIVA as readonly string[]).includes(c.marketplace));
+        const publicables = cuentas.filter((c) => (CANALES_DE_PUBLICACION_MASIVA as readonly string[]).includes(c.marketplace) && !(c.marketplace === 'ripley' && motivoRipleyNoDisponible()));
         const todosLosIds = [...familias.values()].flatMap((f) => f.miembros.map((m) => m.id));
         const enlaces = publicables.length
             ? await this.enlaces.find({ where: { product: { id: In(todosLosIds) }, connection: { id: In(publicables.map((c) => c.id)) } } as any, relations: { product: true, connection: true } })
@@ -81,6 +81,7 @@ export class PublicacionMasivaService {
             const miembros: MiembroParaPublicar[] = f.miembros.map((m) => ({
                 id: m.id, sku: m.sku, price: m.price as any, fotos: (m.images ?? []).length,
                 categorias: categoriasElegidas(m.marketplaceIds as any, m.aiAttributes as any),
+                ripleyEnviado: !!(m.aiAttributes as any)?.ripley_envio,
             }));
             const fila: FilaDeVista = { clave, productId: f.productId, etiqueta: f.etiqueta, variantes: f.miembros.length, cuentas: {} };
             for (const c of publicables) {
@@ -92,11 +93,12 @@ export class PublicacionMasivaService {
 
         return {
             cuentas: cuentas.map((c) => {
-                const soportada = (CANALES_DE_PUBLICACION_MASIVA as readonly string[]).includes(c.marketplace);
+                const motivoRipley = c.marketplace === 'ripley' ? motivoRipleyNoDisponible() : null;
+                const soportada = (CANALES_DE_PUBLICACION_MASIVA as readonly string[]).includes(c.marketplace) && !motivoRipley;
                 return {
                     id: c.id, marketplace: c.marketplace, canal: NOMBRES[c.marketplace] ?? c.marketplace, cuenta: c.label ?? '',
                     soportada,
-                    motivoNoDisponible: soportada ? null : c.marketplace === 'ripley' ? 'El envío a Ripley sigue en piloto: publícalo desde cada producto.' : 'Este canal todavía no se publica de forma masiva.',
+                    motivoNoDisponible: soportada ? null : motivoRipley ?? 'Este canal todavía no se publica de forma masiva.',
                     faltan: soportada ? filas.filter((f) => f.cuentas[c.id]?.estado !== 'nada').length : 0,
                     listos: soportada ? filas.filter((f) => f.cuentas[c.id]?.estado === 'listo').length : 0,
                 };

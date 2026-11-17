@@ -387,7 +387,7 @@ export class SyncController {
     @RequirePermission('canales.publicar')
     @ApiOperation({
         summary: 'Publica los productos seleccionados en las cuentas de canal elegidas (asíncrono)',
-        description: 'ESCRIBE en canales reales: exige confirmar=true. Encola el mismo envío de siempre por producto y cuenta; lo ya publicado o en proceso, y lo que no está listo, se salta con su motivo. Ripley queda fuera (sigue en piloto).',
+        description: 'ESCRIBE en canales reales: exige confirmar=true. Encola el mismo envío de siempre por producto y cuenta; lo ya publicado o en proceso, y lo que no está listo, se salta con su motivo. Ripley solo si el servidor tiene encendida su publicación.',
     })
     bulkPublish(@Body() dto: PublicacionMasivaDto, @Req() req) {
         if (dto.confirmar !== true) throw new BadRequestException('Confirma la publicación para continuar.');

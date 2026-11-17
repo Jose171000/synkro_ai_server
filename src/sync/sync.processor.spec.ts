@@ -28,3 +28,29 @@ describe('SyncProcessor: cierre de solicitudes de cambio', () => {
         expect(changeRequests.markResult).not.toHaveBeenCalled();
     });
 });
+
+describe('SyncProcessor: publicar en Ripley desde la cola estándar', () => {
+    const armar = (publicar: jest.Mock) => {
+        const syncService: any = { avisarEnvioARipley: jest.fn(async () => undefined) };
+        const ripley: any = { publicar };
+        const procesador = new SyncProcessor(syncService, {} as any, {} as any, {} as any, ripley);
+        const trabajo: any = { id: 'j1', name: 'publish', data: { productId: 'p1', userId: 'u1', storeId: 's1', marketplace: 'ripley', connectionId: 'c1', alGrupo: true } };
+        return { procesador, syncService, ripley, trabajo };
+    };
+    beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => undefined));
+    afterEach(() => jest.restoreAllMocks());
+
+    it('envía el grupo con la confirmación de quien pulsó Publicar y avisa del resultado', async () => {
+        const { procesador, syncService, ripley, trabajo } = armar(jest.fn(async () => ({ importId: '77', enviados: ['A-1', 'A-2'] })));
+        const r = await procesador.process(trabajo);
+        expect(ripley.publicar).toHaveBeenCalledWith({ userId: 'u1', storeId: 's1' }, 'p1', { alGrupo: true, confirmar: true, connectionId: 'c1' });
+        expect(r).toEqual({ status: 'enviado', importId: '77', enviados: ['A-1', 'A-2'] });
+        expect(syncService.avisarEnvioARipley).toHaveBeenCalledWith('u1', 'p1', expect.objectContaining({ ok: true }));
+    });
+
+    it('si Ripley rechaza (interruptor apagado, datos por corregir…) avisa con el motivo y no reintenta', async () => {
+        const { procesador, syncService, trabajo } = armar(jest.fn(async () => { throw new Error('La publicación en Ripley está apagada en el servidor.'); }));
+        await expect(procesador.process(trabajo)).rejects.toThrow(/apagada/);
+        expect(syncService.avisarEnvioARipley).toHaveBeenCalledWith('u1', 'p1', { ok: false, texto: expect.stringMatching(/apagada/) });
+    });
+});

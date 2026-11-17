@@ -9,7 +9,7 @@ export class PublishProductDto {
     })
     @IsArray()
     @ArrayNotEmpty()
-    @IsIn(['mercadolibre', 'falabella', 'woocommerce'], { each: true, message: 'Por ahora solo se soportan mercadolibre, falabella y woocommerce' })
+    @IsIn(['mercadolibre', 'falabella', 'woocommerce', 'ripley'], { each: true, message: 'Por ahora solo se soportan mercadolibre, falabella, woocommerce y ripley' })
     marketplaces: string[];
 
     @ApiProperty({
