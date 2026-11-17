@@ -157,7 +157,7 @@ export class ProductSheetService {
             const cuentasRipley = (await this.sync.getConnections(scope.storeId)).filter((c: any) => c.marketplace === 'ripley' && c.status === 'active');
             for (const c of cuentasRipley as any[]) {
                 canales.push(await this.hojaRipley(
-                    { linkId: '', pausedByUser: false, marketplace: 'ripley', connectionId: c.id, account: c.label || c.externalNickname || c.externalUserId, status: 'unpublished', lastError: null, permalink: null } as any,
+                    { linkId: '', pausedByUser: false, marketplace: 'ripley', connectionId: c.id, account: c.label || c.externalNickname || c.externalUserId, status: attrs.ripley_envio ? 'enviado' : 'unpublished', lastError: null, permalink: null } as any,
                     product, attrs, { externalId: '', regularPrice: null, lastStockSynced: null } as any,
                 ));
             }
