@@ -21,6 +21,8 @@ import { SetBrandDto } from './dto/set-brand.dto';
 import { LinkMeliListingDto } from './dto/link-meli-listing.dto';
 import { SaveSheetDto } from './dto/save-sheet.dto';
 import { ProductSheetService } from './product-sheet.service';
+import { PublicacionMasivaService } from './publicacion-masiva.service';
+import { PublicacionMasivaDto, VistaPublicacionMasivaDto } from './dto/publicacion-masiva.dto';
 import { PrepareFalabellaDto } from './dto/prepare-falabella.dto';
 import { RejectChangeDto, ReviewModeDto } from './dto/review-mode.dto';
 import { WebPriceDto } from './dto/web-price.dto';
@@ -76,6 +78,7 @@ export class SyncController {
         private readonly manualSales: ManualSalesService,
         private readonly ecommerce: EcommerceSyncService,
         private readonly sheets: ProductSheetService,
+        private readonly publicacionMasiva: PublicacionMasivaService,
         private readonly listingActions: ListingActionsService,
         private readonly variantImport: FalabellaVariantImportService,
         private readonly yavendioCatalog: YavendioCatalogImportService,
@@ -362,6 +365,33 @@ export class SyncController {
     })
     publish(@Param('id') id: string, @Body() dto: PublishProductDto, @Req() req) {
         return this.syncService.enqueuePublishFamilia(scopeOf(req), id, dto.marketplaces, dto.connectionIds);
+    }
+
+    @Post('bulk-publish/preview')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Vista previa de publicar de forma masiva (no envía nada)',
+        description: 'Por cada cuenta de canal conectada, cuántos de los productos seleccionados le faltan y cuáles no están listos (sin precio, sin fotos o sin categoría de Falabella) con su motivo. Un grupo de variantes cuenta como uno. Tope por tanda: 25.',
+    })
+    bulkPublishPreview(@Body() dto: VistaPublicacionMasivaDto, @Req() req) {
+        return this.publicacionMasiva.vista(scopeOf(req), dto.productIds);
+    }
+
+    @Post('bulk-publish')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.publicar')
+    @ApiOperation({
+        summary: 'Publica los productos seleccionados en las cuentas de canal elegidas (asíncrono)',
+        description: 'ESCRIBE en canales reales: exige confirmar=true. Encola el mismo envío de siempre por producto y cuenta; lo ya publicado o en proceso, y lo que no está listo, se salta con su motivo. Ripley queda fuera (sigue en piloto).',
+    })
+    bulkPublish(@Body() dto: PublicacionMasivaDto, @Req() req) {
+        if (dto.confirmar !== true) throw new BadRequestException('Confirma la publicación para continuar.');
+        return this.publicacionMasiva.publicar(scopeOf(req), dto.productIds, dto.connectionIds);
     }
 
     @Get('falabella/categories')

@@ -100,6 +100,8 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/ripley/lists/:code/values': 'canales.publicar',
     'Sync PATCH /sync/falabella/products/:id/preparation': 'canales.publicar',
     'Sync POST /sync/falabella/publish': 'canales.publicar',
+    'Sync POST /sync/bulk-publish': 'canales.publicar',
+    'Sync POST /sync/bulk-publish/preview': 'canales.publicar',
     'Sync PATCH /sync/products/:id/inventory': 'inventario.editar',
     'Sync POST /sync/falabella/variants/group': 'canales.publicar',
     'Sync POST /sync/products/mark-imported': 'canales.conectar',
