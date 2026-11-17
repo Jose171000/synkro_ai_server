@@ -10,7 +10,6 @@ import { QueryProductsDto } from './dto/query-products.dto';
 import { ExportQueryDto } from '../export/dto/export-query.dto';
 import { AiService } from 'src/ai/ai.service';
 import { SkuGeneratorService } from './sku-generator.service';
-import { LimpiezaDeFotos, fotosBorrables } from '../upload/limpieza-de-fotos';
 import { ListingLink } from '../sync/entities/listing-link.entity';
 import { combinarAtributos } from '../ai/combinar-atributos';
 import { datosConocidos } from '../ai/datos-conocidos';
@@ -41,7 +40,6 @@ export class ProductsService {
         private aiService: AiService,
         private skuGenerator: SkuGeneratorService,
         @Optional() private readonly ripleyMarcas?: RipleyMarcasService,
-        @Optional() private readonly limpiezaDeFotos?: LimpiezaDeFotos,
     ) { }
 
     async create(createProductDto: CreateProductDto, userId: string, storeId?: string | null) {
@@ -660,11 +658,7 @@ export class ProductsService {
             })
             : await this.productRepository.findOne({ where: { id, owner: { id: userId } } });
         if (!product) throw new NotFoundException('Producto no encontrado');
-        // Las fotos que quedan sin dueño se borran de Cloudinary, salvo las de un producto que sigue en algún canal o que otro usa.
-        const fotos = this.limpiezaDeFotos ? await fotosBorrables(this.productRepository.manager, [{ columna: 'id', valor: product.id }]).catch(() => [] as string[]) : [];
-        const eliminado = await this.productRepository.remove(product);
-        if (fotos.length) void this.limpiezaDeFotos!.borrar(fotos).catch(() => undefined);
-        return eliminado;
+        return this.productRepository.remove(product);
     }
 
     /**
