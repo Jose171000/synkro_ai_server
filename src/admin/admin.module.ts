@@ -17,9 +17,11 @@ import { ReportsModule } from '../reports/reports.module';
 import { StoresModule } from '../stores/stores.module';
 import { Store } from '../stores/entities/store.entity';
 import { SignupsService } from './signups.service';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
     imports: [
+        UploadModule,
         TypeOrmModule.forFeature([
             ClientProfile,
             Payment,

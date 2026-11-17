@@ -10,9 +10,10 @@ import { StoreRolesService } from './store-roles.service';
 import { StoreAccessGuard } from './store-access.guard';
 import { PublicStoresController, StoresController } from './stores.controller';
 import { StoresService } from './stores.service';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Store, StoreMember, StoreInvitation, StoreCustomRole, User, ListingLink])],
+    imports: [UploadModule, TypeOrmModule.forFeature([Store, StoreMember, StoreInvitation, StoreCustomRole, User, ListingLink])],
     controllers: [StoresController, PublicStoresController],
     providers: [StoresService, StoreRolesService, StoreAccessGuard],
     exports: [StoresService, StoreRolesService, StoreAccessGuard],

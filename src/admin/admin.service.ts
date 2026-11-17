@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
+import { LimpiezaDeFotos, fotosBorrables } from '../upload/limpieza-de-fotos';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
@@ -33,6 +34,7 @@ export class AdminService implements OnModuleInit {
         @InjectRepository(Payment) private readonly paymentRepository: Repository<Payment>,
         private readonly dataSource: DataSource,
         private readonly storesService: StoresService,
+        @Optional() private readonly limpiezaDeFotos?: LimpiezaDeFotos,
     ) { }
 
     /**
@@ -261,10 +263,15 @@ export class AdminService implements OnModuleInit {
             }
         }
 
+        let fotos: string[] = [];
         await this.dataSource.transaction(async (manager) => {
             // Las tiendas de las que es dueño se van con él, junto con sus ventas, productos y canales
             // (los miembros de otras tiendas solo pierden su acceso).
             const propias = await manager.find(Store, { where: { owner: { id: userId } } });
+            // Las fotos de sus productos se borran de Cloudinary después (salvo las de productos que siguen en algún canal).
+            if (this.limpiezaDeFotos) {
+                fotos = await fotosBorrables(manager, [{ columna: 'ownerId', valor: userId }, ...propias.map((t) => ({ columna: 'storeId' as const, valor: t.id }))]).catch(() => [] as string[]);
+            }
             for (const tienda of propias) await eliminarTienda(manager, tienda.id);
 
             // Primero lo que referencia al usuario sin borrado en cascada
@@ -280,6 +287,8 @@ export class AdminService implements OnModuleInit {
             // El usuario arrastra tokens de sesión y de recuperación
             await manager.delete(User, { id: userId });
         });
+
+        if (fotos.length) void this.limpiezaDeFotos!.borrar(fotos).catch(() => undefined);
 
         return { message: `Cuenta de ${user.email} eliminada junto con todos sus datos.` };
     }

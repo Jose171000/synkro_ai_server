@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { LimpiezaDeFotos, fotosBorrables } from '../upload/limpieza-de-fotos';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { IsNull, MoreThan, Repository } from 'typeorm';
@@ -48,6 +49,7 @@ export class StoresService {
         @InjectRepository(ListingLink) private readonly links: Repository<ListingLink>,
         private readonly mail: MailService,
         @InjectRepository(StoreCustomRole) private readonly customRoles: Repository<StoreCustomRole>,
+        @Optional() private readonly limpiezaDeFotos?: LimpiezaDeFotos,
     ) { }
 
     // ── Acceso ───────────────────────────────────────────────────
@@ -159,7 +161,10 @@ export class StoresService {
     async removeStoreAsAdmin(storeId: string): Promise<{ message: string; resumen: ResumenDeBorrado }> {
         const tienda = await this.stores.findOne({ where: { id: storeId } });
         if (!tienda) throw new NotFoundException('Tienda no encontrada');
+        // Las fotos de sus productos se borran de Cloudinary después, salvo las de productos que siguen en algún canal.
+        const fotos = this.limpiezaDeFotos ? await fotosBorrables(this.stores.manager, [{ columna: 'storeId', valor: storeId }]).catch(() => [] as string[]) : [];
         const resumen = await this.stores.manager.transaction(manager => eliminarTienda(manager, storeId));
+        if (fotos.length) void this.limpiezaDeFotos!.borrar(fotos).catch(() => undefined);
         return {
             message: `Tienda «${tienda.name}» eliminada: ${resumen.productos} productos, ${resumen.pedidos} ventas y ${resumen.canales} canales.`,
             resumen,
