@@ -18,13 +18,19 @@ const publicacionEncendida = () => process.env.RIPLEY_PUBLISH_ENABLED === 'true'
 const MAX_PRODUCTOS_POR_ENVIO = 50;
 
 /**
- * La descripción completa que va a Ripley: su propia ficha HTML (la estándar de la agencia, guardada al preparar) si la tiene; si no, la
- * ficha HTML general del producto y, como respaldo, el texto. Un texto plano guardado para Ripley no desplaza a una ficha HTML general.
+ * La descripción completa que va a Ripley: la ficha HTML estándar de la agencia (la misma de los demás canales que aceptan HTML) si el
+ * producto la tiene y la generó la IA. Ya no gana el texto corto con etiquetas sueltas que la IA redacta para Ripley: tenía <b> y <li> y por eso se tomaba
+ * por una ficha, y Ripley mostraba solo unas viñetas en vez de la ficha completa. Sin ficha estándar: el HTML propio de Ripley, y como
+ * respaldo el texto.
  */
-function descripcionParaRipley(attrs: Record<string, any>, p: any): string {
+export function descripcionParaRipley(attrs: Record<string, any>, p: any): string {
     const propia = String(attrs.ripley?.description ?? '').trim();
     const propiaEsHtml = /<[a-z][\s\S]*>/i.test(propia);
-    return String((propiaEsHtml ? propia : '') || attrs.descriptionHtml || propia || p.aiDescription || p.description || '').trim();
+    const estandar = String(attrs.descriptionHtml ?? '').trim();
+    // La ficha estándar es la que generó la IA (queda marcada en _ia); una ficha HTML traída de otro canal no desplaza al HTML propio de Ripley.
+    const estandarDeLaIA = Array.isArray(attrs._ia) && attrs._ia.includes('descriptionHtml');
+    if (estandar && estandarDeLaIA) return estandar;
+    return String((propiaEsHtml ? propia : '') || estandar || propia || p.aiDescription || p.description || '').trim();
 }
 /** Espera entre reintentos al consultar si un SKU ya existe en Ripley (su límite de peticiones es bajo). */
 const LIMITE_ESPERA_MS = process.env.NODE_ENV === 'test' ? 1 : 1200;

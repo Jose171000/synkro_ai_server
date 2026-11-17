@@ -283,6 +283,8 @@ export class AiService {
           })
         : null;
       const htmlDescription = ficha?.html ?? null;
+      // Ripley usa la misma ficha HTML estándar: queda guardada como su descripción (igual que al prepararlo), no el texto corto de la IA.
+      if (htmlDescription && finalJson?.ripley) finalJson.ripley.description = htmlDescription;
 
       // Falabella calcula el envío con las medidas del paquete: se estiman si el cliente no las dio.
       // Se estiman siempre: Ripley y Mercado Libre también las usan, y quien edita las revisa marcadas como estimadas.
