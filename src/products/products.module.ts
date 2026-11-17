@@ -18,6 +18,7 @@ import { SkuGeneratorService } from './sku-generator.service';
 import { ProductGroup } from './entities/product-group.entity';
 import { VariantCompatService } from './variant-compat.service';
 import { CategoryModule } from '../categories/category.module';
+import { CreacionUnica } from './creacion-unica';
 
 @Module({
   imports: [
@@ -30,7 +31,7 @@ import { CategoryModule } from '../categories/category.module';
     CategoryModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService, ProductGroupsService, RegeneracionMasivaService, VariantCompatService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
+  providers: [ProductsService, ProductGroupsService, CreacionUnica, RegeneracionMasivaService, VariantCompatService, SkuGeneratorService, SectionAccessGuard, SkuUnicoService],
   exports: [ProductsService, ProductGroupsService, SkuGeneratorService],
 })
 export class ProductModule { }

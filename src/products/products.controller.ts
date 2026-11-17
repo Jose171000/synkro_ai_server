@@ -26,6 +26,7 @@ import { UploadService } from '../upload/upload.service';
 import { SyncService } from '../sync/sync.service';
 import { MAX_PRODUCTOS_POR_CONSULTA, ProductOverviewService } from '../sync/product-overview.service';
 import { QueryProductsDto } from './dto/query-products.dto';
+import { CreacionUnica, huellaDeCreacion } from './creacion-unica';
 
 @ApiTags('products')
 @ApiBearerAuth()
@@ -42,6 +43,7 @@ export class ProductsController {
     private readonly overview: ProductOverviewService,
     private readonly variantCompat: VariantCompatService,
     private readonly regeneracionMasiva: RegeneracionMasivaService,
+    private readonly creacionUnica: CreacionUnica,
   ) { }
 
   /**
@@ -311,11 +313,20 @@ export class ProductsController {
     try { dto = JSON.parse(dataField.buffer.toString('utf-8')); }
     catch { throw new BadRequestException('El campo data no contiene un JSON válido.'); }
 
-    // Upload all images to Cloudinary — validates JPEG + dimensions
-    const results = await this.uploadService.uploadImages(imageFiles, 'products');
-    dto.images = results.map(r => r.secureUrl);
-
-    return this.productsService.createWithAI(dto, req.user.id, req.store?.storeId);
+    // Volver a pulsar «Generar con IA» (p. ej. tras salir de la pantalla) con las mismas fotos y datos NO crea otro producto:
+    // devuelve el ya creado, o avisa si todavía se está generando. La huella usa el contenido de las fotos, no su nombre.
+    const huella = huellaDeCreacion(imageFiles.map((f) => f.buffer), dto as any);
+    const tienda = String(req.store?.storeId ?? req.user.id);
+    return this.creacionUnica.unaSolaVez(
+      tienda, huella,
+      async () => {
+        // Upload all images to Cloudinary — validates JPEG + dimensions
+        const results = await this.uploadService.uploadImages(imageFiles, 'products');
+        dto.images = results.map(r => r.secureUrl);
+        return this.productsService.createWithAI(dto, req.user.id, req.store?.storeId);
+      },
+      (id) => this.productsService.findOne(id, req.user.id, req.store?.storeId) as Promise<any>,
+    );
   }
 
   @Get('overview')
