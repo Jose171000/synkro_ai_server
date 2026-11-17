@@ -27,6 +27,7 @@ import { SyncService } from '../sync/sync.service';
 import { MAX_PRODUCTOS_POR_CONSULTA, ProductOverviewService } from '../sync/product-overview.service';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { CreacionUnica, huellaDeCreacion } from './creacion-unica';
+import { EliminarVariosDto } from './dto/eliminar-varios.dto';
 
 @ApiTags('products')
 @ApiBearerAuth()
@@ -443,6 +444,17 @@ export class ProductsController {
       void this.syncService.scheduleContentSync(id).catch(() => undefined);
     }
     return actualizado;
+  }
+
+  @Post('bulk-delete')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.eliminar')
+  @ApiOperation({
+    summary: 'Eliminar varios productos de la tienda activa',
+    description: 'Cada producto sigue las reglas de eliminar uno solo (también se limpian sus fotos huérfanas). Uno que no se pueda eliminar no frena a los demás: se devuelve con su motivo. Hasta 200 por petición.',
+  })
+  removeMany(@Body() dto: EliminarVariosDto, @Req() req) {
+    return this.productsService.removeMany(dto.ids, req.user.id, req.store.storeId);
   }
 
   @Delete(':id')

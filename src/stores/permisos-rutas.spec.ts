@@ -166,6 +166,7 @@ const TABLA: Record<string, string> = {
     'Products POST /products/:id/generate-ai': 'productos.editar',
     'Products PATCH /products/:id': 'productos.editar',
     'Products DELETE /products/:id': 'productos.eliminar',
+    'Products POST /products/bulk-delete': 'productos.eliminar',
     'BulkUpload GET /bulk-upload/products/template': 'productos.editar',
     'BulkUpload POST /bulk-upload/products': 'productos.editar',
     'BulkUpload GET /bulk-upload/products/progress/:batchId': 'productos.editar',

@@ -668,6 +668,24 @@ export class ProductsService {
     }
 
     /**
+     * Elimina varios productos de la tienda activa. Cada uno sigue las reglas de siempre (permiso, tienda, limpieza de fotos);
+     * uno que no se pueda eliminar no frena a los demás y se devuelve con su motivo.
+     */
+    async removeMany(ids: string[], userId: string, storeId?: string) {
+        const unicos = [...new Set((ids ?? []).filter(Boolean))];
+        const resultado = { eliminados: 0, omitidos: [] as { id: string; motivo: string }[] };
+        for (const id of unicos) {
+            try {
+                await this.remove(id, userId, storeId);
+                resultado.eliminados++;
+            } catch (error: any) {
+                resultado.omitidos.push({ id, motivo: String(error?.response?.message ?? error?.message ?? 'No se pudo eliminar.').slice(0, 200) });
+            }
+        }
+        return resultado;
+    }
+
+    /**
      * Vuelca lo que generó la IA sobre el producto.
      *
      * Cada canal responde con una forma distinta: Mercado Libre y Amazon
