@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Optional } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
+import { ProductGroup } from './entities/product-group.entity';
 import { StoresService } from '../stores/stores.service';
 import { armarSku, iniciales, mayorNumeroConPrefijo, patronDominante, PatronDeSku } from './sku-generator';
 
@@ -24,21 +26,36 @@ export class SkuGeneratorService {
     constructor(
         @InjectRepository(Product) private readonly productRepository: Repository<Product>,
         private readonly stores: StoresService,
+        @Optional() @InjectRepository(ProductGroup) private readonly grupos?: Repository<ProductGroup>,
     ) { }
 
     /** Los próximos `cantidad` SKU libres de la tienda, consecutivos. */
     async siguientes(ambito: AmbitoDeSku, cantidad = 1, ocupados: Set<string> = new Set()): Promise<string[]> {
         const patron = await this.patronDeLaTienda(ambito);
-        const existentes = await this.skusConPrefijo(ambito, patron.prefijo);
+        const codigosDeGrupo = await this.codigosDeGrupo(ambito);
+        const existentes = [...(await this.skusConPrefijo(ambito, patron.prefijo)), ...codigosDeGrupo.filter((c) => c.toLowerCase().startsWith(patron.prefijo.toLowerCase()))];
         let numero = mayorNumeroConPrefijo(existentes, patron.prefijo) + 1;
+        const deGrupos = new Set(codigosDeGrupo.map((c) => c.trim().toLowerCase()));
 
         const salida: string[] = [];
         while (salida.length < cantidad) {
             const sku = armarSku(patron.prefijo, numero++, patron.ancho);
-            if (ocupados.has(sku.toLowerCase())) continue;
+            // Un código de grupo de variantes también es un identificador ocupado: un producto nuevo con él se mezclaría con esa familia en los canales.
+            if (ocupados.has(sku.toLowerCase()) || deGrupos.has(sku.toLowerCase())) continue;
             salida.push(sku);
         }
         return salida;
+    }
+
+    /** Los códigos de los grupos de variantes de la tienda. */
+    private async codigosDeGrupo(ambito: AmbitoDeSku): Promise<string[]> {
+        if (!this.grupos) return [];
+        const qb = this.grupos.createQueryBuilder('g').select('g."parentSku"', 'sku');
+        const filas: { sku: string }[] = await (ambito.storeId
+            ? qb.where('g."storeId" = :storeId', { storeId: ambito.storeId })
+            : qb.where('g."ownerId" = :userId', { userId: ambito.userId }).andWhere('g."storeId" IS NULL'))
+            .getRawMany();
+        return filas.map((f) => String(f.sku ?? '')).filter(Boolean);
     }
 
     /** El formato que usa la tienda: el dominante entre sus últimos productos publicados, o el propio por defecto. */

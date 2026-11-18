@@ -42,6 +42,7 @@ export class ProductsService {
         private skuGenerator: SkuGeneratorService,
         @Optional() private readonly ripleyMarcas?: RipleyMarcasService,
         @Optional() private readonly limpiezaDeFotos?: LimpiezaDeFotos,
+        @Optional() @InjectRepository(ProductGroup) private readonly grupos?: Repository<ProductGroup>,
     ) { }
 
     async create(createProductDto: CreateProductDto, userId: string, storeId?: string | null) {
@@ -88,6 +89,15 @@ export class ProductsService {
         return qb.where('p."ownerId" = :userId', { userId: scope.userId }).andWhere('p."storeId" IS NULL');
     }
 
+    /** Los grupos de variantes de la tienda cuyo código (el que van a los canales como ParentSku / variant_id) está entre estos. */
+    private async gruposConCodigo(scope: SkuScope, claves: string[]): Promise<{ parentSku: string; name: string }[]> {
+        if (!this.grupos || !claves.length) return [];
+        const qb = this.grupos.createQueryBuilder('g');
+        if (scope.storeId) qb.where('g."storeId" = :storeId', { storeId: scope.storeId });
+        else qb.where('g."ownerId" = :userId', { userId: scope.userId }).andWhere('g."storeId" IS NULL');
+        return qb.andWhere('LOWER(TRIM(g."parentSku")) IN (:...claves)', { claves }).getMany();
+    }
+
     /** El SKU identifica al producto en todos los canales: «abc-1» y «ABC-1 » son el mismo. */
     async assertSkuLibre(sku: string, scope: string | SkuScope, exceptId?: string): Promise<void> {
         const existing = await this.enElAmbito(this.productRepository.createQueryBuilder('p'), this.ambitoDe(scope))
@@ -99,6 +109,13 @@ export class ProductsService {
                 `El SKU "${sku}" ya está en uso por el producto "${existing.name}" de esta tienda. Cada producto necesita un SKU distinto.`,
             );
         }
+        // El código de un grupo de variantes viaja a los canales como identificador de la familia: un producto con ese mismo código se mezclaría con ella.
+        const [grupo] = await this.gruposConCodigo(this.ambitoDe(scope), [sku.trim().toLowerCase()]);
+        if (grupo) {
+            throw new ConflictException(
+                `El SKU "${sku}" ya es el código del grupo de variantes "${grupo.name}" de esta tienda. Cada producto necesita un SKU distinto.`,
+            );
+        }
     }
 
     /** De una lista de SKUs, cuáles ya existen en la tienda (en minúsculas y sin espacios). */
@@ -108,7 +125,8 @@ export class ProductsService {
         const filas: { sku: string }[] = await this.enElAmbito(this.productRepository.createQueryBuilder('p').select('LOWER(TRIM(p.sku))', 'sku'), this.ambitoDe(scope))
             .andWhere('LOWER(TRIM(p.sku)) IN (:...claves)', { claves })
             .getRawMany();
-        return new Set(filas.map((f) => f.sku));
+        const deGrupos = await this.gruposConCodigo(this.ambitoDe(scope), claves);
+        return new Set([...filas.map((f) => f.sku), ...deGrupos.map((g) => g.parentSku.trim().toLowerCase())]);
     }
 
     /** El producto de una tienda por su SKU (sin importar mayúsculas ni espacios); null si no existe. */

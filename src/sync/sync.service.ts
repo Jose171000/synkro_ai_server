@@ -1372,6 +1372,16 @@ export class SyncService implements OnModuleInit {
     }
 
     /** El producto y, si es una variante, todas las de su grupo: en un canal se lanzan juntas. Sin grupo, solo él. */
+    /** Un producto de la tienda con ese SKU que no sea de los indicados (sin importar mayúsculas ni espacios); null si no hay. */
+    async productoAjenoConSku(scope: SyncScope, sku: string, excluirIds: string[]): Promise<{ id: string; name: string } | null> {
+        const qb = this.productRepository.createQueryBuilder('p')
+            .where('p."storeId" = :storeId', { storeId: scope.storeId })
+            .andWhere('LOWER(TRIM(p.sku)) = :sku', { sku: String(sku ?? '').trim().toLowerCase() });
+        if (excluirIds.length) qb.andWhere('p.id NOT IN (:...excluirIds)', { excluirIds });
+        const p = await qb.getOne();
+        return p ? { id: p.id, name: p.name } : null;
+    }
+
     async familiaDe(scope: SyncScope, productId: string): Promise<Product[]> {
         const producto = await this.findScopedProduct(scope, productId);
         const conGrupo = await this.productRepository.findOne({ where: { id: producto.id }, relations: { group: true } });

@@ -110,6 +110,12 @@ export class RipleyPublicacionService {
             mapeo = r.mapeo;
         }
 
+        // El código del grupo viaja a Ripley como variant_id: si es el SKU de OTRO producto de la tienda, Ripley los mezclaría en una sola ficha.
+        if (grupo && publicaComo === 'una' && String(grupo.parentSku ?? '').trim()) {
+            const ajeno = await this.sync.productoAjenoConSku?.(scope, String(grupo.parentSku), familia.map((p) => p.id));
+            if (ajeno) return { ...base, categoria: { id: categoryId, ruta }, errores: [`El código del grupo de variantes («${grupo.parentSku}») es el SKU de otro producto de la tienda («${ajeno.name}»). Ripley los mezclaría en una sola ficha. Cambia el código del grupo antes de enviarlo.`] };
+        }
+
         const productos: VistaPreviaDeRipley['productos'] = [];
         const filas: Record<string, string>[] = [];
         const atributosDeColumna = columnasDeAtributos(campos.campos);
