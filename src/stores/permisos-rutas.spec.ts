@@ -154,6 +154,7 @@ const TABLA: Record<string, string> = {
     'Products POST /products/groups/:id/generate-ai': 'productos.editar',
     'Products POST /products/groups/:id/align-axes': 'productos.editar',
     'Products PATCH /products/groups/:id/axes': 'productos.editar',
+    'Products POST /products/groups/:id/change-code': 'productos.editar',
     'Products POST /products/:id/variants': 'productos.editar',
     'Products POST /products/with-ai': 'productos.editar',
     'Products POST /products/with-ai/with-files': 'productos.editar',

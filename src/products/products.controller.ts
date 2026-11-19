@@ -20,6 +20,7 @@ import { RegenerarGrupoDto } from './dto/regenerar-grupo.dto';
 import { RegeneracionMasivaDto } from './dto/regeneracion-masiva.dto';
 import { RegeneracionMasivaService } from './regeneracion-masiva.service';
 import { RenombrarEjeDto } from './dto/renombrar-eje.dto';
+import { CambiarCodigoDeGrupoDto } from './dto/cambiar-codigo-de-grupo.dto';
 import { AplicarAjustesDto, AplicarCorreccionDto, SugerirAjustesDto } from './dto/ajustes-de-canal.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UploadService } from '../upload/upload.service';
@@ -250,6 +251,17 @@ export class ProductsController {
   })
   renameGroupAxis(@Param('id') id: string, @Body() dto: RenombrarEjeDto, @Req() req) {
     return this.groups.renombrarEje(id, dto.from, dto.to, { userId: req.user.id, storeId: req.store.storeId });
+  }
+
+  @Post('groups/:id/change-code')
+  @UseGuards(StoreAccessGuard)
+  @RequirePermission('productos.editar')
+  @ApiOperation({
+    summary: 'Cambiar el código de un grupo de variantes',
+    description: 'Repara un grupo cuyo código coincide con el SKU de otro producto. El código nuevo debe estar libre (sin indicarlo se usa el siguiente libre); los SKU de las variantes no cambian. No se permite si ya está en Falabella. No envía nada a ningún canal.',
+  })
+  changeGroupCode(@Param('id') id: string, @Body() dto: CambiarCodigoDeGrupoDto, @Req() req) {
+    return this.groups.cambiarCodigo(id, dto.codigo, { userId: req.user.id, storeId: req.store.storeId });
   }
 
   @Post('groups/:id/align-axes')

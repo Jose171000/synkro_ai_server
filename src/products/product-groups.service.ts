@@ -277,6 +277,37 @@ export class ProductGroupsService {
     }
 
     /**
+     * Cambia el CÓDIGO del grupo (el que los canales reciben como identificador de la familia: ParentSku, variant_id…). Sirve para reparar un
+     * grupo cuyo código chocó con el SKU de otro producto. El código nuevo debe estar libre en la tienda (ni SKU de producto ni código de otro
+     * grupo); sin indicarlo se usa el siguiente libre. Los SKU de las variantes no cambian. Si alguna variante ya está en Falabella no se hace:
+     * allí el ParentSku queda fijo y cambiarlo solo aquí los desincronizaría. No envía nada a ningún canal.
+     */
+    async cambiarCodigo(grupoId: string, codigoNuevo: string | undefined, ambito: AmbitoDeGrupo): Promise<{ anterior: string; nuevo: string; variantes: number; canales: string[] }> {
+        const vista = await this.obtener(grupoId, ambito);
+        const anterior = vista.parentSku;
+        const nuevo = String(codigoNuevo ?? '').trim() || (await this.skuGenerator.siguientes({ userId: ambito.userId, storeId: ambito.storeId }))[0];
+        if (nuevo.toLowerCase() === anterior.trim().toLowerCase()) throw new BadRequestException('Ese ya es el código del grupo.');
+        await this.codigoDeGrupoLibre(nuevo, ambito);
+
+        const enlaces: { marketplace: string }[] = await this.dataSource.query(
+            `SELECT DISTINCT l.marketplace FROM listing_links l JOIN products p ON p.id = l."productId" WHERE p."groupId" = $1 AND l."syncStatus" <> 'removed'`,
+            [grupoId],
+        );
+        const canales = enlaces.map((e) => e.marketplace);
+        if (canales.includes('falabella')) {
+            throw new ConflictException('Este grupo ya está en Falabella con su código actual y allí no se puede cambiar; cambiarlo solo en Synkro los desincronizaría. Se resuelve desde Falabella.');
+        }
+        await this.dataSource.transaction(async (manager) => {
+            await manager.update(ProductGroup, grupoId, { parentSku: nuevo } as any);
+            await manager.query(
+                `UPDATE listing_links SET "parentSku" = $2 WHERE "parentSku" = $3 AND "productId" IN (SELECT id FROM products WHERE "groupId" = $1)`,
+                [grupoId, nuevo, anterior],
+            );
+        });
+        return { anterior, nuevo, variantes: vista.variants?.length ?? 0, canales };
+    }
+
+    /**
      * Corrige los atributos de color y talla guardados en cada variante para que digan los de ESA variante (no el «Multicolor» o la
      * talla que la IA dedujo para todo el grupo). No usa la IA ni toca nada más; devuelve cuántas variantes cambió.
      */
