@@ -39,16 +39,31 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         { header: 'precio_descuento', key: 'precio_descuento', width: 18 },
         { header: 'descuento_desde', key: 'descuento_desde', width: 16 },
         { header: 'descuento_hasta', key: 'descuento_hasta', width: 16 },
+        // Solo para productos con variantes (encabezado de otro color).
         { header: 'sku_padre', key: 'sku_padre', width: 16 },
+        { header: 'eje_1', key: 'eje_1', width: 12 },
+        { header: 'valor_1', key: 'valor_1', width: 14 },
+        { header: 'eje_2', key: 'eje_2', width: 12 },
+        { header: 'valor_2', key: 'valor_2', width: 14 },
+        { header: 'eje_3', key: 'eje_3', width: 12 },
+        { header: 'valor_3', key: 'valor_3', width: 14 },
     ];
     hoja.getRow(1).font = { bold: true };
     hoja.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCCB34' } };
+    // Columnas de variantes: celeste, con una nota al pasar el mouse.
+    for (let col = 11; col <= 17; col++) {
+        hoja.getRow(1).getCell(col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } };
+    }
+    hoja.getCell('K1').note = 'Solo para productos con variantes. Escribe el mismo sku_padre en todas las filas del producto; en eje_1 en qué se diferencian (Medida) y en valor_1 el valor de cada fila (2 plazas). Ver la hoja Instrucciones.';
     hoja.views = [{ state: 'frozen', ySplit: 1 }];
 
     const combos = combinacionesDeCanales(canalesConectados);
     const ejemploCanales = combos.length ? combos[combos.length - 1] : '';
     hoja.addRow({ sku: 'EJEMPLO-1', precio: 250, stock: 10, fotos: 'fotos/EJEMPLO-1.jpg, fotos/EJEMPLO-1-2.jpg', nombre: '', descripcion: '', canales: ejemploCanales, precio_descuento: 199.9, descuento_desde: '2026-11-01', descuento_hasta: '2026-11-30' });
     hoja.addRow({ sku: 'EJEMPLO-2', precio: 89.9, stock: 25, fotos: '', nombre: 'Nombre corto (opcional)', descripcion: 'Texto opcional: refuerza lo que la IA ve en las fotos', canales: '' });
+    // Un producto con variantes: dos filas con el mismo sku_padre. El nombre del eje basta en la primera fila.
+    hoja.addRow({ sku: 'EJEMPLO-3', precio: 699, stock: 8, fotos: 'fotos/EJEMPLO-3.jpg', nombre: 'Producto con variantes (opcional)', canales: ejemploCanales, sku_padre: 'EJEMPLO-GRUPO', eje_1: 'Medida', valor_1: '1.5 plazas', eje_2: 'Color', valor_2: 'Blanco' });
+    hoja.addRow({ sku: 'EJEMPLO-4', precio: 899, stock: 4, fotos: '', sku_padre: 'EJEMPLO-GRUPO', valor_1: '2 plazas', valor_2: 'Blanco' });
 
     // Lista desplegable de canales para las primeras 1000 filas. Las opciones van en una hoja oculta: en una lista
     // escrita en la propia validación la coma separa opciones y «falabella,mercadolibre» se partiría en dos.
@@ -74,7 +89,7 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         `Plantilla de productos para la tienda: ${tienda}`,
         '',
         `Canales conectados en esta tienda: ${canalesConectados.length ? canalesConectados.map(c => NOMBRE_DE_CANAL[c] ?? c).join(', ') : 'ninguno (los productos se crean pero no se publican)'}.`,
-        'Cada fila es un producto. Borra las filas EJEMPLO-1 y EJEMPLO-2 antes de subir el archivo.',
+        'Cada fila es un producto (o una variante de un producto). Borra las filas EJEMPLO antes de subir el archivo.',
         '',
         'sku: opcional. Si lo dejas vacío, se asigna uno con el formato de tu tienda. Si lo escribes, no puede repetirse ni existir ya en la tienda.',
         '     Sin SKU escrito, las fotos de esa fila se indican en la columna fotos (la búsqueda por nombre de archivo necesita el SKU).',
@@ -87,8 +102,25 @@ export async function plantillaDeProductos(tienda: string, canalesConectados: st
         'canales: elige de la lista. Si la dejas vacía se usan los canales marcados en pantalla al subir el archivo (o todos los conectados, si no marcaste ninguno).',
         'precio_descuento: opcional. Debe ser menor que el precio. Se envía a Falabella como precio con descuento.',
         'descuento_desde / descuento_hasta: opcionales, fechas AAAA-MM-DD (por ejemplo 2026-11-30). Sin fechas, el descuento queda sin vigencia definida.',
-        'sku_padre: opcional. Escribe el mismo valor en las filas que son variantes de un mismo producto (talla, color…). Todas comparten UNA sola categoría por canal,',
-        '           que se decide una vez con la primera fila del grupo. Después, en Productos, se agrupan como variantes.',
+        '',
+        'PRODUCTOS CON VARIANTES (columnas celestes; déjalas vacías si tu producto no tiene variantes)',
+        'Cada fila es una variante que se vende, con su propio sku, precio, stock y fotos. Las filas con el mismo sku_padre forman UN producto con variantes,',
+        'que se publica como una sola ficha donde el comprador elige la medida, el color, etc.',
+        '',
+        'sku_padre: el código del producto (en Falabella es el ParentSku). Escribe el mismo en todas sus filas. No puede ser el SKU de una variante ni de otro producto.',
+        'eje_1, eje_2, eje_3: en qué se diferencian las variantes (Medida, Color, Talla, Sabor…). Basta escribirlos en la primera fila del producto.',
+        'valor_1, valor_2, valor_3: el valor de cada fila para ese eje (2 plazas, Blanco…). Cada fila necesita un valor por cada eje.',
+        'Para agregar un eje: escribe su nombre en la siguiente columna eje_ libre. Para agregar una variante: agrega otra fila con el mismo sku_padre.',
+        'Ejemplo de un colchón en 3 medidas:',
+        '   sku GOLD-15P | precio 699 | sku_padre GOLDEN-PREM | eje_1 Medida | valor_1 1.5 plazas',
+        '   sku GOLD-2P  | precio 899 | sku_padre GOLDEN-PREM |              | valor_1 2 plazas',
+        '   sku GOLD-QN  | precio 1099 | sku_padre GOLDEN-PREM |             | valor_1 Queen',
+        'nombre, descripcion y canales: se toman de la primera fila del producto; en las demás puedes dejarlos vacíos. Sin nombre, la IA lo arma una vez para todo el producto.',
+        'sku: si lo dejas vacío en una variante, se arma con el sku_padre y sus valores (GOLDEN-PREM-QUEEN).',
+        'fotos: si una variante no tiene fotos, usa las de la primera fila del producto que tenga.',
+        'Dos filas no pueden ser la misma variante (mismos valores). Límites: 3 ejes, 40 valores por eje y 100 variantes por producto.',
+        'Si una fila de un producto con variantes tiene un error, ese producto no se crea (se crea completo o no se crea) y el motivo aparece en el resultado de la carga.',
+        'Si escribes sku_padre sin ejes, las filas se crean como productos separados que solo comparten la categoría (como antes).',
     ];
     lineas.forEach(l => guia.addRow([l]));
     guia.getRow(1).font = { bold: true, size: 13 };

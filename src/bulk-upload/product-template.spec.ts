@@ -19,7 +19,10 @@ describe('plantilla de productos por tienda', () => {
         const libro = new ExcelJS.Workbook();
         await libro.xlsx.load(buffer as any);
         const hoja = libro.getWorksheet('Productos')!;
-        expect(hoja.getRow(1).values).toEqual([undefined, 'sku', 'precio', 'stock', 'fotos', 'nombre', 'descripcion', 'canales', 'precio_descuento', 'descuento_desde', 'descuento_hasta', 'sku_padre']);
+        expect(hoja.getRow(1).values).toEqual([undefined, 'sku', 'precio', 'stock', 'fotos', 'nombre', 'descripcion', 'canales', 'precio_descuento', 'descuento_desde', 'descuento_hasta', 'sku_padre', 'eje_1', 'valor_1', 'eje_2', 'valor_2', 'eje_3', 'valor_3']);
+        // El ejemplo trae un producto con variantes: dos filas con el mismo sku_padre; el eje solo en la primera.
+        expect([hoja.getCell('K4').value, hoja.getCell('L4').value, hoja.getCell('M4').value]).toEqual(['EJEMPLO-GRUPO', 'Medida', '1.5 plazas']);
+        expect([hoja.getCell('K5').value, hoja.getCell('L5').value, hoja.getCell('M5').value]).toEqual(['EJEMPLO-GRUPO', null, '2 plazas']);
         expect(hoja.getCell('G5').dataValidation.formulae).toEqual(['Listas!$A$1:$A$1']);
         expect(libro.getWorksheet('Listas')!.getCell('A1').value).toBe('falabella');
         expect(libro.getWorksheet('Instrucciones')!.getCell('A1').value).toContain('Maba Kids');

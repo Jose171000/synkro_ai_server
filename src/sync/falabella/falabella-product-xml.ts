@@ -195,6 +195,27 @@ export function chunkProducts<T>(items: T[], size = 500): T[][] {
 }
 
 /**
+ * Como chunkProducts, pero sin partir una familia de variantes (misma `familiaDe`) entre dos envíos: separadas, Falabella puede
+ * armar familias distintas. Cada familia va entera en un envío (si sola pasa del tamaño, va sola en el suyo). Respeta el orden
+ * de aparición de cada familia.
+ */
+export function chunkPorFamilia<T>(items: T[], familiaDe: (item: T) => string, size = 500): T[][] {
+    const familias = new Map<string, T[]>();
+    for (const item of items) {
+        const clave = familiaDe(item);
+        (familias.get(clave) ?? familias.set(clave, []).get(clave)!).push(item);
+    }
+    const lotes: T[][] = [];
+    let actual: T[] = [];
+    for (const familia of familias.values()) {
+        if (actual.length && actual.length + familia.length > size) { lotes.push(actual); actual = []; }
+        actual.push(...familia);
+    }
+    if (actual.length) lotes.push(actual);
+    return lotes;
+}
+
+/**
  * XML para cambiar solo el precio de una ficha ya publicada (ProductUpdate).
  * Va dentro de la unidad de negocio, igual que en el alta: es donde Falabella
  * guarda precio y stock, no en la raíz del producto.

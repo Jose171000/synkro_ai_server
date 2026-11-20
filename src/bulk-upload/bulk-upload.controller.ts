@@ -30,9 +30,32 @@ import { BulkBatchService } from './bulk-batch.service';
 import { leerCuentasElegidas } from '../sync/cuentas-elegidas';
 import { EdicionMasivaService } from './edicion-masiva.service';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
+import { armarGrupos, codigosConVariantes, GrupoDeCarga } from './grupos-de-carga';
+import { asignarSkus } from '../products/variantes';
 
 /** Canales donde la carga masiva puede publicar sola. */
 const CANALES_PUBLICABLES = ['mercadolibre', 'falabella', 'woocommerce'];
+
+/** La fila no indica fotos y el ZIP no tiene ninguna con su SKU (una variante puede usar entonces las de su grupo). */
+class SinFotos extends Error { }
+
+const OPCIONES_DE_TRABAJO = {
+    // Un fallo pasajero de la IA (límite de llamadas, red) se reintenta antes de dar el producto por fallido.
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 15_000 },
+};
+
+/**
+ * Renglones del registro del lote para un trabajo. Un producto suelto es un renglón; un grupo de variantes, uno por variante:
+ * el primero guarda el trabajo entero (para «Reintentar») y los demás solo apuntan al grupo.
+ */
+function renglonesDelTrabajo(trabajo: any): { sku: string; payload: Record<string, any> }[] {
+    if (trabajo?.tipo !== 'grupo') return [{ sku: trabajo.sku, payload: trabajo }];
+    return trabajo.variants.map((v: any, k: number) => ({ sku: v.sku, payload: k === 0 ? trabajo : { grupoDe: trabajo.parentSku, cuentas: trabajo.cuentas } }));
+}
+
+/** Cuántos productos lleva un trabajo (un grupo cuenta cada variante). */
+const productosDelTrabajo = (trabajo: any): number => (trabajo?.tipo === 'grupo' ? trabajo.variants.length : 1);
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()
@@ -81,7 +104,7 @@ export class BulkUploadController {
         const indicadas = partirLista(valor);
         const lista = indicadas.length ? indicadas : fotosDeCarpeta(sku, [...zipEntries.keys()], otrosSkus);
         if (!lista.length) {
-            throw new Error('no tiene fotos: escribe sus rutas en la columna fotos o ponlas en el ZIP con el SKU en el nombre (MK-001.jpg, MK-001-2.jpg) o en una carpeta con el SKU');
+            throw new SinFotos('no tiene fotos: escribe sus rutas en la columna fotos o ponlas en el ZIP con el SKU en el nombre (MK-001.jpg, MK-001-2.jpg) o en una carpeta con el SKU');
         }
         if (lista.length > MAX_FOTOS) lista.length = MAX_FOTOS;
 
@@ -99,6 +122,24 @@ export class BulkUploadController {
             urls.push((await this.uploadService.uploadBuffer(entrada, ruta, 'products')).secureUrl);
         }
         return urls;
+    }
+
+    /**
+     * SKU de las variantes de un grupo: los escritos se respetan (ya se comprobó que están libres) y los vacíos se arman con el
+     * código del grupo y los valores (GOLDEN-PREM-QUEEN), sin chocar con los del Excel (`ocupados`) ni con los de la tienda.
+     */
+    private async skusDeVariantes(grupo: GrupoDeCarga<{ i: number; grupo: string; sku: string; ejes: { nombre: string; valor: string }[] }>, ocupados: Set<string>, scope: { userId: string; storeId?: string }): Promise<string[]> {
+        const entradas = grupo.filas.map((f, k) => ({ valores: grupo.valores[k], sku: f.sku || null }));
+        const escritos = new Set(grupo.filas.map((f) => f.sku.toLowerCase()).filter(Boolean));
+        let tomados = new Set([...ocupados].filter((s) => !escritos.has(s)));
+        for (let intento = 0; intento < 5; intento++) {
+            const skus = asignarSkus(grupo.codigo, entradas, grupo.ejes, tomados);
+            const generados = skus.filter((_, k) => !entradas[k].sku);
+            const enLaTienda = generados.length ? await this.productsService.skusExistentes(scope, generados) : new Set<string>();
+            if (!generados.some((s) => enLaTienda.has(s.toLowerCase()))) return skus;
+            tomados = new Set([...tomados, ...enLaTienda]);
+        }
+        throw new Error('no se pudieron generar SKU libres para sus variantes: escríbelos en la columna sku');
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -176,11 +217,13 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             console.log('[BulkUpload] Columnas detectadas:', Object.keys(rows[0] as object));
 
             const rechazos: string[] = [];
-            const rechazar = (i: number, motivo: string) => { rechazos.push(`Fila ${i + 2}: ${motivo}`); };
+            const filasRechazadas = new Set<number>();
+            const rechazar = (i: number, motivo: string) => { rechazos.push(`Fila ${i + 2}: ${motivo}`); filasRechazadas.add(i); };
 
             // Canales de la tienda donde se puede publicar sola. Solo quien tiene el permiso de publicar (dueño y editor, de
             // fábrica); los demás crean los productos y los dejan listos.
             const storeId: string | undefined = req.store?.storeId;
+            const scope = { userId: req.user.id as string, storeId };
             const conectados: string[] = storeId && req.store?.permissions?.includes('canales.publicar')
                 ? [...new Set((await this.syncService.getConnections(storeId))
                     .filter((c: any) => c.status === 'active' && CANALES_PUBLICABLES.includes(c.marketplace))
@@ -190,16 +233,22 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             // Canales marcados en pantalla: valen para las filas que no traen su propia columna `canales`.
             const marcados = partirLista(String(req.body?.canales ?? '')).map(t => t.toLowerCase()).filter(t => CANALES_PUBLICABLES.includes(t));
 
+            // Ejes de variación de cada fila (eje_1/valor_1…). Un «sku_padre» con ejes es un producto con variantes; sin ejes, como antes.
+            const leerEjes = (row: any) => COLUMNAS.ejes.map((c) => ({ nombre: (this.getVal(row, c.eje) ?? '').trim(), valor: (this.getVal(row, c.valor) ?? '').trim() }));
+            const filasCrudas = rows.map((row: any, i: number) => ({ i, grupo: (this.getVal(row, COLUMNAS.grupo) ?? '').trim(), ejes: leerEjes(row) }));
+            const conVariantes = codigosConVariantes(filasCrudas);
+            const grupoDe = (i: number): string => { const g = filasCrudas[i].grupo.toLowerCase(); return g && conVariantes.has(g) ? g : ''; };
+
             // 1) Datos de cada fila. Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
             const skusDelExcel = rows.map((row: any) => this.getVal(row, COLUMNAS.sku) ?? '');
-            const existentes = await this.productsService.skusExistentes({ userId: req.user.id, storeId }, skusDelExcel);
+            const existentes = await this.productsService.skusExistentes(scope, skusDelExcel);
             const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
-            type Fila = { i: number; grupo: string; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[] };
+            type Fila = { i: number; grupo: string; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[]; ejes: { nombre: string; valor: string }[] };
             const validas: Fila[] = [];
             rows.forEach((row: any, i: number) => {
                 const sku = (this.getVal(row, COLUMNAS.sku) ?? '').trim();
-                // Una fila sin SKU no se rechaza: recibe uno generado con el formato de la tienda (más abajo).
+                // Una fila sin SKU no se rechaza: recibe uno generado (más abajo).
                 const ref = sku || '(sin SKU)';
                 if (sku) {
                     const clave = sku.toLowerCase();
@@ -226,45 +275,99 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 // Sin columna de canales se usan los marcados en pantalla o, si no hay, todos los conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
                 validas.push({
-                    i, grupo: (this.getVal(row, COLUMNAS.grupo) ?? '').trim(), sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
+                    i, grupo: filasCrudas[i].grupo, sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
                     nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
                     descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
                     fotos: this.getVal(row, COLUMNAS.fotos),
                     canales: indicados.length ? indicados : (marcados.length ? marcados : (conectados.length ? conectados : ['mercadolibre'])),
+                    ejes: filasCrudas[i].ejes,
                 });
             });
 
-            // Las filas sin SKU reciben uno con el formato de la tienda (consecutivos, sin chocar con los escritos).
-            const sinSku = validas.filter((f) => !f.sku);
+            // 1b) Productos con variantes: las filas con el mismo «sku_padre» y sus ejes forman UN producto. Un grupo se crea
+            // completo o no se crea: si una de sus filas tiene un error, el grupo entero queda fuera con el motivo.
+            const sueltas = validas.filter((f) => !grupoDe(f.i));
+            const armado = armarGrupos(validas.filter((f) => grupoDe(f.i)));
+            const descartar = (filas: number[], motivo: string) => { for (const i of filas) if (!filasRechazadas.has(i)) rechazar(i, motivo); };
+            for (const e of armado.errores) descartar(e.filas, e.motivo);
+            const filasDelGrupo = (codigo: string) => filasCrudas.filter((f) => grupoDe(f.i) === codigo.toLowerCase()).map((f) => f.i);
+            const skusEscritos = new Set(skusDelExcel.map((s) => s.trim().toLowerCase()).filter(Boolean));
+            const codigosOcupados = await this.productsService.skusExistentes(scope, armado.grupos.map((g) => g.codigo));
+            let grupos: GrupoDeCarga<Fila>[] = armado.grupos.filter((g) => {
+                const filas = filasDelGrupo(g.codigo);
+                const caidas = filas.filter((i) => filasRechazadas.has(i));
+                const codigo = g.codigo.toLowerCase();
+                let motivo = '';
+                if (caidas.length) motivo = `el producto con variantes ${g.codigo} no se creó porque ${caidas.length === 1 ? 'la fila' : 'las filas'} ${caidas.map((i) => i + 2).join(', ')} ${caidas.length === 1 ? 'tiene' : 'tienen'} un error (se crea completo o no se crea)`;
+                else if (!storeId) motivo = `el producto con variantes ${g.codigo} necesita una tienda activa`;
+                else if (skusEscritos.has(codigo)) motivo = `el sku_padre ${g.codigo} es también el SKU de una fila del Excel: el código del grupo debe ser distinto de los SKU de las variantes`;
+                else if (codigosOcupados.has(codigo)) motivo = `el sku_padre ${g.codigo} ya existe en tu tienda (como SKU de un producto o código de otro grupo): usa otro código`;
+                if (motivo) descartar(filas, motivo);
+                return !motivo;
+            });
+
+            // Las filas sueltas sin SKU reciben uno con el formato de la tienda (consecutivos, sin chocar con los escritos ni con los grupos).
+            const sinSku = sueltas.filter((f) => !f.sku);
             const skusGenerados: { fila: number; sku: string }[] = [];
             if (sinSku.length) {
-                const nuevos = await this.skuGenerator.siguientes({ userId: req.user.id, storeId }, sinSku.length, new Set(vistos.keys()));
+                const nuevos = await this.skuGenerator.siguientes(scope, sinSku.length, new Set([...vistos.keys(), ...grupos.map((g) => g.codigo.toLowerCase())]));
                 sinSku.forEach((f, k) => { f.sku = nuevos[k]; skusGenerados.push({ fila: f.i + 2, sku: nuevos[k] }); });
+            }
+
+            // Las variantes sin SKU reciben uno con el código del grupo y sus valores (GOLDEN-PREM-QUEEN), como al crearlas en la app.
+            const ocupados = new Set<string>([...vistos.keys(), ...sueltas.map((f) => f.sku.toLowerCase()), ...grupos.map((g) => g.codigo.toLowerCase())]);
+            for (const g of [...grupos]) {
+                try {
+                    const skus = await this.skusDeVariantes(g, ocupados, scope);
+                    g.filas.forEach((f, k) => {
+                        if (!f.sku) skusGenerados.push({ fila: f.i + 2, sku: skus[k] });
+                        f.sku = skus[k];
+                        ocupados.add(skus[k].toLowerCase());
+                    });
+                } catch (error: any) {
+                    descartar(g.filas.map((f) => f.i), `el producto con variantes ${g.codigo} no se creó: ${error?.message ?? 'no se pudieron asignar los SKU'}`);
+                    grupos = grupos.filter((x) => x !== g);
+                }
             }
 
             // 2) Fotos de las filas que pasaron: se suben antes de encolar (puede tardar).
             // Con BULK_PHOTO_CONCURRENCY se limita cuántos productos suben fotos a la vez; sin la variable, todos a la vez como siempre.
-            const fotos = await allSettledConLimite(validas, concurrenciaDeFotos(process.env.BULK_PHOTO_CONCURRENCY), f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus));
+            const conFotos = [...sueltas, ...grupos.flatMap((g) => g.filas)];
+            const fotos = await allSettledConLimite(conFotos, concurrenciaDeFotos(process.env.BULK_PHOTO_CONCURRENCY), f => this.resolverFotos(f.sku, f.fotos, zipEntries, otrosSkus));
+            const resultadoDeFotos = new Map(conFotos.map((f, k) => [f.i, fotos[k]]));
             const listas: { fila: Fila; urls: string[] }[] = [];
-            fotos.forEach((r, k) => {
-                const fila = validas[k];
+            for (const fila of sueltas) {
+                const r = resultadoDeFotos.get(fila.i)!;
                 if (r.status === 'rejected') {
                     console.warn(`[BulkUpload] Fila ${fila.i + 2} (SKU: ${fila.sku}) rechazada -> ${r.reason?.message}`);
                     rechazar(fila.i, `${fila.sku}: ${r.reason?.message ?? 'foto inválida'}`);
                 } else {
                     listas.push({ fila, urls: r.value });
                 }
-            });
+            }
+            // Una variante sin fotos propias usa las de la primera fila del grupo que tenga (útil cuando las medidas se ven iguales).
+            const gruposListos: { grupo: GrupoDeCarga<Fila>; urls: string[][] }[] = [];
+            for (const g of grupos) {
+                const resultados = g.filas.map((f) => resultadoDeFotos.get(f.i)!);
+                const malas = g.filas.map((f, k) => ({ f, r: resultados[k] })).filter(({ r }) => r.status === 'rejected' && !(r.reason instanceof SinFotos));
+                const respaldo = resultados.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<string[]> | undefined;
+                let motivo = '';
+                if (malas.length) motivo = `el producto con variantes ${g.codigo} no se creó: ${malas.map(({ f, r }) => `fila ${f.i + 2} (${f.sku}) ${(r as PromiseRejectedResult).reason?.message ?? 'foto inválida'}`).join('; ')}`;
+                else if (!respaldo) motivo = `el producto con variantes ${g.codigo} no tiene fotos: escríbelas en la columna fotos (basta en la primera fila) o ponlas en el ZIP con el SKU de la variante en el nombre`;
+                if (motivo) { descartar(g.filas.map((f) => f.i), motivo); continue; }
+                gruposListos.push({ grupo: g, urls: resultados.map((r) => (r.status === 'fulfilled' ? r.value : respaldo!.value)) });
+            }
 
-            // 3) A la cola. El total del lote se calcula antes: todos los trabajos conocen el mismo valor.
+            // 3) A la cola. El total del lote (en productos: cada variante cuenta) se calcula antes: todos los trabajos conocen el mismo valor.
             const batchId = randomUUID();
-            const batchTotal = listas.length;
+            const batchTotal = listas.length + gruposListos.reduce((n, x) => n + x.grupo.filas.length, 0);
             if (batchTotal) await this.batchNotification.iniciar(batchId, batchTotal, req.user.id);
             // Cuentas elegidas por canal (si la tienda tiene varias): { mercadolibre: [idCuenta] }. Sin elección, todas las activas.
             const cuentas = leerCuentasElegidas(req.body?.cuentas);
-            const trabajos = listas.map(({ fila, urls }) => ({
+            const comun = { cuentas, storeId, userId: req.user.id, userEmail: req.user.email, batchId, batchTotal };
+            const trabajos: any[] = listas.map(({ fila, urls }) => ({
                 sku: fila.sku,
-                // Las filas con el mismo «sku_padre» son variantes de un producto: se categorizan UNA vez y comparten la categoría.
+                // Las filas con el mismo «sku_padre» (sin ejes) son variantes de un producto: se categorizan UNA vez y comparten la categoría.
                 grupoClave: fila.grupo || null,
                 productName: fila.nombre,
                 description: fila.descripcion,
@@ -276,29 +379,40 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 targetMarketplaces: fila.canales,
                 // Se publica solo donde la tienda tiene cuenta conectada.
                 publishTo: fila.canales.filter(t => conectados.includes(t)),
-                cuentas,
-                storeId,
-                userId:     req.user.id,
-                userEmail:  req.user.email,
                 imageUrls: urls,
-                batchId,
-                batchTotal,
+                ...comun,
             }));
-            // El lote queda anotado en la base (con lo necesario para reintentar cada producto) antes de encolar.
-            if (batchTotal) await this.bulkBatch.crear(batchId, req.user.id, storeId, trabajos.map(t => ({ sku: t.sku, payload: t })), rechazos);
-            for (const trabajo of trabajos) {
-                await this.listingsQueue.add('process-product', trabajo, {
-                    // Un fallo pasajero de la IA (límite de llamadas, red) se reintenta antes de dar el producto por fallido.
-                    attempts: 3,
-                    backoff: { type: 'exponential', delay: 15_000 },
+            // Un producto con variantes es UN trabajo: se crea el grupo entero, la IA lo completa una sola vez y se publica junto.
+            for (const { grupo: g, urls } of gruposListos) {
+                const primera = g.filas[0];
+                trabajos.push({
+                    tipo: 'grupo',
+                    parentSku: g.codigo,
+                    // Nombre, descripción y canales son del producto: se toman de la primera fila que los tenga.
+                    productName: g.filas.map((f) => f.nombre).find(Boolean) ?? '',
+                    description: g.filas.map((f) => f.descripcion).find(Boolean) ?? '',
+                    targetMarketplaces: primera.canales,
+                    publishTo: primera.canales.filter(t => conectados.includes(t)),
+                    axes: g.ejes,
+                    variants: g.filas.map((f, k) => ({
+                        sku: f.sku, values: g.valores[k], price: f.precio, stock: f.stock,
+                        salePrice: f.precioDescuento, saleStartDate: f.desde, saleEndDate: f.hasta, images: urls[k],
+                    })),
+                    ...comun,
                 });
+            }
+            // El lote queda anotado en la base (con lo necesario para reintentar cada producto) antes de encolar.
+            if (batchTotal) await this.bulkBatch.crear(batchId, req.user.id, storeId, trabajos.flatMap(renglonesDelTrabajo), rechazos);
+            for (const trabajo of trabajos) {
+                await this.listingsQueue.add(trabajo.tipo === 'grupo' ? 'process-group' : 'process-product', trabajo, OPCIONES_DE_TRABAJO);
             }
 
             return {
-                message: `${batchTotal} productos encolados. ${rows.length - batchTotal} filas rechazadas.`,
+                message: `${batchTotal} productos encolados${gruposListos.length ? ` (${gruposListos.length} con variantes)` : ''}. ${rows.length - batchTotal} filas rechazadas.`,
                 batchId: batchTotal ? batchId : undefined,
                 totalQueued: batchTotal,
                 totalSkipped: rows.length - batchTotal,
+                ...(gruposListos.length && { gruposConVariantes: gruposListos.map((x) => ({ sku_padre: x.grupo.codigo, variantes: x.grupo.filas.length })) }),
                 zipImagesLoaded: zipEntries.size,
                 ...(rechazos.length && { rejectedDetails: rechazos }),
                 ...(skusGenerados.length && { skusGenerados }),
@@ -345,12 +459,14 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
         let nuevoLote: string | undefined;
         if (lote.fallidos.length) {
             nuevoLote = randomUUID();
-            const total = lote.fallidos.length;
+            // Un producto con variantes se reintenta entero: su primer renglón guarda el trabajo del grupo y los demás solo lo señalan.
+            const completos = lote.fallidos.filter(({ payload }) => !payload?.grupoDe);
+            const total = completos.reduce((n, { payload }) => n + productosDelTrabajo(payload), 0);
             await this.batchNotification.iniciar(nuevoLote, total, req.user.id);
-            const trabajos = lote.fallidos.map(({ sku, payload }) => ({ sku, payload: { ...payload, batchId: nuevoLote, batchTotal: total, reintento: true } }));
-            await this.bulkBatch.crear(nuevoLote, req.user.id, lote.storeId ?? undefined, trabajos);
+            const trabajos: any[] = completos.map(({ payload }) => ({ ...payload, batchId: nuevoLote, batchTotal: total, reintento: true }));
+            await this.bulkBatch.crear(nuevoLote, req.user.id, lote.storeId ?? undefined, trabajos.flatMap(renglonesDelTrabajo));
             for (const trabajo of trabajos) {
-                await this.listingsQueue.add('process-product', trabajo.payload, { attempts: 3, backoff: { type: 'exponential', delay: 15_000 } });
+                await this.listingsQueue.add(trabajo.tipo === 'grupo' ? 'process-group' : 'process-product', trabajo, OPCIONES_DE_TRABAJO);
             }
             await this.bulkBatch.marcarReintentados(batchId, lote.fallidos.map((f) => f.sku));
         }

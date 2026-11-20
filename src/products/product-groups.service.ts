@@ -30,6 +30,10 @@ export interface VarianteEntrada {
     price?: number | null;
     stock?: number | null;
     images?: string[];
+    /** Precio con descuento y su vigencia (AAAA-MM-DD). Opcionales: los usa la carga masiva. */
+    salePrice?: number | null;
+    saleStartDate?: string | null;
+    saleEndDate?: string | null;
 }
 
 export interface CrearGrupoEntrada {
@@ -43,6 +47,8 @@ export interface CrearGrupoEntrada {
     targetMarketplaces?: string[];
     /** Genera con IA, una sola vez para todo el grupo, los datos que el cliente no escribió. */
     generateWithAi?: boolean;
+    /** Como en la carga masiva: la IA estima todo lo que falte (datos obligatorios, medidas del paquete) para publicar sin revisión. */
+    estimar?: boolean;
     axes: { name: string; values: string[] }[];
     variants: VarianteEntrada[];
 }
@@ -119,6 +125,29 @@ export class ProductGroupsService {
         return vista.ia ? { ...(await this.obtener(grupoId, ambito)), ia: vista.ia } : vista;
     }
 
+    /** Id del grupo de la tienda con ese código (sin importar mayúsculas ni espacios); null si no existe. */
+    async idPorCodigo(parentSku: string, ambito: AmbitoDeGrupo): Promise<string | null> {
+        const grupo = await this.groupRepository.createQueryBuilder('g')
+            .select('g.id', 'id')
+            .where('g."storeId" = :storeId', { storeId: ambito.storeId })
+            .andWhere('LOWER(TRIM(g."parentSku")) = LOWER(TRIM(:codigo))', { codigo: parentSku })
+            .getRawOne<{ id: string }>();
+        return grupo?.id ?? null;
+    }
+
+    /**
+     * Genera con IA, una sola vez, el contenido de un grupo ya creado y lo reparte entre sus variantes (lo usa la carga masiva,
+     * que crea el grupo y después lo completa; si la IA falla, el trabajo se reintenta sin volver a crear el grupo).
+     */
+    async completarConIA(grupoId: string, entrada: Omit<CrearGrupoEntrada, 'axes' | 'variants'>, ambito: AmbitoDeGrupo): Promise<{ ok: boolean; motivo?: string }> {
+        const vista = await this.obtener(grupoId, ambito);
+        const name = String(entrada?.name ?? '').trim();
+        return this.generarContenido(grupoId, { ...entrada, name: name || vista.name, axes: [], variants: [] }, ambito, vista, {
+            sinNombre: !name,
+            sinDescripcion: !String(entrada?.description ?? '').trim(),
+        });
+    }
+
     /** Filtro previo: ¿las fotos y el texto indican que el producto tiene variantes? Devuelve null si no se pudo comprobar. */
     async detectar(imageUrls: string[], texto?: string, userId?: string): Promise<DeteccionDeVariantes | null> {
         return this.vision.detectarVariantes(imageUrls ?? [], texto, userId);
@@ -151,6 +180,7 @@ export class ProductGroupsService {
                 imageUrls: urls,
                 userId: ambito.userId,
                 ejes: vista.axes,
+                ...(entrada.estimar ? { estimar: true } : {}),
             });
 
             const molde: any = { aiAttributes: {}, marketplaceIds: {}, aiTitle: undefined, aiDescription: undefined, aiKeywords: undefined };
@@ -552,6 +582,11 @@ export class ProductGroupsService {
                 : {}),
             price: variante.original?.price ?? undefined,
             stock: variante.original?.stock ?? 0,
+            ...(variante.original?.salePrice != null ? {
+                salePrice: variante.original.salePrice,
+                saleStartDate: variante.original.saleStartDate ?? null,
+                saleEndDate: variante.original.saleEndDate ?? null,
+            } : {}),
             status: 'draft',
             owner: { id: ambito.userId } as any,
             store: { id: ambito.storeId } as any,

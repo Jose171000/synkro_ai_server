@@ -12,6 +12,7 @@ import { BulkBatchService } from './bulk-batch.service';
 import { tamanoDeTandaFalabella } from './tanda-falabella';
 import { CategoriaUnicaDeLote, TurnoDeCategoria } from './categoria-unica-de-lote';
 import { categoriasElegidas } from '../ai/categorias-elegidas';
+import { ProductGroupsService } from '../products/product-groups.service';
 
 @Processor('generate-listings-queue', { concurrency: CONCURRENCIA_IA })
 export class AiProcessor extends WorkerHost {
@@ -24,6 +25,8 @@ export class AiProcessor extends WorkerHost {
         private readonly bulkBatch: BulkBatchService,
         // Opcional: sin él (pruebas, scripts) cada fila se categoriza por su cuenta, como antes.
         @Optional() private readonly categoriaUnica?: CategoriaUnicaDeLote,
+        // Productos con variantes de la carga masiva (un trabajo por grupo).
+        @Optional() private readonly grupos?: ProductGroupsService,
     ) {
         super();
         console.log(`[AiProcessor] Productos procesados a la vez: ${CONCURRENCIA_IA} (AI_QUEUE_CONCURRENCY)`);
@@ -36,6 +39,7 @@ export class AiProcessor extends WorkerHost {
             await this.enviarAFalabella(job.data.batchId, productIds ?? [], { userId, storeId }, leerCuentasElegidas(cuentas));
             return { status: 'completed', enviados: (productIds ?? []).length };
         }
+        if (job.name === 'process-group') return this.procesarGrupo(job);
         console.log(`[AiProcessor] Processing job ${job.id} for product: ${job.data.productName}`);
 
         const { sku, productName, description, targetMarketplaces, userId, imageUrl, storeId, price, stock, salePrice, saleStartDate, saleEndDate } = job.data;
@@ -134,6 +138,93 @@ export class AiProcessor extends WorkerHost {
             }
 
             throw new InternalServerErrorException('Error processing AI background job');
+        }
+    }
+
+    /**
+     * Un producto con variantes de la carga masiva: se crea el grupo con todas sus variantes (en una transacción), la IA lo completa
+     * UNA sola vez (categoría, título, atributos, medidas) y se reparte entre las variantes, y se publica como una familia. En el
+     * avance del lote cuenta cada variante. Un reintento retoma el grupo ya creado en vez de crearlo otra vez.
+     */
+    private async procesarGrupo(job: Job<any, any, string>): Promise<any> {
+        const d = job.data;
+        const scope = { userId: d.userId as string, storeId: d.storeId as string };
+        const cuentas = leerCuentasElegidas(d.cuentas);
+        const publishTo: string[] = d.publishTo ?? [];
+        const skus: string[] = (d.variants ?? []).map((v: any) => v.sku);
+        const batchMeta: BatchMeta | undefined = d.batchId ? { batchId: d.batchId, batchTotal: d.batchTotal, userEmail: d.userEmail, jobType: 'Creación masiva de productos' } : undefined;
+        const ultimoIntento = job.attemptsMade + 1 >= (job.opts?.attempts ?? 1);
+        console.log(`[AiProcessor] Processing job ${job.id}: producto con variantes ${d.parentSku} (${skus.length} variantes)`);
+
+        try {
+            if (!this.grupos) throw new Error('los productos con variantes no están disponibles en este proceso');
+            const existente = job.attemptsMade > 0 || d.reintento ? await this.grupos.idPorCodigo(d.parentSku, scope) : null;
+            // Solo se retoma si es ESTE grupo (mismas variantes): si otra carga tomó el código a la vez, no se completa un grupo ajeno.
+            if (existente) {
+                const suyas = new Set((await this.grupos.obtener(existente, scope)).variants.map((v) => v.sku.toLowerCase()));
+                if (skus.some((s) => !suyas.has(s.toLowerCase()))) throw new Error(`el código ${d.parentSku} ya lo usa otro producto con variantes de la tienda`);
+            }
+            const grupoId = existente ?? (await this.grupos.crear({
+                parentSku: d.parentSku,
+                name: d.productName || undefined,
+                description: d.description || undefined,
+                targetMarketplaces: d.targetMarketplaces,
+                axes: d.axes,
+                variants: d.variants,
+            }, scope)).id;
+
+            const ia = await this.grupos.completarConIA(grupoId, {
+                name: d.productName || undefined, description: d.description || undefined, targetMarketplaces: d.targetMarketplaces, estimar: true,
+            }, scope);
+            if (!ia.ok) throw new Error(ia.motivo ?? 'la IA no pudo completar el producto');
+
+            const vista = await this.grupos.obtener(grupoId, scope);
+            const idDe = new Map(vista.variants.map((v) => [v.sku.toLowerCase(), v.id]));
+            if (batchMeta) for (const sku of skus) await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: true, productId: idDe.get(sku.toLowerCase()) });
+            console.log(`[AiProcessor] ✓ Job ${job.id} done -> Grupo ${grupoId} (${vista.variants.length} variantes)`);
+
+            await this.publicarGrupo(vista.variants.map((v) => v.id), publishTo, scope, batchMeta?.batchId, cuentas);
+
+            if (batchMeta) {
+                const terminado = await this.batchNotification.trackAndNotify(batchMeta, true, skus.length);
+                if (terminado) await this.bulkBatch.cerrar(batchMeta.batchId);
+                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, scope, cuentas);
+            }
+            return { status: 'completed', groupId: grupoId, variantes: vista.variants.length };
+        } catch (error) {
+            console.error(`[AiProcessor] Job ${job.id} failed (intento ${job.attemptsMade + 1}):`, error);
+            if (!ultimoIntento) throw new InternalServerErrorException('Error processing AI background job');
+            if (batchMeta) {
+                for (const sku of skus) await this.bulkBatch.marcar(batchMeta.batchId, sku, { ok: false, error: (error as any)?.message });
+                const terminado = await this.batchNotification.trackAndNotify(batchMeta, false, skus.length);
+                if (terminado) await this.bulkBatch.cerrar(batchMeta.batchId);
+                if (terminado) await this.publicarFalabellaDelLote(batchMeta.batchId, publishTo, scope, cuentas);
+            }
+            throw new InternalServerErrorException('Error processing AI background job');
+        }
+    }
+
+    /**
+     * Publica una familia de variantes. Falabella: todas quedan anotadas JUNTAS para la tanda del lote (una familia nunca se parte entre
+     * tandas: separadas, Falabella puede armar familias distintas). Los demás canales: la publicación de familia de siempre.
+     */
+    private async publicarGrupo(ids: string[], canales: string[], scope: { userId: string; storeId?: string }, batchId?: string, elegidas: CuentasElegidas = {}) {
+        if (!scope.storeId || !canales.length || !ids.length) return;
+        for (const canal of canales) {
+            try {
+                if (canal === 'falabella' && batchId) {
+                    const esperando = await this.batchNotification.deferPublishFamilia(batchId, 'falabella', ids);
+                    for (const id of ids) await this.bulkBatch.falabellaPendiente(batchId, id);
+                    const tanda = tamanoDeTandaFalabella(process.env.FALABELLA_BATCH_SIZE);
+                    if (tanda && esperando >= tanda) await this.enviarAFalabella(batchId, await this.batchNotification.takeDeferred(batchId, 'falabella', tanda), scope, elegidas);
+                    continue;
+                }
+                for (const connectionId of cuentasParaPublicar(await this.cuentasDe(scope.storeId, canal), elegidas[canal])) {
+                    await this.syncService.enqueuePublishFamilia({ userId: scope.userId, storeId: scope.storeId }, ids[0], [canal], { [canal]: connectionId });
+                }
+            } catch (error: any) {
+                console.warn(`[AiProcessor] No se pudo encolar el grupo de ${ids[0]} en ${canal}: ${error?.message}`);
+            }
         }
     }
 

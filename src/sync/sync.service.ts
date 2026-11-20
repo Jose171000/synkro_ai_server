@@ -46,7 +46,7 @@ import { Product } from '../products/entities/product.entity';
 import { MeliApiService, MeliItemPayload } from './meli/meli-api.service';
 import { YavendioApiService } from './yavendio/yavendio-api.service';
 import { FalabellaApiService, FalabellaCredentials, FalabellaProduct, categoriaDeFicha, imagenesDeFicha, preciosDeUnidad, unidadPrincipal } from './falabella/falabella-api.service';
-import { chunkProducts, fechaDeFalabella, FalabellaProductInput } from './falabella/falabella-product-xml';
+import { chunkPorFamilia, fechaDeFalabella, FalabellaProductInput } from './falabella/falabella-product-xml';
 import { firmaDePromo, PreciosDelEnlace, preciosParaCanal } from './precios-por-canal';
 import { MarketplaceFeed } from './falabella/entities/marketplace-feed.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -2630,7 +2630,8 @@ export class SyncService implements OnModuleInit {
 
         const lotes: { feedId: string; productos: number }[] = [];
 
-        for (const lote of chunkProducts(aceptados, 500)) {
+        // Una familia de variantes (mismo ParentSku) va entera en un mismo envío.
+        for (const lote of chunkPorFamilia(aceptados, (x) => String(x.input.parentSku ?? x.product.sku).trim().toLowerCase(), 500)) {
             const feedId = await this.falabellaApi.productCreate(
                 credentials,
                 lote.map(x => x.input),

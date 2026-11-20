@@ -12,8 +12,14 @@ export const COLUMNAS = {
     stock: ['stock', 'cantidad'],
     fotos: ['fotos', 'foto', 'imagenes', 'imágenes', 'image', 'imagen', 'img', 'photo'],
     nombre: ['nombre', 'productname', 'name', 'producto'],
-    /** Las filas con el mismo valor son variantes de un mismo producto: comparten UNA categoría por canal. */
+    /** Las filas con el mismo valor son variantes de un mismo producto (con ejes: un grupo de variantes; sin ejes: solo comparten la categoría). */
     grupo: ['sku_padre', 'sku padre', 'skupadre', 'parentsku', 'parent_sku', 'grupo'],
+    /** Ejes de variación: `eje_1` dice en qué se diferencian (Medida) y `valor_1` el valor de la fila (2 plazas). Hasta 3. */
+    ejes: [
+        { eje: ['eje_1', 'eje 1', 'eje1'], valor: ['valor_1', 'valor 1', 'valor1'] },
+        { eje: ['eje_2', 'eje 2', 'eje2'], valor: ['valor_2', 'valor 2', 'valor2'] },
+        { eje: ['eje_3', 'eje 3', 'eje3'], valor: ['valor_3', 'valor 3', 'valor3'] },
+    ],
     descripcion: ['descripcion', 'descripción', 'description', 'detalle'],
     canales: ['canales', 'targetmarketplaces', 'marketplaces'],
     precioDescuento: ['precio_descuento', 'precio descuento', 'descuento', 'preciodescuento', 'saleprice'],

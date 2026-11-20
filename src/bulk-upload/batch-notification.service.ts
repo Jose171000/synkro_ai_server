@@ -49,7 +49,7 @@ export class BatchNotificationService {
      * @param meta     Batch metadata passed in every job's data payload
      * @param success  Whether this particular job succeeded
      */
-    async trackAndNotify(meta: BatchMeta, success: boolean): Promise<boolean> {
+    async trackAndNotify(meta: BatchMeta, success: boolean, cantidad = 1): Promise<boolean> {
         if (!meta?.batchId) return false; // safety guard — jobs without batch tracking skip silently
 
         const key = `batch:${meta.batchId}`;
@@ -62,7 +62,8 @@ export class BatchNotificationService {
             .hsetnx(key, 'total', String(meta.batchTotal))
             .hsetnx(key, 'processed', '0')
             .hsetnx(key, 'failed', '0')
-            .hincrby(key, success ? 'processed' : 'failed', 1)
+            // Un producto con variantes suma todas sus variantes de una vez.
+            .hincrby(key, success ? 'processed' : 'failed', Math.max(1, Math.trunc(cantidad)))
             .hmget(key, 'total', 'processed', 'failed')
             .expire(key, this.TTL_SECONDS)
             .exec();
@@ -79,8 +80,8 @@ export class BatchNotificationService {
 
         this.logger.log(`[Batch ${meta.batchId}] ${processedN + failedN}/${totalN} (✓${processedN} ✗${failedN})`);
 
-        // Cierra el lote quien lo deja justo en el total: la suma sube de uno en uno, así que pasa por ese
-        // valor una sola vez (antes era «>=» y, con varios a la vez, dos podían cerrarlo o ninguno).
+        // Cierra el lote quien lo deja justo en el total: la suma solo sube y el total es la suma de todos los trabajos, así que llega
+        // a ese valor una sola vez (antes era «>=» y, con varios a la vez, dos podían cerrarlo o ninguno).
         const completo = processedN + failedN === totalN;
         if (completo) {
             // Se conserva una hora (no se borra): la pantalla todavía puede mostrar el resultado final.
@@ -111,17 +112,34 @@ export class BatchNotificationService {
     }
 
     /**
+     * Anota juntas las variantes de un producto: quedan como UNA entrada, así una tanda las saca todas o ninguna (separadas,
+     * Falabella puede armar familias distintas). Devuelve cuántos productos esperan en total.
+     */
+    async deferPublishFamilia(batchId: string, channel: string, productIds: string[]): Promise<number> {
+        if (productIds.length <= 1) return productIds.length ? this.deferPublish(batchId, channel, productIds[0]) : 0;
+        const key = `batch:${batchId}:publish:${channel}`;
+        const res = await this.redis.multi().sadd(key, productIds.join(SEPARADOR_DE_FAMILIA)).expire(key, this.TTL_SECONDS).smembers(key).exec();
+        const entradas = res?.[2]?.[1];
+        return Array.isArray(entradas) ? expandir(entradas as string[]).length : 0;
+    }
+
+    /**
      * Saca (y borra) los productos anotados: solo quien lo pida primero los recibe.
-     * Con `max` saca como mucho esa cantidad (una tanda) y deja el resto anotado.
+     * Con `max` saca como mucho esa cantidad de entradas (una tanda; una familia de variantes es una entrada) y deja el resto anotado.
      */
     async takeDeferred(batchId: string, channel: string, max?: number): Promise<string[]> {
         const key = `batch:${batchId}:publish:${channel}`;
         if (max && max > 0) {
             const ids = await this.redis.spop(key, max);
-            return Array.isArray(ids) ? ids : ids ? [String(ids)] : [];
+            return expandir(Array.isArray(ids) ? ids : ids ? [String(ids)] : []);
         }
         const res = await this.redis.multi().smembers(key).del(key).exec();
         const ids = res?.[0]?.[1];
-        return Array.isArray(ids) ? (ids as string[]) : [];
+        return Array.isArray(ids) ? expandir(ids as string[]) : [];
     }
 }
+
+/** Las variantes de una familia van en una sola entrada, separadas por esto (los ids son UUID: nunca lo llevan). */
+const SEPARADOR_DE_FAMILIA = ',';
+const expandir = (entradas: string[]): string[] => entradas.flatMap((e) => String(e).split(SEPARADOR_DE_FAMILIA)).filter(Boolean);
+
