@@ -16,6 +16,7 @@ import { MAX_IMAGES, ProductVision, ProductVisionService } from './product-visio
 import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 import { huellaDeFotos, necesitaVision } from './vision-fotos';
+import { marcaMasUsada } from '../products/contenido-de-grupo';
 import { fotosParaIA } from '../products/fotos-para-ia';
 import { textoDeEjes } from './ejes-de-variacion';
 import { CampoGeneral, marcarComoIA } from '../sync/origen-de-datos';
@@ -241,7 +242,19 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         } else if (!marca) {
             marca = 'GENERICO';
         }
+        // Una familia de variantes tiene UNA sola marca: si esta quedó en GENERICO pero otra variante ya tiene una marca válida del catálogo,
+        // se usa esa; y la decidida se iguala en las variantes que aún no están en Falabella (las publicadas no se tocan).
+        if (indice && familia.length > 1 && normalizar(marca) === 'generico') {
+            const validas = familia.filter((p) => p.id !== product.id)
+                .map((p) => indice.get(normalizar(String((p.aiAttributes as any)?.brand ?? ''))))
+                .filter((m): m is string => !!m && normalizar(m) !== 'generico');
+            marca = marcaMasUsada(validas) ?? marca;
+        }
         attrs.brand = marca || 'GENERICO';
+        if (familia.length > 1) {
+            const r = await this.sync.igualarContenidoDeFamilia(familia, product.id, { brand: attrs.brand }).catch(() => null);
+            if (r?.publicadasDistintas.length) this.logger.warn(`Marca ${attrs.brand} del grupo de ${product.sku}: ${r.publicadasDistintas.length} variante(s) ya publicada(s) tienen otra y no se cambiaron.`);
+        }
 
         // ── Medidas del paquete ──
         if ([product.packageWidth, product.packageLength, product.packageHeight, product.packageWeight].some((v) => v == null)) {
@@ -296,6 +309,14 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         let descripcionGenerada = false;
         let descripcionFallida = false;
         if (opciones.regenerar) delete attrs.descriptionHtml;
+        // La ficha HTML es común a todo el grupo: si otra variante ya la tiene, esta usa la misma (y su texto) en vez de redactar otra distinta.
+        if (!attrs.descriptionHtml && familia.length > 1) {
+            const donante = familia.find((p) => p.id !== product.id && String((p.aiAttributes as any)?.descriptionHtml ?? '').trim());
+            if (donante) {
+                attrs.descriptionHtml = (donante.aiAttributes as any).descriptionHtml;
+                if (!String(product.aiDescription ?? '').trim() && donante.aiDescription) product.aiDescription = donante.aiDescription;
+            }
+        }
         if (!attrs.descriptionHtml) {
             const ficha = await this.ai.generarDescripcionHtml({
                 nombre,
@@ -316,6 +337,14 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 // Un título de 20 a 100 caracteres: Falabella baja la calidad de los más largos.
                 if (opciones.regenerar || !product.aiTitle || product.aiTitle.length > 100) { product.aiTitle = this.sync.nombreParaFalabella(ficha.title); marcasIA.push('aiTitle'); }
             }
+        }
+
+        // Lo recién redactado (ficha HTML y texto) es de todo el grupo: se iguala en las variantes que aún no están en Falabella.
+        if (descripcionGenerada && familia.length > 1) {
+            await this.sync.igualarContenidoDeFamilia(familia, product.id, {
+                descriptionHtml: String(attrs.descriptionHtml ?? ''),
+                aiDescription: String(product.aiDescription ?? ''),
+            }).catch(() => null);
         }
 
         product.marketplaceIds = ids as any;

@@ -29,6 +29,7 @@ import { FichaParaIA, PropuestaDeEjes, ProponerEjesConIA, respaldado, validarPro
 import { FalabellaPublicPageService } from './falabella-public-page.service';
 import { EntradaManual, FalabellaVariantImportService, ResultadoDeAgrupar } from './falabella-variant-import.service';
 import { opcionCercana } from '../common/opcion-cercana';
+import { ContenidoComun, planDeContenidoComun } from '../products/contenido-de-grupo';
 import { ejesQueSeparanFamilias, sufijoDeFamilia } from './falabella/falabella-fields';
 import { opcionCercana as opcionCercanaDeLista } from '../common/opcion-cercana';
 import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, atributosQueNoAplican, atributosObligatoriosAprendidos, camposDeVariacion, categoriaAdmiteVariantes, variacionPorTallaYColor, decodificarEntidades, esCampoNumerico, soloElNumero, leerAtributosVacios, claveDeAtributo, leerAtributosNoAplicables, esCategoriaEquivocada, leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabella/falabella-fields';
@@ -1769,6 +1770,42 @@ export class SyncService implements OnModuleInit {
         const variantes = await this.productRepository.find({ where: { group: { id: groupId }, store: { id: scope.storeId } } as any });
         const r = await this.unificarCategoriasDeFamilia(variantes, { canal: 'falabella', categoryId: categoria });
         return { asignadas: r.asignadas, igualadas: r.igualadas, distintasPublicadas: r.distintasPublicadas, categoryId: categoria, ruta: valida.path ?? null };
+    }
+
+    /**
+     * Deja a las variantes de un grupo con el mismo contenido común (marca, ficha HTML, descripción en texto) que se decidió para
+     * `origenId`. Solo se igualan las que aún no están en Falabella; las ya publicadas se avisan en `publicadasDistintas`.
+     */
+    async igualarContenidoDeFamilia(
+        familia: Product[],
+        origenId: string,
+        comun: ContenidoComun,
+        canal = 'falabella',
+    ): Promise<{ igualadas: number; publicadasDistintas: string[] }> {
+        if (familia.length < 2) return { igualadas: 0, publicadasDistintas: [] };
+        const enCanal = await this.variantesEnCanal(familia, canal);
+        const plan = planDeContenidoComun(
+            familia.map((p) => ({
+                id: p.id,
+                publicada: enCanal.has(p.id),
+                brand: (p.aiAttributes as any)?.brand ?? null,
+                descriptionHtml: (p.aiAttributes as any)?.descriptionHtml ?? null,
+                aiDescription: p.aiDescription ?? null,
+            })),
+            origenId,
+            comun,
+        );
+        for (const cambio of plan.actualizar) {
+            const p = familia.find((x) => x.id === cambio.id);
+            if (!p) continue;
+            const atributos: Record<string, any> = { ...((p.aiAttributes as any) || {}) };
+            if (cambio.brand !== undefined) atributos.brand = cambio.brand;
+            if (cambio.descriptionHtml !== undefined) atributos.descriptionHtml = cambio.descriptionHtml;
+            p.aiAttributes = atributos as any;
+            if (cambio.aiDescription !== undefined) p.aiDescription = cambio.aiDescription;
+            await this.productRepository.save(p);
+        }
+        return { igualadas: plan.actualizar.length, publicadasDistintas: plan.publicadasDistintas };
     }
 
     /** Qué variantes de la familia ya están en ese canal (publicadas, pausadas o enviándose): su categoría allá no se puede cambiar. */

@@ -5,6 +5,7 @@ function construir(producto: any, opts: { marcas?: string[]; categoriaElegida?: 
     const sync: any = {
         findScopedProduct: jest.fn(async () => producto),
         familiaDe: jest.fn(async () => [producto]),
+        igualarContenidoDeFamilia: jest.fn(async () => ({ igualadas: 0, publicadasDistintas: [] })),
         falabellaCategoryVariants: jest.fn(async () => ({ admiteVariantes: false })),
         resolveConnection: jest.fn(async () => ({ id: 'c1' })),
         credentialsOf: jest.fn(() => ({ userId: 'x', apiKey: 'k' })),
@@ -160,6 +161,39 @@ describe('un producto con variantes: la categoría que mejor encaja manda y la q
         expect(p.marketplaceIds.falabella_category_id).toBe('3169');
         // ...y la que sí admite variantes queda como recomendación (solo la que la IA verificó para el producto).
         expect(p.aiAttributes._categoriaConVariantes).toEqual({ falabella: { id: '5000', path: 'Hogar › Percheros con variantes' } });
+    });
+
+    describe('el contenido común del grupo (marca y ficha HTML) es el mismo en todas las variantes', () => {
+        it('la marca que se decide para una variante se iguala en las demás; si queda GENERICO y otra variante ya tiene una marca válida del catálogo, gana esa', async () => {
+            const p = grupo({ aiAttributes: { brand: 'Karmont' } }); // «Karmont» no está en el catálogo → GENERICO
+            const t = conVariantes(p, [], ['Percheros'], [{ categoryId: '3169', name: 'Hogar › Percheros' }]);
+            await t.service.preparar(SCOPE, 'g1');
+            expect(p.aiAttributes.brand).toBe('GENERICO');
+            expect(t.sync.igualarContenidoDeFamilia).toHaveBeenCalledWith(expect.any(Array), 'g1', { brand: 'GENERICO' });
+
+            const q = grupo({ aiAttributes: { brand: 'Karmont' } });
+            const t2 = conVariantes(q, [], ['Percheros'], [{ categoryId: '3169', name: 'Hogar › Percheros' }]);
+            t2.sync.familiaDe.mockResolvedValue([q, { ...q, id: 'g2', aiAttributes: { brand: 'Fisher-Price' } }]);
+            await t2.service.preparar(SCOPE, 'g1');
+            expect(q.aiAttributes.brand).toBe('Fisher-Price');
+        });
+
+        it('si otra variante ya tiene la ficha HTML, esta usa la MISMA en vez de redactar otra distinta', async () => {
+            const p = grupo();
+            const t = conVariantes(p, [], ['Percheros'], [{ categoryId: '3169', name: 'Hogar › Percheros' }]);
+            t.sync.familiaDe.mockResolvedValue([p, { ...p, id: 'g2', aiAttributes: { brand: 'GENERICO', descriptionHtml: '<div>ficha del grupo</div>' }, aiDescription: 'texto del grupo' }]);
+            await t.service.preparar(SCOPE, 'g1');
+            expect(t.ai.generarDescripcionHtml).not.toHaveBeenCalled();
+            expect(p.aiAttributes.descriptionHtml).toBe('<div>ficha del grupo</div>');
+        });
+
+        it('si ninguna la tiene, se redacta UNA vez y se iguala en las demás variantes', async () => {
+            const p = grupo();
+            const t = conVariantes(p, [], ['Percheros'], [{ categoryId: '3169', name: 'Hogar › Percheros' }]);
+            await t.service.preparar(SCOPE, 'g1');
+            expect(t.ai.generarDescripcionHtml).toHaveBeenCalledTimes(1);
+            expect(t.sync.igualarContenidoDeFamilia).toHaveBeenCalledWith(expect.any(Array), 'g1', expect.objectContaining({ descriptionHtml: '<div>ficha</div>' }));
+        });
     });
 
     it('si ninguna parecida las admite, conserva la suya y cada variante saldrá como ficha suelta', async () => {
