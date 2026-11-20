@@ -32,6 +32,7 @@ import { EdicionMasivaService } from './edicion-masiva.service';
 import { nombreDeArchivo, plantillaDeProductos } from './product-template';
 import { armarGrupos, codigosConVariantes, GrupoDeCarga } from './grupos-de-carga';
 import { asignarSkus } from '../products/variantes';
+import { hoyEnLima } from '../sync/descuento-general';
 
 /** Canales donde la carga masiva puede publicar sola. */
 const CANALES_PUBLICABLES = ['mercadolibre', 'falabella', 'woocommerce'];
@@ -271,11 +272,15 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 const hasta = leerFecha(this.getVal(row, COLUMNAS.descuentoHasta));
                 if (desde === undefined || hasta === undefined) return rechazar(i, `${ref}: las fechas del descuento no se entienden (usa AAAA-MM-DD, por ejemplo 2026-11-30)`);
                 if (desde && hasta && hasta < desde) return rechazar(i, `${ref}: la fecha de fin del descuento es anterior a la de inicio`);
+                // Como en «Descuento» de la app: un descuento necesita fecha de fin (Falabella rechaza la ficha entera sin fechas).
+                // Sin fecha de inicio, empieza hoy.
+                if (precioDescuento !== null && !hasta) return rechazar(i, `${ref}: el precio con descuento necesita su fecha de fin en descuento_hasta (AAAA-MM-DD, por ejemplo 2026-12-31)`);
+                if (precioDescuento !== null && hasta && hasta < hoyEnLima()) return rechazar(i, `${ref}: la fecha de fin del descuento (${hasta}) ya pasó`);
 
                 // Sin columna de canales se usan los marcados en pantalla o, si no hay, todos los conectados.
                 const indicados = partirLista(this.getVal(row, COLUMNAS.canales)).map(t => t.toLowerCase());
                 validas.push({
-                    i, grupo: filasCrudas[i].grupo, sku, precio, precioDescuento, desde: precioDescuento !== null ? desde : null, hasta: precioDescuento !== null ? hasta : null, stock,
+                    i, grupo: filasCrudas[i].grupo, sku, precio, precioDescuento, desde: precioDescuento !== null ? (desde ?? hoyEnLima()) : null, hasta: precioDescuento !== null ? hasta : null, stock,
                     nombre: (this.getVal(row, COLUMNAS.nombre) ?? '').trim(),
                     descripcion: (this.getVal(row, COLUMNAS.descripcion) ?? '').trim(),
                     fotos: this.getVal(row, COLUMNAS.fotos),

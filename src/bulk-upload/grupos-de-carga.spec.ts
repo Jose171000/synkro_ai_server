@@ -70,3 +70,17 @@ describe('envío a Falabella sin partir familias', () => {
         expect(lotes.map((l) => l.map((x) => x.f))).toEqual([['a', 'b'], ['G1', 'G1', 'G1', 'c'], ['G2', 'G2']]);
     });
 });
+
+describe('descuento enviado a Falabella', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { descuentoParaFalabella } = require('../sync/falabella/falabella-product-xml');
+    it('sin fecha de inicio empieza hoy; con fechas va tal cual', () => {
+        expect(descuentoParaFalabella(390, { salePrice: 290, saleEnd: '2026-12-31' }, '2026-11-20')).toEqual({ salePrice: 290, start: '2026-11-20', end: '2026-12-31' });
+        expect(descuentoParaFalabella(390, { salePrice: 290, saleStart: '2026-12-01', saleEnd: '2026-12-31' }, '2026-11-20')).toEqual({ salePrice: 290, start: '2026-12-01', end: '2026-12-31' });
+    });
+    it('sin fecha de fin no se envía el descuento (Falabella rechazaría la ficha entera)', () => {
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        expect(descuentoParaFalabella(390, { salePrice: 290 }, '2026-11-20')).toBeNull();
+        expect(descuentoParaFalabella(390, { salePrice: 400, saleEnd: '2026-12-31' }, '2026-11-20')).toBeNull();
+    });
+});

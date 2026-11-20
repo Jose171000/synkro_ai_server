@@ -214,10 +214,14 @@ describe('precio con descuento y fechas en la unidad de negocio', () => {
     });
 
     it('el cambio de precio y la actualización de contenido también llevan la promoción', () => {
-        const precio = buildPriceUpdateXml([{ sellerSku: 'MK-1', price: 400, salePrice: 300, saleStart: '2026-11-01', saleEnd: null }], { operatorCode: 'fape' });
-        expect(precio).toContain('<SpecialPrice>300.00</SpecialPrice><SpecialFromDate>2026-11-01</SpecialFromDate>');
-        expect(precio).not.toContain('SpecialToDate');
-        expect(buildContentUpdateXml([{ ...base, salePrice: 300 }])).toContain('<SpecialPrice>300.00</SpecialPrice>');
+        const precio = buildPriceUpdateXml([{ sellerSku: 'MK-1', price: 400, salePrice: 300, saleStart: '2026-11-01', saleEnd: '2026-12-31' }], { operatorCode: 'fape' });
+        expect(precio).toContain('<SpecialPrice>300.00</SpecialPrice><SpecialFromDate>2026-11-01</SpecialFromDate><SpecialToDate>2026-12-31</SpecialToDate>');
+        expect(buildContentUpdateXml([{ ...base, salePrice: 300, saleEnd: '2099-12-31' }])).toContain('<SpecialPrice>300.00</SpecialPrice>');
+        // Falabella rechaza la ficha entera si el descuento llega sin fecha de fin: entonces no se manda el descuento.
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const sinFin = buildPriceUpdateXml([{ sellerSku: 'MK-1', price: 400, salePrice: 300, saleStart: '2026-11-01', saleEnd: null }], { operatorCode: 'fape' });
+        expect(sinFin).toContain('<Price>400.00</Price>');
+        expect(sinFin).not.toContain('SpecialPrice');
     });
 
     it('rechaza fechas en desorden y acepta fechas ISO completas', () => {

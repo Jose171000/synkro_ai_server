@@ -8,6 +8,8 @@
  * Docs: https://developers.falabella.com/reference/productcreate
  */
 
+import { hoyEnLima } from '../descuento-general';
+
 /** Lo mínimo que Falabella exige para dar de alta un producto. */
 export interface FalabellaProductInput {
     sellerSku: string;
@@ -100,9 +102,25 @@ export function promocionValida(price: number, promo: Promocion): { salePrice: n
     return { salePrice: Math.round(sale * 100) / 100, start, end };
 }
 
+/**
+ * El descuento tal como lo acepta Falabella, que exige fecha de inicio y de fin con cada precio con descuento (sin ellas rechaza la
+ * ficha entera: «Sale Start Date and Sale End Date need to be set when saving a Sale Price»). Sin fecha de inicio empieza hoy; sin
+ * fecha de fin no se envía el descuento (la ficha sale a precio regular en vez de quedar rechazada). null si no hay descuento que enviar.
+ */
+export function descuentoParaFalabella(price: number, promo: Promocion, hoy: string = hoyEnLima()): { salePrice: number; start: string; end: string } | null {
+    const p = promocionValida(price, promo);
+    if (!p) return null;
+    if (!p.end) {
+        console.warn(`[Falabella] Descuento ${p.salePrice} sin fecha de fin: se envía el precio regular sin el descuento.`);
+        return null;
+    }
+    const start = p.start ?? (hoy <= p.end ? hoy : p.end);
+    return { salePrice: p.salePrice, start, end: p.end };
+}
+
 /** Etiquetas de precio de la unidad de negocio: el regular y, si hay, el descuento con sus fechas. */
 function preciosXml(price: number, promo: Promocion): string {
-    const p = promocionValida(price, promo);
+    const p = descuentoParaFalabella(price, promo);
     return tag('Price', Number(price).toFixed(2)) +
         (p ? tag('SpecialPrice', p.salePrice.toFixed(2)) + tag('SpecialFromDate', p.start) + tag('SpecialToDate', p.end) : '');
 }
