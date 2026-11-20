@@ -96,6 +96,47 @@ describe('modo revisión de la tienda', () => {
         expect(r.map((x: any) => x.id)).toEqual(['p2', 'h1', 'p1']); // juntas y de la más reciente a la más antigua
     });
 
+    describe('historial paginado', () => {
+        function armarQb(resultado: [any[], number]) {
+            const qb: any = {};
+            for (const m of ['leftJoinAndSelect', 'where', 'andWhere', 'orderBy', 'skip', 'take']) qb[m] = jest.fn(() => qb);
+            qb.getManyAndCount = jest.fn(async () => resultado);
+            return qb;
+        }
+
+        it('devuelve la página pedida con el total, y filtra por estado, campo y búsqueda', async () => {
+            const { service, repo } = construir();
+            const qb = armarQb([[{ id: 'a' }, { id: 'b' }], 667]);
+            (repo as any).createQueryBuilder = jest.fn(() => qb);
+            const r = await service.history(SCOPE, { page: 3, limit: 100, status: 'error', field: 'promo', q: ' MOC-INE ' });
+            expect(r).toMatchObject({ total: 667, page: 3, limit: 100, totalPages: 7 });
+            expect(qb.skip).toHaveBeenCalledWith(200);
+            expect(qb.take).toHaveBeenCalledWith(100);
+            const condiciones = qb.andWhere.mock.calls.map((c: any[]) => c[0]);
+            expect(condiciones).toEqual(expect.arrayContaining(['r.status = :status', 'r.field = :field', '(p.sku ILIKE :q OR p.name ILIKE :q)']));
+            expect(qb.andWhere.mock.calls.find((c: any[]) => c[0].includes('ILIKE'))[1]).toEqual({ q: '%MOC-INE%' });
+        });
+
+        it('sin filtro de estado excluye las pendientes; no admite «pending» ni valores inventados; limita el tamaño de página', async () => {
+            const { service, repo } = construir();
+            const qb = armarQb([[], 0]);
+            (repo as any).createQueryBuilder = jest.fn(() => qb);
+            await service.history(SCOPE, { limit: 9999 });
+            expect(qb.andWhere.mock.calls[0][0]).toBe("r.status <> 'pending'");
+            expect(qb.take).toHaveBeenCalledWith(200);
+            await expect(service.history(SCOPE, { status: 'pending' })).rejects.toBeInstanceOf(BadRequestException);
+            await expect(service.history(SCOPE, { field: 'otro' })).rejects.toBeInstanceOf(BadRequestException);
+        });
+
+        it('escapa los comodines de LIKE que escriba el usuario', async () => {
+            const { service, repo } = construir();
+            const qb = armarQb([[], 0]);
+            (repo as any).createQueryBuilder = jest.fn(() => qb);
+            await service.history(SCOPE, { q: '50%_off' });
+            expect(qb.andWhere.mock.calls.find((c: any[]) => c[0].includes('ILIKE'))[1]).toEqual({ q: '%50\\%\\_off%' });
+        });
+    });
+
     it('lista las de la tienda, y las antiguas sin tienda solo a quien las pidió', async () => {
         const { service, repo } = construir();
         await service.list(SCOPE, 'pending');

@@ -1064,6 +1064,24 @@ export class SyncController {
         return this.changeRequests.list(scopeOf(req), status);
     }
 
+    @Get('change-requests/history')
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('canales.ver')
+    @ApiOperation({ summary: 'Historial de solicitudes ya resueltas, con páginas, filtro por estado o campo y búsqueda por SKU o nombre' })
+    @ApiQuery({ name: 'status', required: false, enum: ['approved', 'rejected', 'sent', 'error', 'skipped'] })
+    @ApiQuery({ name: 'field', required: false, enum: ['price', 'stock', 'promo'] })
+    changeRequestsHistory(
+        @Req() req,
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+        @Query('status') status?: string,
+        @Query('field') field?: string,
+        @Query('q') q?: string,
+    ) {
+        return this.changeRequests.history(scopeOf(req), { page: Number(page), limit: Number(limit), status, field, q });
+    }
+
     @Post('change-requests/approve-many')
     @HttpCode(HttpStatus.ACCEPTED)
     @ApiBearerAuth()

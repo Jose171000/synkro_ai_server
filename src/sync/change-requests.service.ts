@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
@@ -212,6 +212,40 @@ export class ChangeRequestsService {
         // las pendientes más antiguas quedaban ocultas y no se podían aprobar. El historial sí se limita a las más recientes.
         const [pendientes, resueltas] = await Promise.all([buscar({ status: 'pending' }, MAX_PENDIENTES), buscar({ status: Not('pending') }, MAX_HISTORIAL)]);
         return [...pendientes, ...resueltas].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    }
+
+    /**
+     * El historial (lo ya resuelto) con páginas, filtro por estado o campo y búsqueda por SKU o nombre del producto.
+     * La lista de `list` solo trae las 200 últimas; esto permite llegar a todas.
+     */
+    async history(scope: ChangeScope, opts: { page?: number; limit?: number; status?: string; field?: string; q?: string } = {}) {
+        const resueltos: string[] = ESTADOS.filter((e) => e !== 'pending');
+        if (opts.status && !resueltos.includes(opts.status)) {
+            throw new BadRequestException(`Estado inválido. Usa uno de: ${resueltos.join(', ')}.`);
+        }
+        if (opts.field && !['price', 'stock', 'promo'].includes(opts.field)) {
+            throw new BadRequestException('Campo inválido. Usa price, stock o promo.');
+        }
+        const limit = Math.min(Math.max(Math.trunc(Number(opts.limit)) || 50, 1), 200);
+        const page = Math.max(Math.trunc(Number(opts.page)) || 1, 1);
+
+        const qb = this.repository.createQueryBuilder('r')
+            .leftJoinAndSelect('r.product', 'p')
+            .leftJoinAndSelect('p.group', 'g')
+            .leftJoinAndSelect('r.connection', 'c')
+            .where(new Brackets((b) => b
+                .where('r."storeId" = :storeId', { storeId: scope.storeId })
+                .orWhere('(r."storeId" IS NULL AND r."requestedById" = :userId)', { userId: scope.userId })))
+            .andWhere(opts.status ? 'r.status = :status' : "r.status <> 'pending'", opts.status ? { status: opts.status } : {});
+        if (opts.field) qb.andWhere('r.field = :field', { field: opts.field });
+        const texto = (opts.q ?? '').trim();
+        if (texto) {
+            // Los comodines de LIKE que escriba el usuario se toman como texto.
+            const patron = `%${texto.replace(/[\\%_]/g, (c) => '\\' + c)}%`;
+            qb.andWhere('(p.sku ILIKE :q OR p.name ILIKE :q)', { q: patron });
+        }
+        const [data, total] = await qb.orderBy('r."createdAt"', 'DESC').skip((page - 1) * limit).take(limit).getManyAndCount();
+        return { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) };
     }
 
     /**
