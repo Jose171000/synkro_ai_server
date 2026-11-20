@@ -244,7 +244,7 @@ export class ChangeRequestsService {
             const patron = `%${texto.replace(/[\\%_]/g, (c) => '\\' + c)}%`;
             qb.andWhere('(p.sku ILIKE :q OR p.name ILIKE :q)', { q: patron });
         }
-        const [data, total] = await qb.orderBy('r."createdAt"', 'DESC').skip((page - 1) * limit).take(limit).getManyAndCount();
+        const [data, total] = await qb.orderBy('r.createdAt', 'DESC').skip((page - 1) * limit).take(limit).getManyAndCount();
         return { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) };
     }
 
