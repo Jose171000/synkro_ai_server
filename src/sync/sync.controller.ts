@@ -1074,6 +1074,16 @@ export class SyncController {
         return this.changeRequests.approveMany(dto.ids, scopeOf(req));
     }
 
+    @Post('change-requests/retry-rate-limited')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('cambios.aprobar')
+    @ApiOperation({ summary: 'Reenvía por lotes a Falabella las solicitudes que rechazó por pedir esperar (429 Too many attempts)' })
+    retryRateLimitedChangeRequests(@Req() req) {
+        return this.changeRequests.reintentarLimitadasDeFalabella(scopeOf(req));
+    }
+
     @Post('change-requests/reject-many')
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth()

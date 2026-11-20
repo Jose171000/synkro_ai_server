@@ -16,6 +16,9 @@ import { RipleyPublicacionService } from './ripley/ripley-publicacion.service';
  *  - 'meli-order': apply a Mercado Libre sale to local stock and propagate
  *  - 'poll-orders': periodic pass that pulls recent sales from every account
  */
+/** Cuándo salió el último lote de cada cuenta de Falabella (para espaciarlos). */
+const ULTIMO_LOTE_FALABELLA = new Map<string, number>();
+
 @Processor('marketplace-sync-queue')
 export class SyncProcessor extends WorkerHost {
     constructor(
@@ -150,6 +153,39 @@ export class SyncProcessor extends WorkerHost {
                 } catch (error: any) {
                     if (changeRequestId) await this.changeRequests.markResult(changeRequestId, false, error?.message);
                     throw error;
+                }
+            }
+
+            case 'falabella-lote': {
+                // Varias aprobaciones de Falabella juntas: un feed de precio y uno de stock para todas (ver pushInventoryLoteFalabella).
+                const { connectionId } = job.data;
+                const espera = ChangeRequestsService.ESPERA_ENTRE_LOTES_FALABELLA_MS;
+                const falta = espera - (Date.now() - (ULTIMO_LOTE_FALABELLA.get(connectionId) ?? 0));
+                if (falta > 0) {
+                    await this.changeRequests.programarLoteFalabella(connectionId, falta + 1000, true);
+                    return { status: 'esperando' };
+                }
+                const pedidas = await this.changeRequests.aprobadasDeFalabella(connectionId);
+                if (!pedidas.length) return { status: 'nada que enviar' };
+                ULTIMO_LOTE_FALABELLA.set(connectionId, Date.now());
+                try {
+                    const { porProducto, limitado } = await this.syncService.pushInventoryLoteFalabella(pedidas.map((r) => r.product.id), connectionId);
+                    for (const r of pedidas) {
+                        const res = porProducto.get(r.product.id);
+                        if (!res || res.status === 'limitado') continue; // Falabella pidió esperar: sigue aprobada y va en el próximo lote
+                        if (res.status === 'error') await this.changeRequests.markResult(r.id, false, res.message);
+                        else if (res.status === 'omitido') await this.changeRequests.markSkipped(r.id, 'La publicación de Falabella no está disponible para enviar el cambio.');
+                        else await this.changeRequests.markResult(r.id, true);
+                    }
+                    if (limitado || await this.changeRequests.hayAprobadasDeFalabella(connectionId)) {
+                        await this.changeRequests.programarLoteFalabella(connectionId, espera, true);
+                    }
+                    return { status: limitado ? 'limitado' : 'enviado', solicitudes: pedidas.length };
+                } catch (error: any) {
+                    // Un fallo inesperado no debe dejar las solicitudes aprobadas sin lote: se vuelve a intentar.
+                    console.error('[SyncProcessor] falabella-lote falló:', error?.message);
+                    await this.changeRequests.programarLoteFalabella(connectionId, espera, true);
+                    return { status: 'error', message: error?.message };
                 }
             }
 

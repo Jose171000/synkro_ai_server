@@ -475,6 +475,22 @@ export class FalabellaApiService {
     }
 
     /**
+     * Cambia el precio (y la promoción) de VARIOS SKU en un solo feed. Falabella limita cuántos feeds se pueden crear
+     * seguidos, así que lo que se pueda ir junto va junto.
+     */
+    async updatePrices(
+        credentials: FalabellaCredentials,
+        items: { sellerSku: string; price: number; salePrice?: number | null; saleStart?: string | null; saleEnd?: string | null }[],
+        opts: { operatorCode?: string } = {},
+    ): Promise<string> {
+        if (!items.length) throw new BadRequestException('No hay precios que actualizar en Falabella.');
+        const xml = buildPriceUpdateXml(items, { operatorCode: opts.operatorCode ?? DEFAULT_OPERATOR });
+        const feedId = await this.postFeed(credentials, 'ProductUpdate', xml);
+        this.logger.log(`Precio de ${items.length} SKU enviado a Falabella en un solo feed. Feed ${feedId}.`);
+        return feedId;
+    }
+
+    /**
      * Cambia el stock de una o varias fichas (acción UpdateStock). Admite
      * varias a la vez para gastar una sola llamada del límite de feeds.
      */

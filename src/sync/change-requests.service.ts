@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { IsNull, MoreThan, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
@@ -293,6 +293,11 @@ export class ChangeRequestsService {
             await this.productRepository.save(product);
         }
 
+        // Falabella admite pocos feeds seguidos (rechaza el resto con un 429): sus aprobaciones se juntan y se mandan por lotes.
+        if (request.marketplace === 'falabella' && request.connection?.id) {
+            await this.programarLoteFalabella(request.connection.id);
+            return { id, status: 'approved', message: 'Aprobado. Se enviará a falabella junto con las demás aprobaciones.' };
+        }
         // Ripley manda un solo campo a la vez: la solicitud dice cuál (los demás canales mandan los dos como siempre).
         await this.syncQueue.add('inventory', {
             productId: product.id,
@@ -357,6 +362,69 @@ export class ChangeRequestsService {
         );
         if (!result.affected) throw new BadRequestException('La solicitud ya fue resuelta.');
         return { id, status: 'rejected' };
+    }
+
+    /** Espera entre un lote a Falabella y el siguiente: Falabella admite pocos feeds seguidos. */
+    static readonly ESPERA_ENTRE_LOTES_FALABELLA_MS = 130_000;
+
+    /** Cuántos productos van en cada lote a Falabella. */
+    static readonly PRODUCTOS_POR_LOTE_FALABELLA = 100;
+
+    /**
+     * Pide que se mande el próximo lote a Falabella de esa cuenta. Varias aprobaciones seguidas comparten un solo aviso
+     * (mismo jobId mientras espera), y el lote toma todo lo aprobado hasta ese momento.
+     */
+    async programarLoteFalabella(connectionId: string, retrasoMs = 20_000, unico = false) {
+        await this.syncQueue.add('falabella-lote', { connectionId }, {
+            delay: retrasoMs,
+            jobId: unico ? `falabella-lote-${connectionId}-${Date.now()}` : `falabella-lote-${connectionId}-espera`,
+            removeOnComplete: true,
+            removeOnFail: 50,
+        });
+    }
+
+    /** Las solicitudes de Falabella ya aprobadas de esa cuenta que todavía no se mandaron (las más antiguas primero). */
+    async aprobadasDeFalabella(connectionId: string, maxProductos = ChangeRequestsService.PRODUCTOS_POR_LOTE_FALABELLA): Promise<SyncChangeRequest[]> {
+        const todas = await this.repository.find({
+            where: { marketplace: 'falabella', status: 'approved', connection: { id: connectionId } },
+            relations: { product: true },
+            order: { createdAt: 'ASC' },
+            take: maxProductos * 4,
+        });
+        const productos = new Set<string>();
+        const elegidas: SyncChangeRequest[] = [];
+        for (const r of todas) {
+            if (!r.product?.id) continue;
+            if (!productos.has(r.product.id) && productos.size >= maxProductos) continue;
+            productos.add(r.product.id);
+            elegidas.push(r);
+        }
+        return elegidas;
+    }
+
+    /** ¿Quedan solicitudes de Falabella aprobadas esperando su lote? */
+    async hayAprobadasDeFalabella(connectionId: string): Promise<boolean> {
+        return (await this.repository.count({ where: { marketplace: 'falabella', status: 'approved', connection: { id: connectionId } } })) > 0;
+    }
+
+    /**
+     * Las solicitudes que Falabella rechazó por pedir esperar («429 Too many attempts») vuelven a aprobadas y se mandan
+     * por lotes. Las demás con error se dejan como están: tienen otro motivo.
+     */
+    async reintentarLimitadasDeFalabella(scope: ChangeScope) {
+        const fallidas = await this.repository.find({
+            where: [
+                { marketplace: 'falabella', status: 'error', store: { id: scope.storeId } },
+                { marketplace: 'falabella', status: 'error', store: IsNull(), requestedBy: { id: scope.userId } },
+            ],
+            relations: { connection: true },
+            take: 2000,
+        });
+        const limitadas = fallidas.filter((r) => /429|too many attempts/i.test(r.resultMessage ?? '') && r.connection?.id);
+        if (!limitadas.length) return { reintentadas: 0 };
+        await this.repository.update({ id: In(limitadas.map((r) => r.id)) }, { status: 'approved', resultMessage: null, resolvedAt: null as any });
+        for (const c of new Set(limitadas.map((r) => r.connection!.id))) await this.programarLoteFalabella(c);
+        return { reintentadas: limitadas.length };
     }
 
     /** Lo llama el worker cuando el canal responde: cierra la solicitud. */

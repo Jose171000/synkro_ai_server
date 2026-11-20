@@ -102,14 +102,47 @@ describe('aprobar y rechazar', () => {
     };
 
     it('aprobar aplica el valor al producto y encola el envío a esa cuenta', async () => {
-        const { service, productos, cola } = construir({ solicitud, producto: { ...producto } });
+        const { service, productos, cola } = construir({ solicitud: { ...solicitud, marketplace: 'ripley' }, producto: { ...producto } });
         await service.approve('r1', SCOPE);
         expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ price: 90 }));
         expect(cola.add).toHaveBeenCalledWith('inventory', {
-            productId: 'p1', userId: 'u1', marketplace: 'falabella', connectionId: 'c1', changeRequestId: 'r1',
+            productId: 'p1', userId: 'u1', marketplace: 'ripley', connectionId: 'c1', changeRequestId: 'r1',
             // Ripley manda un solo campo por vez: la solicitud dice cuál.
             conPrecio: true, conStock: false,
         });
+    });
+
+    it('en Falabella aprobar NO encola un envío por solicitud: pide un lote (varias aprobaciones, un solo feed)', async () => {
+        const { service, productos, cola } = construir({ solicitud, producto: { ...producto } });
+        await service.approve('r1', SCOPE);
+        expect(productos.save).toHaveBeenCalledWith(expect.objectContaining({ price: 90 }));
+        expect(cola.add).not.toHaveBeenCalledWith('inventory', expect.anything());
+        expect(cola.add).toHaveBeenCalledWith('falabella-lote', { connectionId: 'c1' }, expect.objectContaining({ jobId: 'falabella-lote-c1-espera' }));
+    });
+
+    it('el lote toma las solicitudes aprobadas, hasta 100 productos distintos (las dos de un producto van juntas)', async () => {
+        const reqs = [
+            ...Array.from({ length: 101 }, (_, i) => ({ id: `a${i}`, product: { id: `p${i}` } })),
+            { id: 'b0', product: { id: 'p0' } },
+        ];
+        const { service, repo } = construir();
+        repo.find.mockResolvedValueOnce(reqs);
+        const elegidas = await service.aprobadasDeFalabella('c1');
+        expect(new Set(elegidas.map((r: any) => r.product.id)).size).toBe(100);
+        expect(elegidas.map((r: any) => r.id)).toContain('b0'); // la segunda solicitud de p0 entra con la primera
+        expect(elegidas.map((r: any) => r.id)).not.toContain('a100');
+    });
+
+    it('reintentar solo vuelve a aprobar las rechazadas por límite (429) y programa su lote', async () => {
+        const { service, repo, cola } = construir();
+        repo.find.mockResolvedValueOnce([
+            { id: 'e1', resultMessage: 'Falabella rechazó la petición ProductUpdate: 429 Too many attempts to Create feeds.', connection: { id: 'c1' } },
+            { id: 'e2', resultMessage: 'El SKU no existe', connection: { id: 'c1' } },
+        ]);
+        const r = await service.reintentarLimitadasDeFalabella(SCOPE);
+        expect(r).toEqual({ reintentadas: 1 });
+        expect(repo.update).toHaveBeenCalledWith({ id: expect.anything() }, expect.objectContaining({ status: 'approved', resultMessage: null }));
+        expect(cola.add).toHaveBeenCalledWith('falabella-lote', { connectionId: 'c1' }, expect.anything());
     });
 
     it('un reenvío de precio es una solicitud de precio que reemplaza a otra pendiente de lo mismo', async () => {
@@ -155,7 +188,7 @@ describe('aprobar y rechazar', () => {
             await service.approve('f1', SCOPE);
             expect(productos.save).not.toHaveBeenCalled();
             expect(enlaces.save).toHaveBeenCalledWith(expect.objectContaining({ salePriceOverride: 70, saleStartOverride: '2026-08-02', saleEndOverride: '2026-12-01' }));
-            expect(cola.add).toHaveBeenCalledWith('inventory', expect.objectContaining({ marketplace: 'falabella', connectionId: 'c1', changeRequestId: 'f1' }));
+            expect(cola.add).toHaveBeenCalledWith('falabella-lote', { connectionId: 'c1' }, expect.anything());
         });
 
         it('el descuento general (marca «|g») se guarda en el producto', async () => {

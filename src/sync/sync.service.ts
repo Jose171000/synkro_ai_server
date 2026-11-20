@@ -3469,18 +3469,7 @@ export class SyncService implements OnModuleInit {
         if (!product || !link || !link.connection) return { status: 'omitido', feeds: [] };
         if (link.pausedByUser) return { status: 'pausada', feeds: [] }; // pausada con stock 0: un envío normal la reactivaría
 
-        // El precio de ESTA cuenta: el fijado para el canal o, si no hay, el del producto.
-        const precios = preciosParaCanal(product, link);
-        const precio = precios.price;
-        const precioCambio =
-            link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
-            Number(link.lastPriceSynced) !== precio;
-        const stockCambio = link.lastStockSynced !== product.stock;
-        // Promoción: solo se envía cuando hay una válida y distinta de la última enviada (quitarla se hace en el Seller Center).
-        // Si lo único que hay es el descuento que el canal ya muestra, no cuenta como un cambio, pero viaja con el precio para no quitarlo.
-        const promo = precios.promo;
-        const firmaPromo = firmaDePromo(promo);
-        const promoCambio = !!promo && precios.origen.promo !== 'canal' && (link.lastPromoSynced ?? '') !== firmaPromo;
+        const { precio, precioCambio, stockCambio, promo, firmaPromo, promoCambio } = this.cambiosParaFalabella(product, link);
         if (!precioCambio && !stockCambio && !promoCambio) return { status: 'sin-cambios', feeds: [] };
 
         // El SKU del vendedor es lo que casa con la ficha de Falabella.
@@ -3523,21 +3512,131 @@ export class SyncService implements OnModuleInit {
         return { status: 'enviado', feeds };
     }
 
-    /** Anota un feed de actualización y programa la consulta de su resultado. */
+    /**
+     * Qué hay que mandarle a Falabella de este producto: lo que cambió respecto a la última sincronización.
+     * El precio es el de ESTA cuenta (el fijado para el canal o, si no hay, el del producto).
+     */
+    private cambiosParaFalabella(product: Product, link: ListingLink) {
+        const precios = preciosParaCanal(product, link);
+        const precio = precios.price;
+        const precioCambio =
+            link.lastPriceSynced === null || link.lastPriceSynced === undefined ||
+            Number(link.lastPriceSynced) !== precio;
+        const stockCambio = link.lastStockSynced !== product.stock;
+        // Promoción: solo se envía cuando hay una válida y distinta de la última enviada (quitarla se hace en el Seller Center).
+        // Si lo único que hay es el descuento que el canal ya muestra, no cuenta como un cambio, pero viaja con el precio para no quitarlo.
+        const promo = precios.promo;
+        const firmaPromo = firmaDePromo(promo);
+        const promoCambio = !!promo && precios.origen.promo !== 'canal' && (link.lastPromoSynced ?? '') !== firmaPromo;
+        return { precio, precioCambio, stockCambio, promo, firmaPromo, promoCambio };
+    }
+
+    /**
+     * Ejecutado por la cola con varios productos a la vez: UN feed de precio y UN feed de stock para todos
+     * (el llamador los manda en tandas de hasta 100), en vez de un feed por producto. Falabella admite pocos feeds seguidos y rechaza el resto con un 429.
+     * Devuelve qué pasó con cada producto; `limitado` indica que Falabella pidió esperar (esos productos NO se dan por enviados).
+     */
+    async pushInventoryLoteFalabella(
+        productIds: string[],
+        connectionId: string,
+    ): Promise<{ porProducto: Map<string, { status: 'enviado' | 'sin-cambios' | 'omitido' | 'pausada' | 'error' | 'limitado'; message?: string }>; limitado: boolean }> {
+        const porProducto = new Map<string, { status: 'enviado' | 'sin-cambios' | 'omitido' | 'pausada' | 'error' | 'limitado'; message?: string }>();
+        const unicos = [...new Set(productIds)];
+        if (!unicos.length) return { porProducto, limitado: false };
+
+        const enlaces = await this.listingLinkRepository.find({
+            where: { marketplace: 'falabella', product: { id: In(unicos) }, syncStatus: In(['published', 'paused']), connection: { id: connectionId } },
+            relations: { product: true, connection: { owner: true } },
+        });
+        const porId = new Map(enlaces.map((l) => [l.product.id, l]));
+
+        const precios: { link: ListingLink; sku: string; item: { sellerSku: string; price: number; salePrice?: number | null; saleStart?: string | null; saleEnd?: string | null } }[] = [];
+        const stocks: { link: ListingLink; sku: string }[] = [];
+        for (const id of unicos) {
+            const link = porId.get(id);
+            if (!link || !link.connection || !link.product) { porProducto.set(id, { status: 'omitido' }); continue; }
+            if (link.pausedByUser) { porProducto.set(id, { status: 'pausada' }); continue; }
+            const c = this.cambiosParaFalabella(link.product, link);
+            if (!c.precioCambio && !c.stockCambio && !c.promoCambio) { porProducto.set(id, { status: 'sin-cambios' }); continue; }
+            if (c.precioCambio || c.promoCambio) {
+                precios.push({ link, sku: link.product.sku, item: { sellerSku: link.product.sku, price: c.precio, ...(c.promo ? { salePrice: c.promo.salePrice, saleStart: c.promo.start, saleEnd: c.promo.end } : {}) } });
+            }
+            if (c.stockCambio) stocks.push({ link, sku: link.product.sku });
+            // Se da por enviado cuando entran sus feeds; si Falabella pide esperar, pasa a «limitado».
+            porProducto.set(id, { status: 'enviado' });
+        }
+
+        const conexion = enlaces.find((l) => l.connection)?.connection;
+        if (!conexion || (!precios.length && !stocks.length)) return { porProducto, limitado: false };
+        const ownerId = conexion.owner.id;
+        const marcarLimitado = (ids: string[]) => ids.forEach((id) => porProducto.set(id, { status: 'limitado' }));
+        let limitado = false;
+        let credentials: Awaited<ReturnType<SyncService['getFalabellaCredentials']>>;
+        try {
+            credentials = await this.getFalabellaCredentials(connectionId);
+        } catch (error: any) {
+            for (const id of unicos) if (porProducto.get(id)?.status === 'enviado') porProducto.set(id, { status: 'error', message: this.describeApiError(error) });
+            return { porProducto, limitado: false };
+        }
+        const opts = { operatorCode: this.falabellaOperatorCode };
+        const esLimite = (e: any) => /429|too many attempts/i.test(String(e?.message ?? e));
+
+        // Precio y promoción: un solo feed.
+        if (precios.length) {
+            try {
+                const skus = precios.map((p) => p.sku);
+                const feedId = await this.falabellaApi.updatePrices(credentials, precios.map((p) => p.item), opts);
+                await this.registrarFeedFalabella(ownerId, connectionId, 'ProductUpdate', skus, feedId);
+                for (const p of precios) {
+                    const c = this.cambiosParaFalabella(p.link.product, p.link);
+                    if (c.precioCambio) p.link.lastPriceSynced = c.precio as any;
+                    if (c.promoCambio) p.link.lastPromoSynced = c.firmaPromo;
+                }
+            } catch (error: any) {
+                if (esLimite(error)) { limitado = true; marcarLimitado(precios.map((p) => p.link.product.id)); }
+                else for (const p of precios) { porProducto.set(p.link.product.id, { status: 'error', message: this.describeApiError(error) }); p.link.lastError = this.describeApiError(error); }
+            }
+        }
+        // Stock: otro feed (si el de precio ya fue limitado, no se insiste).
+        if (stocks.length && !limitado) {
+            try {
+                const feedId = await this.falabellaApi.updateStock(credentials, stocks.map((s) => ({ sellerSku: s.sku, quantity: s.link.product.stock })), opts);
+                await this.registrarFeedFalabella(ownerId, connectionId, 'UpdateStock', stocks.map((s) => s.sku), feedId);
+                for (const s of stocks) s.link.lastStockSynced = s.link.product.stock;
+            } catch (error: any) {
+                if (esLimite(error)) { limitado = true; marcarLimitado(stocks.map((s) => s.link.product.id)); }
+                else for (const s of stocks) { porProducto.set(s.link.product.id, { status: 'error', message: this.describeApiError(error) }); s.link.lastError = this.describeApiError(error); }
+            }
+        } else if (stocks.length && limitado) {
+            marcarLimitado(stocks.map((s) => s.link.product.id));
+        }
+
+        const ahora = new Date();
+        const tocados = new Set([...precios, ...stocks].map((x) => x.link));
+        for (const l of tocados) {
+            const estado = porProducto.get(l.product.id)?.status;
+            if (estado === 'enviado') { l.lastSyncedAt = ahora; l.lastError = null as any; }
+        }
+        await this.listingLinkRepository.save([...tocados]);
+        return { porProducto, limitado };
+    }
+
+    /** Anota un feed de actualización (de uno o de varios SKU) y programa la consulta de su resultado. */
     async registrarFeedFalabella(
         userId: string,
         connectionId: string,
         action: 'ProductUpdate' | 'UpdateStock' | 'ProductRemove',
-        sku: string,
+        sku: string | string[],
         externalFeedId: string,
     ): Promise<string> {
+        const skus = Array.isArray(sku) ? sku : [sku];
         const feed = await this.feedRepository.save(this.feedRepository.create({
             marketplace: 'falabella',
             externalFeedId,
             action,
-            skus: [sku],
+            skus,
             status: 'pending',
-            totalRecords: 1,
+            totalRecords: skus.length,
             owner: { id: userId } as any,
             connection: { id: connectionId } as any,
         }));
