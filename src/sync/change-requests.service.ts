@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { In, IsNull, MoreThan, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { Store } from '../stores/entities/store.entity';
@@ -10,6 +10,10 @@ import { ChangeRequestStatus, SyncChangeRequest } from './entities/sync-change-r
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
 import { descuentoDeValor } from './ripley/ripley-oferta';
+
+/** Cuántas pendientes y cuántas ya resueltas devuelve la lista. */
+const MAX_PENDIENTES = 2000;
+const MAX_HISTORIAL = 200;
 
 const ESTADOS: ChangeRequestStatus[] = ['pending', 'approved', 'rejected', 'sent', 'error', 'skipped'];
 
@@ -193,8 +197,7 @@ export class ChangeRequestsService {
         if (status && !ESTADOS.includes(status as ChangeRequestStatus)) {
             throw new BadRequestException(`Estado inválido. Usa uno de: ${ESTADOS.join(', ')}.`);
         }
-        const estado = status ? { status: status as ChangeRequestStatus } : {};
-        return this.repository.find({
+        const buscar = (estado: object, take: number) => this.repository.find({
             where: [
                 { store: { id: scope.storeId }, ...estado },
                 { store: IsNull(), requestedBy: { id: scope.userId }, ...estado },
@@ -202,8 +205,13 @@ export class ChangeRequestsService {
             // El grupo del producto permite mostrar «Sandalias… · 20 variantes» en vez de 20 filas sueltas.
             relations: { product: { group: true }, connection: true },
             order: { createdAt: 'DESC' },
-            take: 200,
+            take,
         });
+        if (status) return buscar({ status: status as ChangeRequestStatus }, status === 'pending' ? MAX_PENDIENTES : MAX_HISTORIAL);
+        // Todas las pendientes, aunque sean muchas (una edición masiva crea cientos): si solo se trajeran las 200 más recientes en total,
+        // las pendientes más antiguas quedaban ocultas y no se podían aprobar. El historial sí se limita a las más recientes.
+        const [pendientes, resueltas] = await Promise.all([buscar({ status: 'pending' }, MAX_PENDIENTES), buscar({ status: Not('pending') }, MAX_HISTORIAL)]);
+        return [...pendientes, ...resueltas].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     }
 
     /**

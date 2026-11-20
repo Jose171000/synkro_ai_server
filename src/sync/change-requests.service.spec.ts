@@ -85,6 +85,17 @@ describe('modo revisión de la tienda', () => {
         await expect(service.list(SCOPE, 'inventado')).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    it('sin filtro trae TODAS las pendientes (aunque pasen de 200) y solo las 200 últimas ya resueltas', async () => {
+        const { service, repo } = construir();
+        const f = (id: string, status: string, t: number) => ({ id, status, createdAt: new Date(t) });
+        repo.find.mockResolvedValueOnce([f('p1', 'pending', 1), f('p2', 'pending', 3)]).mockResolvedValueOnce([f('h1', 'sent', 2)]);
+        const r = await service.list(SCOPE);
+        expect(repo.find.mock.calls[0][0].take).toBe(2000);
+        expect(repo.find.mock.calls[0][0].where[0]).toMatchObject({ status: 'pending' });
+        expect(repo.find.mock.calls[1][0].take).toBe(200);
+        expect(r.map((x: any) => x.id)).toEqual(['p2', 'h1', 'p1']); // juntas y de la más reciente a la más antigua
+    });
+
     it('lista las de la tienda, y las antiguas sin tienda solo a quien las pidió', async () => {
         const { service, repo } = construir();
         await service.list(SCOPE, 'pending');
