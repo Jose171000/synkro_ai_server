@@ -5,7 +5,7 @@ import * as ExcelJS from 'exceljs';
 import { Product } from '../products/entities/product.entity';
 import { SyncService } from '../sync/sync.service';
 import { leerPrimeraHoja } from '../common/excel/excel';
-import { Cambio, FilaDeEdicion, calcularCambios, cambiaDescuento, cambiaInventario, columnasReconocidas, leerFilasDeEdicion } from './edicion-masiva';
+import { MAX_DESCRIPCION, Cambio, FilaDeEdicion, calcularCambios, cambiaDescuento, cambiaInventario, columnasReconocidas, leerFilasDeEdicion } from './edicion-masiva';
 
 export const MAX_FILAS_DE_EDICION = 5000;
 const MUESTRA = 300;
@@ -37,7 +37,7 @@ export class EdicionMasivaService {
     async plantilla(storeId: string): Promise<Buffer> {
         const lista = await this.productos.find({
             where: { store: { id: storeId } },
-            select: { id: true, sku: true, name: true, price: true, stock: true },
+            select: { id: true, sku: true, name: true, price: true, stock: true, description: true },
             order: { name: 'ASC' },
             take: MAX_FILAS_DE_EDICION,
         });
@@ -48,6 +48,7 @@ export class EdicionMasivaService {
             { header: 'Nombre', key: 'nombre', width: 50 },
             { header: 'Precio', key: 'precio', width: 12 },
             { header: 'Stock', key: 'stock', width: 10 },
+            { header: 'Descripción', key: 'descripcion', width: 60 },
             { header: 'Descuento %', key: 'descPct', width: 14 },
             { header: 'Precio con descuento', key: 'descPrecio', width: 20 },
             { header: 'Descuento desde', key: 'descDesde', width: 16 },
@@ -56,14 +57,14 @@ export class EdicionMasivaService {
         ];
         hoja.getRow(1).font = { bold: true };
         hoja.views = [{ state: 'frozen', ySplit: 1 }];
-        for (const p of lista) hoja.addRow({ sku: p.sku, nombre: p.name, precio: p.price == null ? null : Number(p.price), stock: p.stock });
+        for (const p of lista) hoja.addRow({ sku: p.sku, nombre: p.name, precio: p.price == null ? null : Number(p.price), stock: p.stock, descripcion: (p.description ?? '').trim().length > MAX_DESCRIPCION ? null : (p.description ?? '').trim() || null });
 
         const ayuda = libro.addWorksheet('Cómo usar');
         [
-            'Cambia solo lo que quieras en las columnas Nombre, Precio y Stock y sube el archivo en Synkro.',
+            'Cambia solo lo que quieras en las columnas Nombre, Precio, Stock y Descripción y sube el archivo en Synkro.',
             'No cambies la columna SKU: es lo que identifica cada producto. Un SKU que no exista en esta tienda se ignora.',
             'Una celda vacía significa «no tocar». Puedes borrar las filas y columnas que no quieras editar.',
-            'También puedes agregar una columna «Descripción» para cambiar la descripción.',
+            'Descripción es la descripción de «Editar producto» (el dato de entrada para la IA); no es la ficha HTML. Cambiarla no envía nada a los canales ni regenera la ficha. Si una descripción pasa de ' + MAX_DESCRIPCION + ' caracteres, su celda va vacía (no se toca).',
             'DESCUENTO para todos los canales: escribe «Descuento %» (por ejemplo 15) o «Precio con descuento» (en soles), nunca los dos, y SIEMPRE «Descuento hasta» (fecha de fin; puede ser dentro de un año). «Descuento desde» es opcional (por defecto, hoy).',
             'Las fechas pueden ir como AAAA-MM-DD o DD/MM/AAAA. Para quitar un descuento escribe «sí» en «Quitar descuento».',
             'El descuento se envía a Falabella, Mercado Libre, WooCommerce y Ripley donde el producto esté publicado. Mercado Libre acepta de 5% a 80%; en Falabella un descuento ya enviado solo se quita en el Seller Center.',

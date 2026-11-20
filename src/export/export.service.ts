@@ -40,6 +40,7 @@ export class ExportService {
             name: p.name,
             sku: p.sku,
             description: p.description,
+            descriptionHtml: p.aiDescription ?? '',
             category: p.category ?? '',
             subCategory: p.subCategory ?? '',
             categoryFalabellaId: (p.marketplaceIds as any)?.falabella_category_id ?? '',

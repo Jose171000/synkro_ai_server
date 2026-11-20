@@ -141,7 +141,9 @@ export async function escribirHoja(
         }));
 
         hoja.getRow(1).font = { bold: true };
-        for (const fila of datos) hoja.addRow(fila);
+        // Una celda de Excel admite 32.767 caracteres; con más, el archivo se abre dañado (p. ej. una ficha HTML muy larga).
+        const recortar = (v: any) => (typeof v === 'string' && v.length > 32_767 ? v.slice(0, 32_767) : v);
+        for (const fila of datos) hoja.addRow(Object.fromEntries(Object.entries(fila).map(([k, v]) => [k, recortar(v)])));
     }
 
     const salida = await libro.xlsx.writeBuffer();

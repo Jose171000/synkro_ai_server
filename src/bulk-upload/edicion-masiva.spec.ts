@@ -226,6 +226,25 @@ describe('EdicionMasivaService · descuento', () => {
         expect(r.errores[0]).toMatchObject({ sku: 'A-1', mensaje: 'No se pudo' });
     });
 
+    it('la plantilla trae la Descripción actual; subirla sin tocar no cambia nada y editarla sí', async () => {
+        const existentes = [{ ...prod('p1', 'A-1', '100.00'), description: '  Bolso de cuero  ' }, { ...prod('p2', 'B-2', '50.00'), description: 'x'.repeat(10_001) }];
+        const { servicio } = armar(existentes);
+        const buf = (await servicio.plantilla('s')) as any;
+        const libro = new ExcelJS.Workbook();
+        await libro.xlsx.load(buf);
+        const hoja = libro.getWorksheet('Productos')!;
+        const col = (hoja.getRow(1).values as any[]).indexOf('Descripción');
+        expect(col).toBeGreaterThan(0);
+        expect(hoja.getRow(2).getCell(col).value).toBe('Bolso de cuero');
+        expect(hoja.getRow(3).getCell(col).value ?? null).toBeNull(); // pasa del máximo: va vacía, no se toca
+        const sinTocar = await servicio.procesar(scope, buf, false, true);
+        expect(sinTocar.conCambios).toBe(0);
+        hoja.getRow(2).getCell(col).value = 'Bolso de cuero nuevo';
+        const editado = await servicio.procesar(scope, Buffer.from(await libro.xlsx.writeBuffer()), false, true);
+        expect(editado).toMatchObject({ conCambios: 1 });
+        expect(editado.cambios[0].cambios[0]).toMatchObject({ campo: 'descripcion' });
+    });
+
     it('la plantilla trae las columnas de descuento', async () => {
         const { servicio } = armar();
         const libro = new ExcelJS.Workbook();

@@ -173,7 +173,7 @@ export function calcularCambios(fila: FilaDeEdicion, p: ProductoActual): Cambio[
     if (fila.nombre !== undefined && fila.nombre !== (p.name ?? '')) cambios.push({ campo: 'nombre', antes: p.name ?? null, despues: fila.nombre });
     if (fila.precio !== undefined && fila.precio !== precioActual) cambios.push({ campo: 'precio', antes: precioActual, despues: fila.precio });
     if (fila.stock !== undefined && fila.stock !== (p.stock ?? null)) cambios.push({ campo: 'stock', antes: p.stock ?? null, despues: fila.stock });
-    if (fila.descripcion !== undefined && fila.descripcion !== (p.description ?? '')) {
+    if (fila.descripcion !== undefined && fila.descripcion !== (p.description ?? '').trim()) {
         cambios.push({ campo: 'descripcion', antes: p.description ? p.description.slice(0, 120) : null, despues: fila.descripcion.slice(0, 120) });
     }
 
