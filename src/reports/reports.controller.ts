@@ -34,9 +34,10 @@ export class ReportsController {
     @ApiQuery({ name: 'from', required: false, example: '2026-07-01' })
     @ApiQuery({ name: 'to', required: false, example: '2026-07-22' })
     @ApiQuery({ name: 'status', required: false, description: 'Solo ventas en este estado: pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma).' })
+    @ApiQuery({ name: 'canal', required: false, description: 'Solo las ventas de este canal (conectado, de la hoja o personalizado); sin él, todos.' })
     @ApiQuery({ name: 'includeShipping', required: false, description: 'false para no sumar lo que el cliente pagó por el envío. Por defecto se incluye: las ventas son todo lo que pagó el cliente.' })
-    getSales(@Req() req, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string, @Query('includeShipping') includeShipping?: string) {
-        return this.reportsService.getSalesReport(req.store.storeId, from, to, status, includeShipping !== 'false', req.store.permissions.includes('costos.ver'));
+    getSales(@Req() req, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string, @Query('includeShipping') includeShipping?: string, @Query('canal') canal?: string) {
+        return this.reportsService.getSalesReport(req.store.storeId, from, to, status, includeShipping !== 'false', req.store.permissions.includes('costos.ver'), canal);
     }
 
     @Get('top-products')
@@ -50,8 +51,9 @@ export class ReportsController {
     @ApiQuery({ name: 'status', required: false })
     @ApiQuery({ name: 'sort', required: false, description: 'units (por defecto), revenue o days (se agota antes).' })
     @ApiQuery({ name: 'limit', required: false })
-    getTopProducts(@Req() req, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string, @Query('sort') sort?: string, @Query('limit') limit?: string) {
-        return this.reportsService.getTopProducts(req.store.storeId, from, to, status, criterio(sort), Number(limit) || 200);
+    @ApiQuery({ name: 'canal', required: false })
+    getTopProducts(@Req() req, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string, @Query('sort') sort?: string, @Query('limit') limit?: string, @Query('canal') canal?: string) {
+        return this.reportsService.getTopProducts(req.store.storeId, from, to, status, criterio(sort), Number(limit) || 200, canal);
     }
 
     @Get('export')
@@ -66,6 +68,7 @@ export class ReportsController {
     @ApiQuery({ name: 'status', required: false })
     @ApiQuery({ name: 'includeShipping', required: false })
     @ApiQuery({ name: 'sort', required: false })
+    @ApiQuery({ name: 'canal', required: false, description: 'Exporta solo las ventas de este canal.' })
     async exportar(
         @Req() req,
         @Res() res: Response,
@@ -75,11 +78,12 @@ export class ReportsController {
         @Query('status') status?: string,
         @Query('includeShipping') includeShipping?: string,
         @Query('sort') sort?: string,
+        @Query('canal') canal?: string,
     ) {
         if (format !== 'xlsx' && format !== 'pdf') throw new BadRequestException('El formato es xlsx o pdf.');
         const storeId = req.store.storeId;
-        const ventas = await this.reportsService.getSalesReport(storeId, from, to, status, includeShipping !== 'false', req.store.permissions.includes('costos.ver'));
-        const ganadores = await this.reportsService.getTopProducts(storeId, from, to, status, criterio(sort), 100);
+        const ventas = await this.reportsService.getSalesReport(storeId, from, to, status, includeShipping !== 'false', req.store.permissions.includes('costos.ver'), canal);
+        const ganadores = await this.reportsService.getTopProducts(storeId, from, to, status, criterio(sort), 100, canal);
         const fotos = await descargarFotos(ganadores.items.slice(0, format === 'pdf' ? 15 : 30).map((g) => g.imageUrl));
         const datos = {
             tienda: String(req.store.name ?? 'Tienda'),
@@ -87,11 +91,12 @@ export class ReportsController {
             ventas: ventas as any,
             ganadores,
             estados: (status ?? '').split(',').map((e) => e.trim()).filter(Boolean),
+            canal: ventas.channelFilter ?? undefined,
         };
         const archivo = format === 'pdf' ? await reporteAPdf(datos, fotos) : await reporteAExcel(datos, fotos);
         res.set({
             'Content-Type': format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Content-Disposition': `attachment; filename="analiticas_${ventas.range.from}_${ventas.range.to}.${format}"`,
+            'Content-Disposition': `attachment; filename="analiticas${ventas.channelFilter ? `_${String(ventas.channelFilter).replace(/[^a-z0-9-]+/gi, '-')}` : ''}_${ventas.range.from}_${ventas.range.to}.${format}"`,
             'Cache-Control': 'no-store',
         });
         res.end(archivo);

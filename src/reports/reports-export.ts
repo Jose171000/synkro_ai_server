@@ -21,6 +21,8 @@ export interface DatosDelReporte {
     };
     ganadores: ProductosGanadoresInforme;
     estados: string[];
+    /** Canal elegido en la pantalla: el reporte trae solo sus datos. */
+    canal?: string;
 }
 
 const CANALES: Record<string, string> = {
@@ -48,7 +50,8 @@ const diasTexto = (g: ProductoGanador) => {
     return e.dias < 1 ? 'Menos de 1 día' : `${Math.round(e.dias)} ${Math.round(e.dias) === 1 ? 'día' : 'días'}`;
 };
 const periodoTexto = (d: DatosDelReporte) => (d.ventas.range.from === d.ventas.range.to ? d.ventas.range.from : `${d.ventas.range.from} al ${d.ventas.range.to}`);
-const filtroTexto = (d: DatosDelReporte) => (d.estados.length ? d.estados.map((e) => ESTADOS_DE_VENTA[e] ?? e).join(', ') : 'Ventas concretadas (sin canceladas ni devueltas)');
+const filtroEstados = (d: DatosDelReporte) => (d.estados.length ? d.estados.map((e) => ESTADOS_DE_VENTA[e] ?? e).join(', ') : 'Ventas concretadas (sin canceladas ni devueltas)');
+const filtroTexto = (d: DatosDelReporte) => (d.canal ? `${filtroEstados(d)} · solo el canal ${nombreDeCanal(d.canal)}` : filtroEstados(d));
 
 // ── Fotos ────────────────────────────────────────────────────────────────
 
@@ -131,6 +134,7 @@ export async function reporteAExcel(d: DatosDelReporte, fotos: Map<string, Foto>
     const datos: [string, string | number][] = [
         ['Tienda', d.tienda],
         ['Periodo', periodoTexto(d)],
+        ['Canal', d.canal ? `Solo ${nombreDeCanal(d.canal)}` : 'Todos los canales'],
         ['Ventas incluidas', filtroTexto(d)],
         ['Las ventas incluyen el envío', d.ventas.includeShipping ? 'Sí' : 'No (solo el precio de los productos)'],
         ['Generado', d.generado.toLocaleString('es-PE', { timeZone: 'America/Lima' }) + ' (hora de Lima)'],

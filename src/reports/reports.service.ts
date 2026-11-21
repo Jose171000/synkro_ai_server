@@ -157,9 +157,13 @@ export class ReportsService {
      * `verCostos` es el permiso «costos.ver»: sin él no se devuelven el envío ni los cupones, y las ventas son solo lo vendido
      * (nunca suman lo que el cliente pagó por el envío).
      */
-    async getSalesReport(storeId: string, from?: string, to?: string, status?: string, incluirEnvio = true, verCostos = true) {
+    async getSalesReport(storeId: string, from?: string, to?: string, status?: string, incluirEnvio = true, verCostos = true, canal?: string) {
         if (!verCostos) incluirEnvio = false;
         const estados = estadosPedidos(status);
+        // Un canal (conectado, de la hoja o personalizado) para ver solo sus ventas; sin él, todos.
+        const canalElegido = (canal ?? '').trim().toLowerCase() || undefined;
+        const CANAL_SQL = canalElegido ? 'LOWER("o"."marketplace") = :canal' : '1=1';
+        const canalParams = { canal: canalElegido };
         const hoy = hoyEnLima();
         const end = to || hoy;
         const start = from || new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -181,6 +185,7 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .andWhere(CANAL_SQL, canalParams)
             // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
             .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('date').addGroupBy('"o"."marketplace"')
@@ -204,6 +209,7 @@ export class ReportsService {
 
         // ── Fuente 2: Google Sheets (CSV publicado) ──
         let sheetError: string | null = null;
+        const canalesDeLaHoja = new Set<string>();
         const profile = await this.legacyProfile(storeId);
 
         // El Google Sheet no tiene estado de venta: con un filtro de estado no se mezcla.
@@ -212,13 +218,15 @@ export class ReportsService {
                 const sheetRows = await this.fetchSheetRows(profile.sheetCsvUrl);
                 for (const row of sheetRows) {
                     if (row.date < start || row.date > end) continue;
+                    const key = row.channel || 'sheets';
+                    canalesDeLaHoja.add(key);
+                    if (canalElegido && key !== canalElegido) continue;
 
                     const day = byDayMap.get(row.date) || { date: row.date, sales: 0, orders: 0 };
                     day.sales += row.sales;
                     day.orders += row.orders;
                     byDayMap.set(row.date, day);
 
-                    const key = row.channel || 'sheets';
                     const ch = byChannelMap.get(key) || { channel: key, sales: 0, orders: 0, source: 'sheets' };
                     ch.sales += row.sales;
                     ch.orders += row.orders;
@@ -239,6 +247,7 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .andWhere(CANAL_SQL, canalParams)
             // Sin estado elegido cuentan las ventas concretadas (no las canceladas ni devueltas); eligiéndolo se ve ese estado.
             .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .groupBy('"o"."connectionId"').addGroupBy('"o"."marketplace"')
@@ -252,13 +261,23 @@ export class ReportsService {
             .addSelect('COUNT(*)', 'orders')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .andWhere(CANAL_SQL, canalParams)
             .groupBy('"o"."saleState"')
+            .getRawMany();
+
+        // Todos los canales con ventas en el rango (sin aplicar el filtro de canal), para armar el selector.
+        const canalesConVentas = await this.orderRepository.createQueryBuilder('o')
+            .select('"o"."marketplace"', 'channel')
+            .where('"o"."storeId" = :storeId', { storeId })
+            .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .groupBy('"o"."marketplace"')
             .getRawMany();
 
         // Las mismas ventas que el resto del reporte (rango, estado elegido o concretadas), para envío, cupones y mapa de calor.
         const mismasVentas = () => this.orderRepository.createQueryBuilder('o')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere(`${FECHA} BETWEEN :start AND :end`, { start, end })
+            .andWhere(CANAL_SQL, canalParams)
             .andWhere(estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN });
 
         const envios = await mismasVentas()
@@ -341,6 +360,9 @@ export class ReportsService {
                 return { status: e, orders: Number(r?.orders ?? 0), sales: Math.round(Number(r?.sales ?? 0) * 100) / 100 };
             }),
             statusFilter: estados,
+            /** Canal elegido (null = todos) y todos los canales con ventas en el rango: los conectados, los de la hoja y los personalizados. */
+            channelFilter: canalElegido ?? null,
+            availableChannels: [...new Set([...canalesConVentas.map((r) => String(r.channel ?? '')), ...canalesDeLaHoja])].filter(Boolean).sort((a, b) => a.localeCompare(b)),
             byAccount: porCuenta.map(r => ({
                 connectionId: r.connectionId,
                 channel: r.channel,
@@ -369,8 +391,9 @@ export class ReportsService {
      * Productos ganadores de la tienda: lo más vendido del periodo (por unidades o por ingresos), cuánto stock queda y en cuánto
      * tiempo se agotaría según lo que vendió en los últimos 30 días. Las ventas canceladas o devueltas no cuentan.
      */
-    async getTopProducts(storeId: string, from?: string, to?: string, status?: string, sort: CriterioDeOrden = 'units', limit = 200): Promise<ProductosGanadoresInforme> {
+    async getTopProducts(storeId: string, from?: string, to?: string, status?: string, sort: CriterioDeOrden = 'units', limit = 200, canal?: string): Promise<ProductosGanadoresInforme> {
         const estados = estadosPedidos(status);
+        const canalElegido = (canal ?? '').trim().toLowerCase() || undefined;
         const hoy = hoyEnLima();
         const end = to || hoy;
         const start = from || new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 29 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -383,6 +406,8 @@ export class ReportsService {
             .addSelect(`TO_CHAR(${FECHA}, 'YYYY-MM-DD')`, 'fecha')
             .where('"o"."storeId" = :storeId', { storeId })
             .andWhere(`${FECHA} BETWEEN :desde AND :hasta`, { desde, hasta })
+            // El canal filtra lo vendido del periodo; el ritmo de venta (para saber cuándo se agota el stock) cuenta todos los canales, porque el stock es uno solo.
+            .andWhere(conEstados && canalElegido ? 'LOWER("o"."marketplace") = :canal' : '1=1', { canal: canalElegido })
             .andWhere(conEstados && estados.length ? '"o"."saleState" IN (:...estados)' : '"o"."saleState" NOT IN (:...fuera)', { estados, fuera: ESTADOS_QUE_NO_CUENTAN })
             .getRawMany();
         const [delPeriodo, delRitmo] = await Promise.all([ventas(start, end, true), ventas(inicioRitmo, hoy, false)]);
