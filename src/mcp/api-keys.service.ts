@@ -116,7 +116,12 @@ export class ApiKeysService {
         const mala = new UnauthorizedException('Clave inválida, caducada o revocada.');
         if (!clave || !clave.startsWith(PREFIJO) || clave.length > 200) throw mala;
 
-        const fila = await this.keys.findOne({ where: { keyHash: hashDeClave(clave) }, relations: { store: true, createdBy: true } });
+        // Solo los ids de la tienda y de quien la creó: no hace falta (ni conviene) traer sus filas completas, con datos de la cuenta.
+        const fila = await this.keys.findOne({
+            where: { keyHash: hashDeClave(clave) },
+            relations: { store: true, createdBy: true },
+            select: { id: true, name: true, permissions: true, expiresAt: true, revokedAt: true, lastUsedAt: true, store: { id: true }, createdBy: { id: true } },
+        });
         if (!fila || fila.revokedAt) throw mala;
         if (fila.expiresAt && fila.expiresAt.getTime() <= Date.now()) throw mala;
 
