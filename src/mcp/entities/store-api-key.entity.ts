@@ -14,8 +14,13 @@ export class StoreApiKey {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @ManyToOne(() => Store, { onDelete: 'CASCADE', nullable: false })
-    store: Store;
+    /** «store»: clave de UNA tienda (`/mcp`). «platform»: clave de un superadmin para toda la agencia (`/mcp/admin`), sin tienda. */
+    @Column({ type: 'varchar', length: 10, default: 'store' })
+    kind: 'store' | 'platform';
+
+    /** Nula solo en las de plataforma (lo asegura un CHECK de la base). */
+    @ManyToOne(() => Store, { onDelete: 'CASCADE', nullable: true })
+    store: Store | null;
 
     /** Quien la creó: sus permisos actuales son el techo de la clave. */
     @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: false })

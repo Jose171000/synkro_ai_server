@@ -8,6 +8,7 @@ Código: `src/mcp/`. **Fase 1: solo lectura.** Ninguna herramienta edita, public
 | Fase | Qué es | Estado |
 |---|---|---|
 | 1 | Claves por tienda, `POST /api/v1/mcp`, 8 herramientas de lectura | **Hecha** (falta probarla con un cliente real y la pantalla de claves en la app) |
+| 1b | MCP de plataforma para superadmins (`/mcp/admin`, claves `sya_`) y vista de todas las claves | **Hecha** (falta probar con una clave real y la pantalla de superadmin) |
 | 2 | Escrituras seguras: inventario (respeta el modo revisión), aprobar/rechazar cambios | Pendiente |
 | 3 | Acciones sobre canales (publicar, pausar, descuentos), siempre con vista previa y confirmación | Pendiente; solo si se decide |
 | 4 | OAuth (conectar con un clic, sin copiar claves) | Opcional |
@@ -65,6 +66,54 @@ Cada una exige el mismo permiso que la app exige para esa información. La tabla
 * **Tamaño:** máximo 50 resultados por llamada y 60 000 caracteres de respuesta; más se recorta con un aviso. Los productos se resumen (sin atributos de IA ni datos internos).
 * **Errores:** los mensajes de la app (en español) se muestran tal cual; cualquier otro error sale genérico, sin detalles internos.
 * `resumen_negocio` no incluye los avisos: son notificaciones personales de quien creó la clave, no de la tienda.
+
+## MCP de plataforma (superadmins)
+
+Para consultar **toda la agencia**, no una tienda. Entrada: `POST /api/v1/mcp/admin`, con claves `sya_…` (las de tienda son `syk_…`: una no sirve en el
+punto de la otra). Código: `src/mcp/mcp-plataforma.*`, `platform-tools.ts`, `permisos-plataforma.ts`. También es **solo lectura**.
+
+* **Quién:** solo un superadmin (rol `admin`) la crea, desde la pantalla de superadmin. Está atada a su creador y **el rol se lee de la base en cada
+  llamada**: si lo bajan de rol o lo desactivan, la clave muere en la siguiente llamada (y vuelve a servir si recupera el rol).
+* **Caducidad obligatoria**, de 1 a 90 días, y hasta 20 claves de plataforma activas. Es una llave maestra: no debe vivir para siempre.
+* **Apagarla:** `MCP_PLATAFORMA_ACTIVO=false` en el servidor → `/mcp/admin` responde 404 (el MCP de las tiendas no se toca).
+* **Permisos propios** (no son los de una tienda): `clientes.ver`, `finanzas.ver` (arrastra a `clientes.ver`) y `sistema.ver`. Por defecto, solo `clientes.ver`.
+  **No hay `actividad.ver` a propósito:** el aviso de privacidad promete que la actividad de los usuarios solo la ven los administradores, y con el MCP pasaría
+  al modelo de IA de quien tenga la clave. Para abrirla hay que actualizar antes el aviso.
+
+| Herramienta | Qué da | Permiso |
+|---|---|---|
+| `listar_clientes`, `ver_cliente` | Cuentas, tiendas, canales y productos. Plan y pagos solo con finanzas | `clientes.ver` |
+| `listar_tiendas` | Id, nombre y dueño de cada tienda (el id sirve para las `tienda_…`) | `clientes.ver` |
+| `solicitudes_de_registro` | Altas pendientes o rechazadas (sin teléfono; no aprueba ni rechaza) | `clientes.ver` |
+| `cartera_agencia`, `ver_tienda_en_cartera` | Ventas por cliente, plan, próximo pago, comisión, cobros vencidos | `finanzas.ver` |
+| `resumen_financiero` | Total histórico, ingresos del mes, MRR | `finanzas.ver` |
+| `cobros_del_periodo`, `tendencia_de_cobros` | Liquidaciones por periodo y últimos 12 meses | `finanzas.ver` |
+| `estado_del_sistema` | Memoria y colas de Redis | `sistema.ver` |
+| `listar_claves_mcp` | Todas las claves (nunca su valor) | `sistema.ver` |
+| `tienda_listar_productos`, `tienda_ver_producto`, `tienda_listar_ventas`, `tienda_ver_venta`, `tienda_resumen_negocio`, `tienda_reporte_ventas`, `tienda_productos_ganadores`, `tienda_listar_cambios_pendientes` | Las 8 de tienda, de **cualquier** tienda, con `tiendaId` | `clientes.ver` (con `costos.ver` de la tienda si la clave tiene `finanzas.ver`) |
+
+* **Dentro de cada tienda** la clave ve lo que su permiso dice, **no** lo que vería un dueño: nunca el teléfono, correo ni dirección de los compradores
+  (`ventas.contacto`), y los costos de envío y cupones solo con `finanzas.ver`.
+* **No salen:** contraseñas, teléfonos de clientes, enlaces a hojas de reportes, el enlace público de las tiendas, la actividad de usuarios.
+* **Fuera de alcance (no escribe):** registrar o borrar pagos, borrar clientes, resetear contraseñas, aprobar o rechazar altas, cambiar roles, limpiar Redis.
+  Una prueba (`platform-tools.spec.ts`) fija la tabla de permisos y que ninguna herramienta lleve nombre de escritura.
+
+## Todas las claves, para el superadmin
+
+Solo rol `admin` (`src/mcp/admin-api-keys.controller.ts`):
+
+* `GET /admin/api-keys?storeId=&kind=&estado=`: **todas** las claves (de tienda y de plataforma), con tienda, quién la creó, permisos, estado
+  (`activa`, `revocada`, `caducada`) y último uso. **Nunca el valor de la clave**: solo se guarda su hash, y ni un superadmin puede recuperarlo.
+* `GET /admin/api-keys/permissions`: permisos de una clave de plataforma, con su descripción y los topes.
+* `POST /admin/api-keys`: crea una clave de plataforma (la caducidad es obligatoria).
+* `DELETE /admin/api-keys/:id`: revoca **cualquier** clave. Queda en el log quién la revocó.
+
+Un superadmin además entra a cualquier tienda como dueño, así que puede crear, listar y revocar las claves de una tienda concreta con las rutas de `/stores/:storeId/api-keys`.
+
+## Cuentas con varias tiendas
+
+Una clave de tienda es de **una** tienda. Quien administra varias tiendas crea una clave en cada una (selecciona la tienda, «Gestionar» → «Conexión MCP») y las conecta
+con nombres distintos, por ejemplo `synkro-jolijoli` y `synkro-chumpi`. Cada una ve solo su tienda. Una clave que cubra varias tiendas de un mismo dueño no existe todavía.
 
 ## Conectar un cliente
 

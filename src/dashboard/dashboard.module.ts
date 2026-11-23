@@ -26,6 +26,6 @@ import { StoresModule } from '../stores/stores.module';
     ],
     controllers: [DashboardController],
     providers: [DashboardService, DashboardInsightsService],
-    exports: [DashboardService],
+    exports: [DashboardService, DashboardInsightsService],
 })
 export class DashboardModule { }

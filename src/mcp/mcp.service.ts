@@ -23,7 +23,8 @@ export const herramientasPermitidas = (acceso: Pick<AccesoMcp, 'permissions'>): 
 @Injectable()
 export class McpService {
     private readonly logger = new Logger(McpService.name);
-    private readonly servicios: ServiciosMcp;
+    /** Los servicios de las herramientas de tienda; el MCP de plataforma los reutiliza. */
+    readonly servicios: ServiciosMcp;
 
     constructor(
         private readonly keys: ApiKeysService,
@@ -67,23 +68,29 @@ export class McpService {
         return servidor;
     }
 
-    async atender(acceso: AccesoMcp, req: any, res: any): Promise<void> {
-        const servidor = this.crearServidor(acceso);
-        const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-        res.on('close', () => {
-            void transporte.close();
-            void servidor.close();
-        });
-        await servidor.connect(transporte);
-        await transporte.handleRequest(req, res, req.body);
+    atender(acceso: AccesoMcp, req: any, res: any): Promise<void> {
+        return atenderMcp(this.crearServidor(acceso), req, res);
     }
 
     private fallo(texto: string) {
-        return { isError: true, content: [{ type: 'text' as const, text: texto }] };
+        return resultadoConError(texto);
     }
 }
 
-function mensajeDe(error: HttpException): string {
+/** Atiende UNA petición con un servidor MCP sin sesión (Streamable HTTP, respuesta JSON). Lo usan el MCP de tienda y el de plataforma. */
+export async function atenderMcp(servidor: McpServer, req: any, res: any): Promise<void> {
+    const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    res.on('close', () => {
+        void transporte.close();
+        void servidor.close();
+    });
+    await servidor.connect(transporte);
+    await transporte.handleRequest(req, res, req.body);
+}
+
+export const resultadoConError = (texto: string) => ({ isError: true, content: [{ type: 'text' as const, text: texto }] });
+
+export function mensajeDe(error: HttpException): string {
     const r: any = error.getResponse();
     const m = typeof r === 'string' ? r : r?.message;
     return Array.isArray(m) ? m.join(' ') : String(m ?? error.message);

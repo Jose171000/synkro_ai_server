@@ -39,6 +39,6 @@ import { UploadModule } from '../upload/upload.module';
     ],
     controllers: [AdminController, BillingController],
     providers: [AdminService, BillingService, SignupsService],
-    exports: [AdminService, TypeOrmModule],
+    exports: [AdminService, BillingService, SignupsService, TypeOrmModule],
 })
 export class AdminModule { }

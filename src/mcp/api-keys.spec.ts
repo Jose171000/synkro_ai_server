@@ -39,7 +39,7 @@ describe('permisos de una clave del MCP', () => {
     });
 });
 
-function montar(opts: { fila?: any; acceso?: any; accesoFalla?: boolean; activas?: number } = {}) {
+function montar(opts: { fila?: any; acceso?: any; accesoFalla?: boolean; activas?: number; usuario?: any } = {}) {
     const filas: any[] = [];
     const repo: any = {
         count: jest.fn().mockResolvedValue(opts.activas ?? 0),
@@ -57,7 +57,8 @@ function montar(opts: { fila?: any; acceso?: any; accesoFalla?: boolean; activas
             return a;
         }),
     };
-    return { servicio: new ApiKeysService(repo, stores), repo, stores, filas };
+    const users: any = { findOne: jest.fn().mockResolvedValue(opts.usuario ?? { id: 'u1', role: 'admin', isActive: true }) };
+    return { servicio: new ApiKeysService(repo, stores, users), repo, stores, users, filas };
 }
 
 describe('ApiKeysService.crear', () => {
@@ -97,7 +98,7 @@ describe('ApiKeysService.crear', () => {
 describe('ApiKeysService.autenticar', () => {
     const CLAVE = 'syk_' + 'a'.repeat(43);
     const fila = (extra: any = {}) => ({
-        id: 'k1', name: 'Clave', keyHash: hashDeClave(CLAVE), permissions: ['productos.ver', 'ventas.ver', 'ventas.contacto'],
+        id: 'k1', name: 'Clave', kind: 'store', keyHash: hashDeClave(CLAVE), permissions: ['productos.ver', 'ventas.ver', 'ventas.contacto'],
         expiresAt: null, revokedAt: null, lastUsedAt: null, store: { id: 's1' }, createdBy: { id: 'u1' }, ...extra,
     });
 
