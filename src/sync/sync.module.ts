@@ -55,6 +55,6 @@ import { Product } from '../products/entities/product.entity';
     ],
     controllers: [SyncController],
     providers: [SyncService, ChangeRequestsService, OrdersQueryService, ManualSalesService, SyncProcessor, MeliApiService, YavendioApiService, YavendioSyncService, YavendioCatalogImportService, YavendioOrdersService, FalabellaApiService, WooApiService, WooPublicacionService, WooCategoriasService, ShopifyApiService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, RipleyPublicacionService, EcommerceSyncService, SaleAlertsService, ProductSheetService, PublicacionMasivaService, ListingActionsService, ProductOverviewService, FalabellaVariantImportService, FalabellaPublicPageService, CredentialsEncryptionService, SectionAccessGuard],
-    exports: [SyncService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, RipleyPublicacionService, EcommerceSyncService],
+    exports: [SyncService, OrdersQueryService, ChangeRequestsService, YavendioApiService, FalabellaApiService, MeliApiService, ProductSheetService, ProductOverviewService, RipleyApiService, RipleyMarcasService, RipleyCatalogoService, RipleyPublicacionService, EcommerceSyncService],
 })
 export class SyncModule { }
