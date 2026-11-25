@@ -1,6 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
-import type { UploadService } from '../upload/upload.service';
 import type { AccesoMcp } from './api-keys.service';
 import { descargarImagenes } from './imagenes-seguras';
 import type { HerramientaMcp, ServiciosMcp } from './mcp-tools';
@@ -26,7 +25,7 @@ const precio = z.number().min(0).max(10_000_000);
 const stock = z.number().int().min(0).max(1_000_000);
 const sku = z.string().trim().min(1).max(60);
 const fotos = z.array(z.string().max(2000)).max(MAX_FOTOS_POR_PRODUCTO)
-    .describe('Enlaces https directos a fotos JPG (máx. 10 MB y 2000×2000 px). No sirven archivos del computador ni fotos pegadas en el chat.');
+    .describe('Las direcciones que da ver_fotos_subidas, o enlaces https directos a fotos JPG (máx. 10 MB y 2000×2000 px). No sirven rutas del computador ni fotos pegadas en el chat: para esas usa crear_enlace_para_fotos.');
 const canales = z.array(z.enum(['mercadolibre', 'falabella', 'ripley', 'woocommerce', 'shopify', 'amazon'])).max(6).optional()
     .describe('Canales a los que se piensa publicar (solo orienta el contenido; NO publica nada).');
 const ejes = z.array(z.object({ name: texto(40), values: z.array(texto(60)).min(1).max(50) })).min(1).max(3)
@@ -41,18 +40,24 @@ const variantes = z.array(z.object({
 
 const scope = (a: AccesoMcp) => ({ userId: a.userId, storeId: a.storeId });
 
-/** Sube a la cuenta de fotos de la app las de los enlaces, y devuelve sus direcciones definitivas. */
-async function subirFotos(upload: UploadService, enlaces: string[]): Promise<string[]> {
+/**
+ * Las direcciones definitivas de las fotos: las que la persona subió con su enlace ya lo son; las demás se descargan y se
+ * suben a la cuenta de fotos de la app.
+ */
+async function subirFotos({ upload, fotos }: ServiciosMcp, a: AccesoMcp, enlaces: string[]): Promise<string[]> {
     if (!enlaces.length) return [];
     if (enlaces.length > MAX_FOTOS_POR_LLAMADA) throw new BadRequestException(`Máximo ${MAX_FOTOS_POR_LLAMADA} fotos distintas por llamada.`);
-    const archivos = await descargarImagenes(enlaces);
-    return (await upload.uploadImages(archivos, 'products')).map((r) => r.secureUrl);
+    const propias = await fotos.yaSubidas(a.storeId, enlaces);
+    const ajenas = enlaces.filter((u) => !propias.has(u));
+    const nuevas = ajenas.length ? (await upload.uploadImages(await descargarImagenes(ajenas), 'products')).map((r) => r.secureUrl) : [];
+    const porEnlace = new Map(ajenas.map((u, i) => [u, nuevas[i]]));
+    return enlaces.map((u) => porEnlace.get(u) ?? u);
 }
 
 /** Las fotos que comparten varias variantes se suben una sola vez. */
-async function subirFotosDeVariantes<T extends { images?: string[] }>(upload: UploadService, lista: T[]) {
+async function subirFotosDeVariantes<T extends { images?: string[] }>(servicios: ServiciosMcp, a: AccesoMcp, lista: T[]) {
     const unicas = [...new Set(lista.flatMap((v) => v.images ?? []))];
-    const subidas = await subirFotos(upload, unicas);
+    const subidas = await subirFotos(servicios, a, unicas);
     const nueva = new Map(unicas.map((u, i) => [u, subidas[i]]));
     return lista.map((v) => ({ ...v, images: (v.images ?? []).map((u) => nueva.get(u)!) }));
 }
@@ -77,7 +82,34 @@ async function exigirSinPublicar({ products }: ServiciosMcp, a: AccesoMcp, id: s
     return estado;
 }
 
+/** Consultar lo subido con un enlace. No cambia nada, pero solo sirve a quien puede crear productos. */
+export const HERRAMIENTAS_DE_FOTOS: HerramientaMcp[] = [
+    {
+        name: 'ver_fotos_subidas',
+        title: 'Ver las fotos subidas',
+        description: 'Las fotos que la persona subió con un enlace de crear_enlace_para_fotos. Usa sus direcciones en images. Si hay varias variantes y los nombres de archivo no dejan claro cuál es cuál, pregúntalo.',
+        permiso: 'productos.editar',
+        input: { subidaId: z.string().uuid() },
+        async ejecutar({ fotos }, a, args) {
+            const lista = await fotos.fotosDe(a.storeId, args.subidaId);
+            return lista.length ? { fotos: lista } : { fotos: [], nota: 'Todavía no se ha subido nada con ese enlace.' };
+        },
+    },
+];
+
 export const HERRAMIENTAS_DE_ESCRITURA: HerramientaDeEscritura[] = [
+    {
+        name: 'crear_enlace_para_fotos',
+        title: 'Enlace para subir fotos',
+        description: 'Crea un enlace de un solo uso (30 minutos) para que la persona suba fotos desde su celular o su PC. Úsalo antes de crear un producto cuando no tenga enlaces públicos de sus fotos. Muéstrale el enlace completo, tal cual.',
+        permiso: 'productos.editar',
+        escribe: true,
+        input: {},
+        resumen: () => ({}),
+        async ejecutar({ fotos }, a) {
+            return fotos.crearEnlace(a);
+        },
+    },
     {
         name: 'crear_producto',
         title: 'Crear un producto',
@@ -97,10 +129,11 @@ export const HERRAMIENTAS_DE_ESCRITURA: HerramientaDeEscritura[] = [
             targetMarketplaces: canales,
         },
         resumen: (x) => ({ name: x.name, sku: x.sku }),
-        async ejecutar({ products, upload }, a, args) {
+        async ejecutar(servicios, a, args) {
+            const { products } = servicios;
             // Antes de subir fotos: un SKU repetido no debe dejar archivos sueltos.
             if (args.sku) await products.assertSkuLibre(args.sku, scope(a));
-            const images = await subirFotos(upload, args.images);
+            const images = await subirFotos(servicios, a, args.images);
             const p: any = await products.create({ ...args, images }, a.userId, a.storeId);
             return { id: p.id, name: p.name, sku: p.sku, price: p.price != null ? Number(p.price) : null, stock: p.stock, fotos: images.length, publicado: false };
         },
@@ -123,10 +156,10 @@ export const HERRAMIENTAS_DE_ESCRITURA: HerramientaDeEscritura[] = [
             variants: variantes,
         },
         resumen: (x) => ({ name: x.name, parentSku: x.parentSku, variantes: x.variants.length }),
-        async ejecutar({ groups, upload }, a, args) {
+        async ejecutar(servicios, a, args) {
             if (!args.variants.some((v: any) => v.images?.length)) throw new BadRequestException('Al menos una variante necesita una foto.');
-            const conFotos = await subirFotosDeVariantes(upload, args.variants as any[]);
-            return vistaDeGrupo(await groups.crear({ ...args, variants: conFotos, generateWithAi: false }, scope(a)));
+            const conFotos = await subirFotosDeVariantes(servicios, a, args.variants as any[]);
+            return vistaDeGrupo(await servicios.groups.crear({ ...args, variants: conFotos, generateWithAi: false }, scope(a)));
         },
     },
     {
@@ -145,7 +178,7 @@ export const HERRAMIENTAS_DE_ESCRITURA: HerramientaDeEscritura[] = [
         resumen: (x) => ({ id: x.id, variantes: x.variants.length }),
         async ejecutar(servicios, a, args) {
             await exigirSinPublicar(servicios, a, args.id);
-            const conFotos = await subirFotosDeVariantes(servicios.upload, args.variants as any[]);
+            const conFotos = await subirFotosDeVariantes(servicios, a, args.variants as any[]);
             return vistaDeGrupo(await servicios.groups.agregarVariantes(args.id, { axes: args.axes, thisVariant: args.thisVariant, variants: conFotos }, scope(a)));
         },
     },

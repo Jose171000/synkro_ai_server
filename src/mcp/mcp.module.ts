@@ -19,6 +19,8 @@ import { McpService } from './mcp.service';
 import { UploadModule } from '../upload/upload.module';
 import { McpWriteLog } from './entities/mcp-write-log.entity';
 import { McpEscriturasService } from './mcp-escrituras.service';
+import { EnlaceDeSubidaGuard, SubidaDeFotosController } from './subida-fotos.controller';
+import { SubidaDeFotosService } from './subida-fotos.service';
 
 /**
  * MCP: el de cada tienda (`/mcp`, claves `syk_`: lectura y, si la clave lo lleva, crear y editar productos sin publicar) y el
@@ -26,7 +28,7 @@ import { McpEscriturasService } from './mcp-escrituras.service';
  */
 @Module({
     imports: [TypeOrmModule.forFeature([StoreApiKey, McpWriteLog, Store, User]), UploadModule, StoresModule, ProductModule, SyncModule, DashboardModule, ReportsModule, AdminModule],
-    controllers: [McpController, McpPlataformaController, ApiKeysController, AdminApiKeysController],
-    providers: [ApiKeysService, McpService, McpPlataformaService, McpEscriturasService],
+    controllers: [McpController, McpPlataformaController, ApiKeysController, AdminApiKeysController, SubidaDeFotosController],
+    providers: [ApiKeysService, McpService, McpPlataformaService, McpEscriturasService, SubidaDeFotosService, EnlaceDeSubidaGuard],
 })
 export class McpModule { }

@@ -23,7 +23,7 @@ describe('/api/v1/mcp/admin (HTTP real)', () => {
     });
 
     beforeAll(async () => {
-        const deTienda = new McpService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+        const deTienda = new McpService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
         const modulo = await Test.createTestingModule({
             controllers: [McpPlataformaController],
             providers: [{ provide: McpPlataformaService, useFactory: () => {

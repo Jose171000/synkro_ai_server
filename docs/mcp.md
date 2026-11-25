@@ -10,7 +10,7 @@ Código: `src/mcp/`. Ninguna herramienta publica, cambia inventario, aprueba ni 
 | 1 | Claves por tienda, `POST /api/v1/mcp`, 8 herramientas de lectura | **Hecha** |
 | 1b | MCP de plataforma para superadmins (`/mcp/admin`, claves `sya_`) y vista de todas las claves | **Hecha** (probada en producción con curl el 2026-11-24) |
 | 2 | Productos: crear (simples y con variantes), editar y completar con IA los que no están en ningún canal | **Hecha** (falta probarla con una clave real) |
-| 2b | Subir fotos desde el celular o la PC con un enlace de un solo uso | Propuesta, sin decidir |
+| 2b | Subir fotos desde el celular o la PC con un enlace de un solo uso | **Hecha** (falta probarla con una clave real) |
 | 3 | Inventario y precios, siempre dejando el cambio pendiente de aprobación | Pendiente |
 | 4 | Canales: publicar, pausar, descuentos, con vista previa y confirmación | Pendiente |
 | 5 | Gestión: ventas manuales, CRM, cobros, registros | Pendiente |
@@ -56,6 +56,8 @@ Solo en el MCP de tienda, solo con `productos.editar` (no va por defecto). Adem�
 
 | Herramienta | Qué hace |
 |---|---|
+| `crear_enlace_para_fotos` | Enlace de un solo uso para subir fotos desde el celular o la PC |
+| `ver_fotos_subidas` | Las direcciones de lo subido con ese enlace (solo consulta) |
 | `crear_producto` | Producto simple, con 1 a 8 fotos |
 | `crear_producto_con_variantes` | Grupo con hasta 50 variantes y 30 fotos distintas; no usa IA |
 | `agregar_variantes` | A un producto o grupo que no está en ningún canal |
@@ -64,11 +66,26 @@ Solo en el MCP de tienda, solo con `productos.editar` (no va por defecto). Adem�
 
 * **«En ningún canal»** = ni el producto ni las variantes de su grupo tienen un vínculo con un canal. Los publicados se editan en la app.
 * **Nada llega a un canal:** estas herramientas llaman a los servicios de productos, no a la sincronización.
-* **Fotos:** enlaces `https` directos a JPG (máx. 10 MB, 2000×2000). Se descargan sin redirecciones y solo desde direcciones públicas (`imagenes-seguras.ts`) y se suben a Cloudinary. No se aceptan archivos ni fotos pegadas en el chat.
+* **Fotos:** enlaces `https` directos a JPG (máx. 10 MB, 2000×2000). Se descargan sin redirecciones y solo desde direcciones públicas (`imagenes-seguras.ts`) y se suben a Cloudinary. No se aceptan archivos ni fotos pegadas en el chat: para esas está el enlace de subida.
 * **Sin duplicados:** la misma creación repetida en 15 minutos devuelve lo ya creado.
 * **Topes:** 30 cambios por hora por clave, 200 al día por tienda y 20 generaciones con IA al día por tienda.
 * **Registro:** tabla `mcp_write_log` (se anota antes de ejecutar). El dueño lo ve en la pestaña «Conexión MCP» (`GET /stores/:storeId/mcp-changes`, últimos 100).
 * Si Redis o el registro fallan, no se escribe.
+
+### Enlace para subir fotos
+
+```
+crear_enlace_para_fotos → https://TU-API/api/v1/mcp/subir-fotos#<secreto>
+la persona abre, elige o toma fotos, «Subir»
+ver_fotos_subidas(subidaId) → direcciones → crear_producto
+```
+
+* El secreto va detrás de `#` (no queda en los registros) y se manda como cabecera. Sirve 30 minutos y se gasta al subir; si la subida falla, sigue valiendo.
+* Antes de recibir un archivo se comprueba que la clave siga activa y su creador conserve `productos.editar`.
+* El navegador convierte cada foto a JPG de hasta 2000×2000, así sirven las del celular. Máximo 30 por enlace.
+* Las fotos subidas se recuerdan 24 horas, solo para esa tienda. Las que no se usen quedan en Cloudinary.
+* Necesita `PUBLIC_API_URL` (o el dominio que da Railway).
+* Código: `subida-fotos.*`.
 
 ## Herramientas de lectura
 

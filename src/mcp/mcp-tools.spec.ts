@@ -56,7 +56,7 @@ describe('cabecera de la clave', () => {
 });
 
 async function conectar(permissions: string[], servicios: any = {}) {
-    const mcp = new McpService({} as any, servicios.products, servicios.orders, servicios.overview, servicios.dashboard, servicios.reports, servicios.changes, servicios.groups, servicios.upload, servicios.escrituras);
+    const mcp = new McpService({} as any, servicios.products, servicios.orders, servicios.overview, servicios.dashboard, servicios.reports, servicios.changes, servicios.groups, servicios.upload, servicios.escrituras, servicios.fotos);
     const acceso: any = { keyId: 'k', keyName: 'Prueba', userId: 'u1', storeId: 's1', role: 'viewer', permissions };
     const [a, b] = InMemoryTransport.createLinkedPair();
     const servidor = mcp.crearServidor(acceso);

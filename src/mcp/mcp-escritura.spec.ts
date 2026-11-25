@@ -119,7 +119,7 @@ describe('fotos por enlace', () => {
 
 describe('herramientas de escritura', () => {
     it('todas exigen productos.editar, que no va por defecto, y ninguna está en el MCP de plataforma', () => {
-        expect(HERRAMIENTAS_DE_ESCRITURA.map((h) => h.name)).toEqual(['crear_producto', 'crear_producto_con_variantes', 'agregar_variantes', 'editar_producto', 'generar_contenido_ia']);
+        expect(HERRAMIENTAS_DE_ESCRITURA.map((h) => h.name)).toEqual(['crear_enlace_para_fotos', 'crear_producto', 'crear_producto_con_variantes', 'agregar_variantes', 'editar_producto', 'generar_contenido_ia']);
         for (const h of HERRAMIENTAS_DE_ESCRITURA) {
             expect(h.permiso).toBe('productos.editar');
             expect(h.escribe).toBe(true);
@@ -134,7 +134,7 @@ describe('herramientas de escritura', () => {
     async function conectar(permissions: string[], servicios: any) {
         const redis = redisFalso();
         const registro = registroFalso();
-        const mcp = new McpService({} as any, servicios.products, {} as any, {} as any, {} as any, {} as any, {} as any, servicios.groups, servicios.upload, new McpEscriturasService(redis as any, registro as any));
+        const mcp = new McpService({} as any, servicios.products, {} as any, {} as any, {} as any, {} as any, {} as any, servicios.groups, servicios.upload, new McpEscriturasService(redis as any, registro as any), servicios.fotos ?? ({ yaSubidas: async () => new Set() } as any));
         const [a, b] = InMemoryTransport.createLinkedPair();
         await mcp.crearServidor({ ...acceso, permissions }).connect(a);
         const cliente = new Client({ name: 'test', version: '1' });

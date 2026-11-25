@@ -11,7 +11,8 @@ import { AccesoMcp, ApiKeysService } from './api-keys.service';
 import { ProductGroupsService } from '../products/product-groups.service';
 import { UploadService } from '../upload/upload.service';
 import { aTexto, HERRAMIENTAS, HerramientaMcp, ServiciosMcp } from './mcp-tools';
-import { HERRAMIENTAS_DE_ESCRITURA, HerramientaDeEscritura } from './mcp-write-tools';
+import { HERRAMIENTAS_DE_ESCRITURA, HERRAMIENTAS_DE_FOTOS, HerramientaDeEscritura } from './mcp-write-tools';
+import { SubidaDeFotosService } from './subida-fotos.service';
 import { McpEscriturasService } from './mcp-escrituras.service';
 
 /** La clave que llega como `Authorization: Bearer syk_...`. */
@@ -22,7 +23,7 @@ export function claveDeLaCabecera(cabecera: string | undefined): string | undefi
 
 /** Las herramientas que esta clave puede usar: solo las de permisos que tiene, para que el modelo no vea ni intente el resto. */
 export const herramientasPermitidas = (acceso: Pick<AccesoMcp, 'permissions'>): HerramientaMcp[] =>
-    [...HERRAMIENTAS, ...HERRAMIENTAS_DE_ESCRITURA].filter((h) => acceso.permissions.includes(h.permiso));
+    [...HERRAMIENTAS, ...HERRAMIENTAS_DE_FOTOS, ...HERRAMIENTAS_DE_ESCRITURA].filter((h) => acceso.permissions.includes(h.permiso));
 
 const esDeEscritura = (h: HerramientaMcp): h is HerramientaDeEscritura => (h as HerramientaDeEscritura).escribe === true;
 
@@ -43,8 +44,9 @@ export class McpService {
         groups: ProductGroupsService,
         upload: UploadService,
         private readonly escrituras: McpEscriturasService,
+        fotos: SubidaDeFotosService,
     ) {
-        this.servicios = { products, orders, overview, dashboard, reports, changes, groups, upload };
+        this.servicios = { products, orders, overview, dashboard, reports, changes, groups, upload, fotos };
     }
 
     autenticar(cabecera: string | undefined) {

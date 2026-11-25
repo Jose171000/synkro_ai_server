@@ -9,6 +9,7 @@ import type { ReportsService } from '../reports/reports.service';
 import type { ChangeRequestsService } from '../sync/change-requests.service';
 import type { ProductGroupsService } from '../products/product-groups.service';
 import type { UploadService } from '../upload/upload.service';
+import type { SubidaDeFotosService } from './subida-fotos.service';
 
 /** Los servicios que usan las herramientas: los mismos que usa la app, sin copias. */
 export interface ServiciosMcp {
@@ -21,6 +22,7 @@ export interface ServiciosMcp {
     /** Solo los usan las herramientas de escritura. */
     groups: ProductGroupsService;
     upload: UploadService;
+    fotos: SubidaDeFotosService;
 }
 
 /**
