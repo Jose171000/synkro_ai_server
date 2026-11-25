@@ -16,14 +16,17 @@ import { McpController } from './mcp.controller';
 import { McpPlataformaController } from './mcp-plataforma.controller';
 import { McpPlataformaService } from './mcp-plataforma.service';
 import { McpService } from './mcp.service';
+import { UploadModule } from '../upload/upload.module';
+import { McpWriteLog } from './entities/mcp-write-log.entity';
+import { McpEscriturasService } from './mcp-escrituras.service';
 
 /**
- * MCP de solo lectura: el de cada tienda (`/mcp`, claves `syk_`) y el de plataforma para superadmins (`/mcp/admin`, claves
- * `sya_`). Ver docs/mcp.md. No toca ningún servicio existente, solo los usa.
+ * MCP: el de cada tienda (`/mcp`, claves `syk_`: lectura y, si la clave lo lleva, crear y editar productos sin publicar) y el
+ * de plataforma para superadmins (`/mcp/admin`, claves `sya_`, solo lectura). Ver docs/mcp.md.
  */
 @Module({
-    imports: [TypeOrmModule.forFeature([StoreApiKey, Store, User]), StoresModule, ProductModule, SyncModule, DashboardModule, ReportsModule, AdminModule],
+    imports: [TypeOrmModule.forFeature([StoreApiKey, McpWriteLog, Store, User]), UploadModule, StoresModule, ProductModule, SyncModule, DashboardModule, ReportsModule, AdminModule],
     controllers: [McpController, McpPlataformaController, ApiKeysController, AdminApiKeysController],
-    providers: [ApiKeysService, McpService, McpPlataformaService],
+    providers: [ApiKeysService, McpService, McpPlataformaService, McpEscriturasService],
 })
 export class McpModule { }

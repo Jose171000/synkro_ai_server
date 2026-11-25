@@ -1,17 +1,20 @@
 # MCP de Synkro
 
-Un servidor MCP dentro de la misma app: un asistente (Claude Desktop, Claude Code, Cursor…) puede **consultar** una tienda de Synkro.
-Código: `src/mcp/`. **Fase 1: solo lectura.** Ninguna herramienta edita, publica ni aprueba nada.
+Un servidor MCP dentro de la misma app: un asistente (Claude Desktop, Claude Code, Cursor…) puede **consultar** una tienda de Synkro y, si la clave lo permite, **crear productos**.
+Código: `src/mcp/`. Ninguna herramienta publica, cambia inventario, aprueba ni borra.
 
 ## Estado
 
 | Fase | Qué es | Estado |
 |---|---|---|
-| 1 | Claves por tienda, `POST /api/v1/mcp`, 8 herramientas de lectura | **Hecha** (falta probarla con un cliente real y la pantalla de claves en la app) |
-| 1b | MCP de plataforma para superadmins (`/mcp/admin`, claves `sya_`) y vista de todas las claves | **Hecha** (falta probar con una clave real y la pantalla de superadmin) |
-| 2 | Escrituras seguras: inventario (respeta el modo revisión), aprobar/rechazar cambios | Pendiente |
-| 3 | Acciones sobre canales (publicar, pausar, descuentos), siempre con vista previa y confirmación | Pendiente; solo si se decide |
-| 4 | OAuth (conectar con un clic, sin copiar claves) | Opcional |
+| 1 | Claves por tienda, `POST /api/v1/mcp`, 8 herramientas de lectura | **Hecha** |
+| 1b | MCP de plataforma para superadmins (`/mcp/admin`, claves `sya_`) y vista de todas las claves | **Hecha** (probada en producción con curl el 2026-11-24) |
+| 2 | Productos: crear (simples y con variantes), editar y completar con IA los que no están en ningún canal | **Hecha** (falta probarla con una clave real) |
+| 2b | Subir fotos desde el celular o la PC con un enlace de un solo uso | Propuesta, sin decidir |
+| 3 | Inventario y precios, siempre dejando el cambio pendiente de aprobación | Pendiente |
+| 4 | Canales: publicar, pausar, descuentos, con vista previa y confirmación | Pendiente |
+| 5 | Gestión: ventas manuales, CRM, cobros, registros | Pendiente |
+| — | OAuth (conectar con un clic, sin copiar claves) | Opcional |
 
 ## Cómo funciona
 
@@ -40,14 +43,34 @@ Las gestiona **solo el dueño** de la tienda (se comprueba por rol, como el equi
 Reglas (`src/mcp/api-keys.service.ts`, fijadas con pruebas):
 
 * Se guarda solo el hash. El prefijo (`syk_` + 8 caracteres) sirve para reconocerla en la lista.
-* **Solo permisos de lectura:** `productos.ver`, `canales.ver`, `ventas.ver`, `ventas.contacto`, `analiticas.ver`, `costos.ver`. Los de escritura se rechazan al crearla.
+* **Permisos posibles:** `productos.ver`, `canales.ver`, `ventas.ver`, `ventas.contacto`, `analiticas.ver`, `costos.ver` y una sola escritura, `productos.editar`. El resto se rechaza al crearla.
 * **Por defecto** lleva `productos.ver`, `canales.ver`, `ventas.ver` y `analiticas.ver`: **sin datos de contacto de clientes ni costos**; hay que pedirlos a propósito.
 * No se le pueden dar permisos que quien la crea no tenga. Lo que falta para un permiso (`ventas.contacto` necesita `ventas.ver`) se agrega solo.
 * **Techo = su creador:** en cada llamada se vuelve a comprobar a quien la creó. Si lo sacan de la tienda o le bajan el rol, la clave pierde poder al instante.
 * Hasta 10 claves activas por tienda; caducidad opcional de 1 a 365 días.
 * Una clave que se filtra se revoca desde la lista; no hay que cambiar nada más.
 
-## Herramientas (fase 1)
+## Escritura de productos (fase 2)
+
+Solo en el MCP de tienda, solo con `productos.editar` (no va por defecto). Además, quien creó la clave debe conservar la sección Productos. El MCP de plataforma no la tiene.
+
+| Herramienta | Qué hace |
+|---|---|
+| `crear_producto` | Producto simple, con 1 a 8 fotos |
+| `crear_producto_con_variantes` | Grupo con hasta 50 variantes y 30 fotos distintas; no usa IA |
+| `agregar_variantes` | A un producto o grupo que no está en ningún canal |
+| `editar_producto` | Solo nombre, descripción, categoría y subcategoría, si no está en ningún canal |
+| `generar_contenido_ia` | La IA completa solo lo vacío, si no está en ningún canal |
+
+* **«En ningún canal»** = ni el producto ni las variantes de su grupo tienen un vínculo con un canal. Los publicados se editan en la app.
+* **Nada llega a un canal:** estas herramientas llaman a los servicios de productos, no a la sincronización.
+* **Fotos:** enlaces `https` directos a JPG (máx. 10 MB, 2000×2000). Se descargan sin redirecciones y solo desde direcciones públicas (`imagenes-seguras.ts`) y se suben a Cloudinary. No se aceptan archivos ni fotos pegadas en el chat.
+* **Sin duplicados:** la misma creación repetida en 15 minutos devuelve lo ya creado.
+* **Topes:** 30 cambios por hora por clave, 200 al día por tienda y 20 generaciones con IA al día por tienda.
+* **Registro:** tabla `mcp_write_log` (se anota antes de ejecutar). El dueño lo ve en la pestaña «Conexión MCP» (`GET /stores/:storeId/mcp-changes`, últimos 100).
+* Si Redis o el registro fallan, no se escribe.
+
+## Herramientas de lectura
 
 Cada una exige el mismo permiso que la app exige para esa información. La tabla está fijada en `src/mcp/mcp-tools.spec.ts`: agregar una herramienta sin permiso o cambiar uno hace fallar las pruebas a propósito. El asistente solo ve las herramientas de sus permisos.
 
@@ -130,5 +153,4 @@ Con otros clientes: URL `https://TU-API/api/v1/mcp`, transporte «Streamable HTT
 * **Datos de clientes finales:** lo que el asistente lee pasa al modelo que use quien tiene la clave. Por eso `ventas.contacto` no va por defecto.
 * **Límite de peticiones:** hoy el del servidor (por IP, 10/s y 120/min). Un límite por clave queda pendiente.
 * **Registro de uso:** cada llamada queda en el log del servidor (herramienta, nombre de la clave y tienda) y la clave guarda su último uso. No entra en «Actividad de usuarios», que mide el uso de la pantalla.
-* **Pendiente de la fase 1:** la pantalla de claves en la app (hoy se gestionan con las rutas de arriba) y probar con un cliente MCP real y una tienda real.
 * Dependencias: `@modelcontextprotocol/sdk` y `zod`. El SDK carga bien bajo CommonJS (comprobado con pruebas de punta a punta).

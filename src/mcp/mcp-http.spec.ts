@@ -24,7 +24,7 @@ describe('POST /api/v1/mcp (HTTP real, sin base de datos)', () => {
             controllers: [McpController],
             providers: [
                 { provide: ApiKeysService, useValue: { autenticar } },
-                { provide: McpService, useFactory: () => new McpService({ autenticar } as any, { findAll } as any, {} as any, {} as any, {} as any, {} as any, {} as any) },
+                { provide: McpService, useFactory: () => new McpService({ autenticar } as any, { findAll } as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any) },
                 { provide: APP_GUARD, useClass: ThrottlerGuard },
             ],
         }).compile();

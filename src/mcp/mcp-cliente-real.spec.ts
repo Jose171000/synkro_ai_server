@@ -24,7 +24,7 @@ describe('cliente MCP real contra el endpoint', () => {
         const modulo = await Test.createTestingModule({
             controllers: [McpController],
             providers: [{ provide: McpService, useFactory: () => {
-                const s = new McpService({} as any, { findAll } as any, {} as any, {} as any, {} as any, { getSalesReport } as any, {} as any);
+                const s = new McpService({} as any, { findAll } as any, {} as any, {} as any, {} as any, { getSalesReport } as any, {} as any, {} as any, {} as any, {} as any);
                 s.autenticar = autenticar as any;
                 return s;
             } }],

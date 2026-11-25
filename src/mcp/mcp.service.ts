@@ -8,7 +8,11 @@ import { DashboardService } from '../dashboard/dashboard.service';
 import { ReportsService } from '../reports/reports.service';
 import { ChangeRequestsService } from '../sync/change-requests.service';
 import { AccesoMcp, ApiKeysService } from './api-keys.service';
+import { ProductGroupsService } from '../products/product-groups.service';
+import { UploadService } from '../upload/upload.service';
 import { aTexto, HERRAMIENTAS, HerramientaMcp, ServiciosMcp } from './mcp-tools';
+import { HERRAMIENTAS_DE_ESCRITURA, HerramientaDeEscritura } from './mcp-write-tools';
+import { McpEscriturasService } from './mcp-escrituras.service';
 
 /** La clave que llega como `Authorization: Bearer syk_...`. */
 export function claveDeLaCabecera(cabecera: string | undefined): string | undefined {
@@ -18,7 +22,9 @@ export function claveDeLaCabecera(cabecera: string | undefined): string | undefi
 
 /** Las herramientas que esta clave puede usar: solo las de permisos que tiene, para que el modelo no vea ni intente el resto. */
 export const herramientasPermitidas = (acceso: Pick<AccesoMcp, 'permissions'>): HerramientaMcp[] =>
-    HERRAMIENTAS.filter((h) => acceso.permissions.includes(h.permiso));
+    [...HERRAMIENTAS, ...HERRAMIENTAS_DE_ESCRITURA].filter((h) => acceso.permissions.includes(h.permiso));
+
+const esDeEscritura = (h: HerramientaMcp): h is HerramientaDeEscritura => (h as HerramientaDeEscritura).escribe === true;
 
 @Injectable()
 export class McpService {
@@ -34,8 +40,11 @@ export class McpService {
         dashboard: DashboardService,
         reports: ReportsService,
         changes: ChangeRequestsService,
+        groups: ProductGroupsService,
+        upload: UploadService,
+        private readonly escrituras: McpEscriturasService,
     ) {
-        this.servicios = { products, orders, overview, dashboard, reports, changes };
+        this.servicios = { products, orders, overview, dashboard, reports, changes, groups, upload };
     }
 
     autenticar(cabecera: string | undefined) {
@@ -48,19 +57,31 @@ export class McpService {
         for (const h of herramientasPermitidas(acceso)) {
             servidor.registerTool(
                 h.name,
-                { title: h.title, description: h.description, inputSchema: h.input, annotations: { readOnlyHint: true, openWorldHint: false } },
+                {
+                    title: h.title,
+                    description: h.description,
+                    inputSchema: h.input,
+                    annotations: esDeEscritura(h)
+                        ? { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+                        : { readOnlyHint: true, openWorldHint: false },
+                },
                 async (args: any) => {
                     try {
                         // Doble comprobación: aunque la herramienta se registró, el permiso se exige también al ejecutarla.
                         if (!acceso.permissions.includes(h.permiso)) return this.fallo('Esta clave no tiene permiso para esta herramienta.');
-                        const resultado = await h.ejecutar(this.servicios, acceso, args);
+                        const hacer = () => h.ejecutar(this.servicios, acceso, args);
+                        const resultado = esDeEscritura(h)
+                            ? await this.escrituras.ejecutar(acceso, { herramienta: h.name, args, resumen: h.resumen(args), unaSolaVez: h.unaSolaVez, usaIa: h.usaIa }, hacer)
+                            : await hacer();
                         this.logger.log(`${h.name} · clave «${acceso.keyName}» · tienda ${acceso.storeId}`);
                         return { content: [{ type: 'text' as const, text: aTexto(resultado) }] };
                     } catch (error: any) {
                         // Los mensajes de la app (en español) se muestran tal cual; cualquier otro error, genérico.
                         if (error instanceof HttpException) return this.fallo(mensajeDe(error));
                         this.logger.error(`${h.name} falló: ${error?.message}`);
-                        return this.fallo('No se pudo completar la consulta. Inténtalo de nuevo.');
+                        return this.fallo(esDeEscritura(h)
+                            ? 'No se pudo completar el cambio. Antes de repetirlo, comprueba con listar_productos si llegó a hacerse.'
+                            : 'No se pudo completar la consulta. Inténtalo de nuevo.');
                     }
                 },
             );

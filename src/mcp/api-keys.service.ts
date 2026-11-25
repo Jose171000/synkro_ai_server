@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { IsNull, Repository } from 'typeorm';
+import { canAccessSection } from '../common/app-sections';
 import { cerrarDependencias, Permiso, PERMISOS } from '../stores/permissions';
 import { StoresService } from '../stores/stores.service';
 import { User } from '../users/entities/user.entity';
@@ -10,12 +11,12 @@ import { StoreApiKey } from './entities/store-api-key.entity';
 import { esPermisoPlataforma, PERMISOS_PLATAFORMA, PERMISOS_PLATAFORMA_POR_DEFECTO, PermisoPlataforma } from './permisos-plataforma';
 
 /**
- * Lo único que una clave del MCP de tienda puede llevar. Es SOLO LECTURA a propósito: ninguna clave puede editar, publicar ni
- * aprobar nada hasta que esas herramientas existan y se decida abrirlas (docs/mcp.md).
+ * Lo único que una clave del MCP de tienda puede llevar. La única escritura es `productos.editar` (crear productos y editar
+ * los que no están en ningún canal); ninguna clave puede publicar, cambiar inventario, aprobar ni borrar (docs/mcp.md).
  */
-export const PERMISOS_MCP: readonly Permiso[] = ['productos.ver', 'canales.ver', 'ventas.ver', 'ventas.contacto', 'analiticas.ver', 'costos.ver'];
+export const PERMISOS_MCP: readonly Permiso[] = ['productos.ver', 'canales.ver', 'ventas.ver', 'ventas.contacto', 'analiticas.ver', 'costos.ver', 'productos.editar'];
 
-/** Lo que lleva una clave de tienda si no se dice otra cosa: sin datos de contacto de clientes ni costos. */
+/** Lo que lleva una clave de tienda si no se dice otra cosa: solo lectura, sin datos de contacto de clientes ni costos. */
 export const PERMISOS_MCP_POR_DEFECTO: readonly Permiso[] = ['productos.ver', 'canales.ver', 'ventas.ver', 'analiticas.ver'];
 
 export const MAX_CLAVES_ACTIVAS = 10;
@@ -164,6 +165,11 @@ export class ApiKeysService {
         return { ...this.presentar(fila), key: clave, warning: 'Guarda esta clave ahora: no se vuelve a mostrar.' };
     }
 
+    /** Lo del MCP de una tienda es solo del dueño. */
+    async exigirDueno(userId: string, storeId: string): Promise<void> {
+        await this.stores.requireAccess(userId, storeId, 'owner');
+    }
+
     async listar(userId: string, storeId: string) {
         await this.stores.requireAccess(userId, storeId, 'owner');
         const filas = await this.keys.find({ where: { kind: 'store', store: { id: storeId } }, order: { createdAt: 'DESC' } });
@@ -199,7 +205,11 @@ export class ApiKeysService {
         if (!acceso) throw mala;
 
         // Si su creador ya no puede ver nada de lo que la clave pedía, no hay nada que ofrecer: se dice claro en vez de callar.
-        const permissions = permisosEfectivosDeClave(fila.permissions, acceso.permissions);
+        let permissions = permisosEfectivosDeClave(fila.permissions, acceso.permissions);
+        // Escribir exige además que la cuenta de quien creó la clave conserve la sección Productos, como en la app.
+        if (permissions.includes('productos.editar') && !(await this.tieneSeccionProductos(fila.createdBy.id))) {
+            permissions = permissions.filter((p) => p !== 'productos.editar');
+        }
         if (!permissions.length) throw new ForbiddenException('Esta clave ya no tiene permisos: quien la creó perdió acceso a lo que permitía.');
 
         this.anotarUso(fila);
@@ -212,6 +222,11 @@ export class ApiKeysService {
             role: acceso.role,
             permissions,
         };
+    }
+
+    private async tieneSeccionProductos(userId: string): Promise<boolean> {
+        const user = await this.users.findOne({ where: { id: userId }, select: { id: true, role: true, allowedSections: true, isActive: true } });
+        return !!user && user.isActive !== false && (user.role === UserRole.ADMIN || canAccessSection(user.allowedSections, 'products'));
     }
 
     // ── Claves de plataforma (superadmin) ────────────────────────

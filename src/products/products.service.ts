@@ -658,6 +658,21 @@ export class ProductsService {
         return this.productRepository.save(product);
     }
 
+    /**
+     * Para quien solo puede tocar lo que no está en ningún canal (el MCP): si el producto, o cualquier variante de su grupo,
+     * tiene un vínculo con un canal.
+     */
+    async estadoParaEditarSinPublicar(id: string, userId: string, storeId: string): Promise<{ name: string; groupId: string | null; vinculado: boolean }> {
+        const propio = await this.buscarProducto(id, userId, storeId);
+        const conGrupo = await this.productRepository.findOne({ where: { id: propio.id }, relations: { group: true } });
+        const groupId = conGrupo?.group?.id ?? null;
+        const ids = groupId
+            ? (await this.productRepository.find({ where: { group: { id: groupId } }, select: { id: true } })).map((p) => p.id)
+            : [propio.id];
+        const vinculos = await this.productRepository.manager.count(ListingLink, { where: ids.map((x) => ({ product: { id: x } })) });
+        return { name: propio.name, groupId, vinculado: vinculos > 0 };
+    }
+
     /** ¿Ya se intentó publicar este producto en algún canal? Desde ahí su SKU no se cambia. */
     private async tienePublicaciones(productId: string): Promise<boolean> {
         return (await this.productRepository.manager.count(ListingLink, { where: { product: { id: productId } } })) > 0;

@@ -18,7 +18,7 @@ const PERMISO_POR_HERRAMIENTA: Record<string, string> = {
 };
 
 describe('herramientas del MCP', () => {
-    it('cada herramienta exige el permiso fijado, y todos son de lectura', () => {
+    it('cada herramienta de lectura exige el permiso fijado', () => {
         expect(Object.fromEntries(HERRAMIENTAS.map((h) => [h.name, h.permiso]))).toEqual(PERMISO_POR_HERRAMIENTA);
         for (const h of HERRAMIENTAS) expect(PERMISOS_MCP).toContain(h.permiso);
     });
@@ -56,7 +56,7 @@ describe('cabecera de la clave', () => {
 });
 
 async function conectar(permissions: string[], servicios: any = {}) {
-    const mcp = new McpService({} as any, servicios.products, servicios.orders, servicios.overview, servicios.dashboard, servicios.reports, servicios.changes);
+    const mcp = new McpService({} as any, servicios.products, servicios.orders, servicios.overview, servicios.dashboard, servicios.reports, servicios.changes, servicios.groups, servicios.upload, servicios.escrituras);
     const acceso: any = { keyId: 'k', keyName: 'Prueba', userId: 'u1', storeId: 's1', role: 'viewer', permissions };
     const [a, b] = InMemoryTransport.createLinkedPair();
     const servidor = mcp.crearServidor(acceso);

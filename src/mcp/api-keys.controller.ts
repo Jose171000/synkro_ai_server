@@ -3,13 +3,14 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ApiKeysService, MAX_DIAS_DE_VIDA, PERMISOS_MCP } from './api-keys.service';
+import { McpEscriturasService } from './mcp-escrituras.service';
 
 export class CreateApiKeyDto {
     @IsString()
     @MaxLength(60)
     name: string;
 
-    /** Solo permisos de lectura (ver `PERMISOS_MCP`). Sin esto, los de por defecto: sin contacto de clientes ni costos. */
+    /** Ver `PERMISOS_MCP`. Sin esto, los de por defecto: solo lectura, sin contacto de clientes ni costos. */
     @IsOptional()
     @IsArray()
     @IsString({ each: true })
@@ -28,10 +29,10 @@ export class CreateApiKeyDto {
 @UseGuards(JwtAuthGuard)
 @Controller('stores')
 export class ApiKeysController {
-    constructor(private readonly keys: ApiKeysService) { }
+    constructor(private readonly keys: ApiKeysService, private readonly escrituras: McpEscriturasService) { }
 
     @Get('mcp/permissions')
-    @ApiOperation({ summary: 'Permisos que puede llevar una clave del MCP (solo lectura)' })
+    @ApiOperation({ summary: 'Permisos que puede llevar una clave del MCP' })
     permisos() {
         return { permissions: PERMISOS_MCP };
     }
@@ -40,6 +41,13 @@ export class ApiKeysController {
     @ApiOperation({ summary: 'Claves del MCP de la tienda (solo el dueño). Nunca incluye la clave completa.' })
     list(@Param('storeId') storeId: string, @Req() req) {
         return this.keys.listar(req.user.id, storeId);
+    }
+
+    @Get(':storeId/mcp-changes')
+    @ApiOperation({ summary: 'Los últimos cambios hechos por asistentes en la tienda (solo el dueño)' })
+    async cambios(@Param('storeId') storeId: string, @Req() req) {
+        await this.keys.exigirDueno(req.user.id, storeId);
+        return this.escrituras.recientes(storeId);
     }
 
     @Post(':storeId/api-keys')

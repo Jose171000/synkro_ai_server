@@ -7,6 +7,8 @@ import type { ProductOverviewService } from '../sync/product-overview.service';
 import type { DashboardService } from '../dashboard/dashboard.service';
 import type { ReportsService } from '../reports/reports.service';
 import type { ChangeRequestsService } from '../sync/change-requests.service';
+import type { ProductGroupsService } from '../products/product-groups.service';
+import type { UploadService } from '../upload/upload.service';
 
 /** Los servicios que usan las herramientas: los mismos que usa la app, sin copias. */
 export interface ServiciosMcp {
@@ -16,11 +18,15 @@ export interface ServiciosMcp {
     dashboard: DashboardService;
     reports: ReportsService;
     changes: ChangeRequestsService;
+    /** Solo los usan las herramientas de escritura. */
+    groups: ProductGroupsService;
+    upload: UploadService;
 }
 
 /**
  * Una herramienta del MCP. `permiso` es OBLIGATORIO y es el mismo permiso que la app exige para esa información: una
- * herramienta sin él no compila, y la prueba `mcp-tools.spec.ts` fija la tabla completa. Hoy todas son de solo lectura.
+ * herramienta sin él no compila, y la prueba `mcp-tools.spec.ts` fija la tabla completa. Las de este archivo son de solo
+ * lectura; las que cambian datos están en `mcp-write-tools.ts`.
  */
 export interface HerramientaMcp {
     name: string;

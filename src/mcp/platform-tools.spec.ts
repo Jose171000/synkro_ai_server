@@ -70,7 +70,7 @@ const UUID = '11111111-1111-4111-8111-111111111111';
 
 async function conectar(permissions: string[], mocks: any = {}) {
     const requireAccess = mocks.requireAccess ?? jest.fn().mockResolvedValue({ role: 'owner' });
-    const deTienda = new McpService({} as any, mocks.products, mocks.orders, mocks.overview, mocks.dashboard, mocks.reports, mocks.changes);
+    const deTienda = new McpService({} as any, mocks.products, mocks.orders, mocks.overview, mocks.dashboard, mocks.reports, mocks.changes, {} as any, {} as any, {} as any);
     const svc = new McpPlataformaService(
         mocks.keys ?? {}, { requireAccess } as any, deTienda, mocks.admin ?? {}, mocks.insights ?? {}, mocks.billing ?? {}, mocks.signups ?? {}, mocks.storeRepo ?? {}, mocks.redis ?? {},
     );

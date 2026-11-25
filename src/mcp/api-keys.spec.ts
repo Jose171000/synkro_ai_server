@@ -5,11 +5,11 @@ import { PERMISOS } from '../stores/permissions';
 const TODOS = [...PERMISOS];
 
 describe('permisos de una clave del MCP', () => {
-    it('solo permite permisos de lectura', () => {
-        for (const p of ['productos.editar', 'inventario.editar', 'canales.publicar', 'cambios.aprobar', 'productos.eliminar']) {
+    it('de escritura solo permite productos.editar', () => {
+        for (const p of ['inventario.editar', 'canales.publicar', 'cambios.aprobar', 'productos.eliminar']) {
             expect(() => permisosParaClave([p], TODOS)).toThrow(BadRequestException);
         }
-        expect(PERMISOS_MCP.every((p) => p.endsWith('.ver') || p === 'ventas.contacto')).toBe(true);
+        expect(PERMISOS_MCP.filter((p) => !p.endsWith('.ver') && p !== 'ventas.contacto')).toEqual(['productos.editar']);
     });
 
     it('por defecto no lleva contacto de clientes ni costos', () => {
@@ -100,6 +100,17 @@ describe('ApiKeysService.autenticar', () => {
     const fila = (extra: any = {}) => ({
         id: 'k1', name: 'Clave', kind: 'store', keyHash: hashDeClave(CLAVE), permissions: ['productos.ver', 'ventas.ver', 'ventas.contacto'],
         expiresAt: null, revokedAt: null, lastUsedAt: null, store: { id: 's1' }, createdBy: { id: 'u1' }, ...extra,
+    });
+
+    it.each([
+        ['con la sección Productos', { role: 'user', allowedSections: ['products'], isActive: true }, true],
+        ['sin la sección Productos', { role: 'user', allowedSections: ['dashboard'], isActive: true }, false],
+        ['desactivado', { role: 'user', allowedSections: [], isActive: false }, false],
+    ])('escribir exige que su creador siga %s', async (_n, usuario, puede) => {
+        const { servicio } = montar({ fila: fila({ permissions: ['productos.ver', 'productos.editar'] }), usuario });
+        const a = await servicio.autenticar(CLAVE);
+        expect(a.permissions.includes('productos.editar')).toBe(puede);
+        expect(a.permissions).toContain('productos.ver');
     });
 
     it('acepta una clave válida y devuelve la tienda y los permisos efectivos', async () => {
