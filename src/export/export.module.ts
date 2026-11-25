@@ -6,10 +6,13 @@ import { AuthModule } from '../auth/auth.module';
 import { StoresModule } from '../stores/stores.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ListingLink } from '../sync/entities/listing-link.entity';
+import { MarketplaceConnection } from '../sync/entities/marketplace-connection.entity';
+import { SyncModule } from '../sync/sync.module';
+import { FichasPorCanalService } from './fichas-por-canal.service';
 
 @Module({
-    imports: [ProductModule, AuthModule, StoresModule, TypeOrmModule.forFeature([ListingLink])],
+    imports: [ProductModule, AuthModule, StoresModule, SyncModule, TypeOrmModule.forFeature([ListingLink, MarketplaceConnection])],
     controllers: [ExportController],
-    providers: [ExportService],
+    providers: [ExportService, FichasPorCanalService],
 })
 export class ExportModule {}

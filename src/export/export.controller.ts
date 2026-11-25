@@ -14,6 +14,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ExportService, ExportFormat } from './export.service';
 import { RequirePermission, RequireStoreRole, StoreAccessGuard } from '../stores/store-access.guard';
 import { ExportQueryDto } from './dto/export-query.dto';
+import { FichasQueryDto } from './dto/fichas-query.dto';
+import { FichasPorCanalService } from './fichas-por-canal.service';
 
 const VALID_FORMATS: ExportFormat[] = ['json', 'csv', 'xlsx'];
 
@@ -23,7 +25,10 @@ const VALID_FORMATS: ExportFormat[] = ['json', 'csv', 'xlsx'];
 @UseGuards(JwtAuthGuard, StoreAccessGuard)
 @RequireStoreRole('viewer')
 export class ExportController {
-    constructor(private readonly exportService: ExportService) {}
+    constructor(
+        private readonly exportService: ExportService,
+        private readonly fichas: FichasPorCanalService,
+    ) {}
 
     @Get('products/:format')
     @RequirePermission('productos.descargar')
@@ -50,6 +55,26 @@ export class ExportController {
         const mapped = this.exportService.mapProductsForExport(products, await this.exportService.listingsDe(products));
 
         return this.sendFile(res, mapped, 'products', 'Products', format as ExportFormat);
+    }
+
+    @Get('channel-sheets')
+    @RequirePermission('productos.descargar')
+    @ApiOperation({
+        summary: 'Exportar las fichas por canal y categoría (Excel)',
+        description: 'Una hoja por canal y categoría, con los atributos propios de cada categoría como columnas. Mismos filtros que la exportación de productos.',
+    })
+    async exportChannelSheets(@Query() filters: FichasQueryDto, @Req() req, @Res() res: Response) {
+        const { canal, ...resto } = filters;
+        const products = await this.exportService.getProductsForExport({ userId: req.user.id, storeId: req.store.storeId }, resto);
+        const buffer = await this.fichas.generar(req.store.storeId, products, await this.exportService.listingsDe(products), canal);
+        const filename = this.exportService.generateFilename(canal ? `fichas_${canal}` : 'fichas_por_canal', 'xlsx');
+
+        res.set({
+            'Content-Type': this.exportService.getContentType('xlsx'),
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Length': buffer.length,
+        });
+        return res.send(buffer);
     }
 
     @Get('ai-content/:format')

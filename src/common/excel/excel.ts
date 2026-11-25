@@ -149,3 +149,39 @@ export async function escribirHoja(
     const salida = await libro.xlsx.writeBuffer();
     return Buffer.from(salida);
 }
+
+export interface HojaDeLibro {
+    nombre: string;
+    columnas: string[];
+    filas: any[][];
+    /** Columnas de la izquierda que quedan fijas al desplazarse. */
+    fijas?: number;
+    /** Celdas que llevan a otra hoja: [fila de datos (desde 0), columna (desde 0), nombre de la hoja]. */
+    enlaces?: [number, number, string][];
+}
+
+/** Crea un .xlsx de varias hojas. Los nombres de hoja ya deben venir válidos y sin repetirse. */
+export async function escribirLibro(hojas: HojaDeLibro[]): Promise<Buffer> {
+    const libro = new ExcelJS.Workbook();
+    libro.created = new Date();
+    const recortar = (v: any) => (typeof v === 'string' && v.length > 32_767 ? v.slice(0, 32_767) : v);
+
+    for (const h of hojas) {
+        const hoja = libro.addWorksheet(h.nombre, { views: [{ state: 'frozen', ySplit: 1, xSplit: h.fijas ?? 0 }] });
+        hoja.addRow(h.columnas);
+        for (const fila of h.filas) hoja.addRow(fila.map(recortar));
+        hoja.getRow(1).font = { bold: true };
+        h.columnas.forEach((titulo, i) => {
+            const largo = h.filas.reduce((max, fila) => Math.max(max, String(fila[i] ?? '').length), titulo.length);
+            hoja.getColumn(i + 1).width = Math.min(largo + 2, 50);
+        });
+        if (h.columnas.length) hoja.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: h.columnas.length } };
+        for (const [fila, columna, destino] of h.enlaces ?? []) {
+            const celda = hoja.getRow(fila + 2).getCell(columna + 1);
+            celda.value = { text: String(celda.value ?? destino), hyperlink: "#'" + destino.replace(/'/g, "''") + "'!A1" };
+            celda.font = { color: { argb: 'FF0563C1' }, underline: true };
+        }
+    }
+
+    return Buffer.from(await libro.xlsx.writeBuffer());
+}
