@@ -10,6 +10,17 @@ import { escribirHoja } from '../common/excel/excel';
 
 export type ExportFormat = 'json' | 'csv' | 'xlsx';
 
+const PARECE_HTML = /<\/?(p|ul|ol|li|br|div|span|h[1-6]|strong|b|em|table|img)\b[^>]*>/i;
+
+/**
+ * La ficha HTML del producto: la guardada (importada de un canal o generada) y, si no hay, la descripción que ya venga escrita en HTML.
+ */
+function fichaHtml(p: Product): string {
+    const guardada = String((p.aiAttributes as any)?.descriptionHtml ?? '');
+    if (guardada.trim()) return guardada;
+    return [p.aiDescription, p.description].find((t) => !!t && PARECE_HTML.test(t)) ?? '';
+}
+
 @Injectable()
 export class ExportService {
     constructor(
@@ -40,7 +51,9 @@ export class ExportService {
             name: p.name,
             sku: p.sku,
             description: p.description,
-            descriptionHtml: p.aiDescription ?? '',
+            // La ficha HTML (la importada del canal o la generada en Synkro) y, aparte, la descripción en texto de la ficha.
+            descriptionHtml: fichaHtml(p),
+            descriptionText: p.aiDescription ?? '',
             category: p.category ?? '',
             subCategory: p.subCategory ?? '',
             categoryFalabellaId: (p.marketplaceIds as any)?.falabella_category_id ?? '',
