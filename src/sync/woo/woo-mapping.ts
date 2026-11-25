@@ -1,3 +1,4 @@
+import { EstadoDeVenta } from '../estado-de-venta';
 import { ChannelListingRow, ChannelOrder } from '../channels/channel-types';
 import { OrderLine } from '../order-details';
 
@@ -159,6 +160,20 @@ export function filasDeProductoWoo(
     return { rows, sinSku };
 }
 
+/**
+ * Estado común según el de WooCommerce. Los que no están aquí (borrador del carrito, papelera, estados de complementos)
+ * no son pedidos que se puedan interpretar y no se registran sin pago.
+ */
+const ESTADOS_WOO: Record<string, EstadoDeVenta> = {
+    pending: 'sin_pagar',
+    'on-hold': 'sin_pagar',
+    processing: 'pendiente',
+    completed: 'entregado',
+    cancelled: 'cancelado',
+    failed: 'cancelado',
+    refunded: 'devuelto',
+};
+
 export function normalizarPedidoWoo(pedido: any): ChannelOrder {
     const facturacion = pedido?.billing ?? {};
     const envioRaw = pedido?.shipping ?? {};
@@ -202,6 +217,7 @@ export function normalizarPedidoWoo(pedido: any): ChannelOrder {
         externalId: String(pedido?.id),
         paid,
         channelStatus: estado,
+        ...(ESTADOS_WOO[estado] ? { saleState: ESTADOS_WOO[estado], registrarSinPago: true } : {}),
         totalAmount: numero(pedido?.total) ?? 0,
         currency: texto(pedido?.currency),
         orderDate: fecha,

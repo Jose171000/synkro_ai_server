@@ -31,7 +31,7 @@ const CANALES: Record<string, string> = {
 };
 export const nombreDeCanal = (id: string) => CANALES[id] ?? id.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
-const ESTADOS_DE_VENTA: Record<string, string> = { pendiente: 'Pendientes', enviado: 'Enviados', entregado: 'Entregados', cancelado: 'Cancelados', devuelto: 'Devueltos' };
+const ESTADOS_DE_VENTA: Record<string, string> = { sin_pagar: 'Sin pagar', pendiente: 'Pendientes', enviado: 'Enviados', entregado: 'Entregados', cancelado: 'Cancelados', devuelto: 'Devueltos' };
 const ORDEN: Record<CriterioDeOrden, string> = { units: 'Unidades vendidas', revenue: 'Ingresos', days: 'Se agota antes' };
 const ESTADO_DE_STOCK: Record<EstadoDeStock, string> = {
     agotado: 'Agotado', critico: 'Crítico', pronto: 'Pronto', suficiente: 'Suficiente', sin_ventas: 'Sin ventas',
@@ -50,7 +50,7 @@ const diasTexto = (g: ProductoGanador) => {
     return e.dias < 1 ? 'Menos de 1 día' : `${Math.round(e.dias)} ${Math.round(e.dias) === 1 ? 'día' : 'días'}`;
 };
 const periodoTexto = (d: DatosDelReporte) => (d.ventas.range.from === d.ventas.range.to ? d.ventas.range.from : `${d.ventas.range.from} al ${d.ventas.range.to}`);
-const filtroEstados = (d: DatosDelReporte) => (d.estados.length ? d.estados.map((e) => ESTADOS_DE_VENTA[e] ?? e).join(', ') : 'Ventas concretadas (sin canceladas ni devueltas)');
+const filtroEstados = (d: DatosDelReporte) => (d.estados.length ? d.estados.map((e) => ESTADOS_DE_VENTA[e] ?? e).join(', ') : 'Ventas concretadas (sin pedidos sin pagar, cancelados ni devueltos)');
 const filtroTexto = (d: DatosDelReporte) => (d.canal ? `${filtroEstados(d)} · solo el canal ${nombreDeCanal(d.canal)}` : filtroEstados(d));
 
 // ── Fotos ────────────────────────────────────────────────────────────────

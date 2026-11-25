@@ -1225,7 +1225,7 @@ export class SyncController {
     @ApiQuery({ name: 'marketplace', required: false })
     @ApiQuery({ name: 'connectionId', required: false })
     @ApiQuery({ name: 'search', required: false, description: 'Cliente, número de pedido, SKU o nombre.' })
-    @ApiQuery({ name: 'status', required: false, description: 'Estado de la venta: pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.' })
+    @ApiQuery({ name: 'status', required: false, description: 'Estado de la venta: sin_pagar, pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.' })
     @ApiQuery({ name: 'shipping', required: false, description: 'Cómo se pagó el envío: comprador, gratis, retiro o sin_dato (varios, separados por coma). Sin valor, todas.' })
     @ApiQuery({ name: 'limit', required: false })
     @ApiQuery({ name: 'offset', required: false })

@@ -25,7 +25,7 @@ describe('reporte de ventas por estado', () => {
         const filtros = condiciones.filter(c => c.sql.includes('saleState'));
         expect(filtros.length).toBeGreaterThanOrEqual(2);
         expect(filtros[0].sql).toContain('NOT IN');
-        expect(filtros[0].params.fuera).toEqual(['cancelado', 'devuelto']);
+        expect(filtros[0].params.fuera).toEqual(['sin_pagar', 'cancelado', 'devuelto']);
         expect(r.statusFilter).toEqual([]);
     });
 
@@ -38,7 +38,7 @@ describe('reporte de ventas por estado', () => {
         expect(filtros[0].params.estados).toEqual(['enviado', 'entregado']);
         expect(r.statusFilter).toEqual(['enviado', 'entregado']);
         expect(r.byStatus.find(e => e.status === 'enviado')).toEqual({ status: 'enviado', orders: 2, sales: 100.5 });
-        expect(r.byStatus.map(e => e.status)).toEqual(['pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto']);
+        expect(r.byStatus.map(e => e.status)).toEqual(['sin_pagar', 'pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto']);
     });
 
     it('con un estado elegido no se mezcla el Google Sheet, que no tiene estado', async () => {

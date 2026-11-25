@@ -174,7 +174,7 @@ export class DashboardInsightsService {
                     jsonb_array_elements(CASE WHEN jsonb_typeof(o.items) = 'array' THEN o.items ELSE '[]'::jsonb END) it
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '30 days'
-                AND o."saleState" NOT IN ('cancelado', 'devuelto')
+                AND o."saleState" NOT IN ('sin_pagar', 'cancelado', 'devuelto')
                 AND COALESCE(it->>'sku', '') <> ''
               GROUP BY it->>'sku', o.marketplace`,
             [scope.storeId],
@@ -250,7 +250,7 @@ export class DashboardInsightsService {
                FROM marketplace_orders o
               WHERE o."storeId" = $1
                 AND o."orderDate" >= NOW() - INTERVAL '15 days'
-                AND o."saleState" NOT IN ('cancelado', 'devuelto')
+                AND o."saleState" NOT IN ('sin_pagar', 'cancelado', 'devuelto')
               GROUP BY dia`,
             [storeId],
         );
@@ -337,7 +337,7 @@ export class DashboardInsightsService {
                         COUNT(*) AS pedidos,
                         COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
                    FROM marketplace_orders o
-                  WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1 AND o."saleState" NOT IN ('cancelado', 'devuelto')
+                  WHERE o."storeId" IS NOT NULL AND o."orderDate" >= $1 AND o."saleState" NOT IN ('sin_pagar', 'cancelado', 'devuelto')
                   GROUP BY o."storeId", dia`,
                 [limaMedianoche(desdeVentas)],
             ),
@@ -363,7 +363,7 @@ export class DashboardInsightsService {
             // El superadmin ve TODO lo que se vendió este mes, de cualquier tienda.
             this.orders.query(
                 `SELECT COUNT(*) AS pedidos, COALESCE(SUM(COALESCE(o."productsAmount", o."totalAmount")), 0) AS importe
-                   FROM marketplace_orders o WHERE o."orderDate" >= $1 AND o."saleState" NOT IN ('cancelado', 'devuelto')`,
+                   FROM marketplace_orders o WHERE o."orderDate" >= $1 AND o."saleState" NOT IN ('sin_pagar', 'cancelado', 'devuelto')`,
                 [inicioDeMesLima(hoy)],
             ),
         ]);

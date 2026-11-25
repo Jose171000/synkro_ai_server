@@ -187,6 +187,7 @@ const TABLA: Record<string, string> = {
     'Dashboard GET /dashboard/insights': 'analiticas.ver',
     'Export GET /export/products/:format': 'productos.descargar',
     'Export GET /export/ai-content/:format': 'productos.descargar',
+    'Export GET /export/channel-sheets': 'productos.descargar',
     'Reports GET /reports/config': 'analiticas.ver',
     'Reports GET /reports/sales': 'analiticas.ver',
     'Reports GET /reports/top-products': 'analiticas.ver',

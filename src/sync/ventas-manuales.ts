@@ -1,5 +1,5 @@
 import * as ExcelJS from 'exceljs';
-import { ESTADOS_DE_VENTA, EstadoDeVenta } from './estado-de-venta';
+import { ESTADOS_MANUALES, EstadoDeVenta } from './estado-de-venta';
 
 /**
  * Ventas de canales que la tienda NO tiene conectados (Ripley, Juntoz, WhatsApp, tienda física…): se registran a mano
@@ -102,7 +102,7 @@ export function leerEstadoManual(v: unknown): EstadoDeVenta | null | 'invalido' 
     const t = texto(v);
     if (!t) return null;
     const e = sinTildes(t).toLowerCase().replace(/s$/, '');
-    const hallado = ESTADOS_DE_VENTA.find(x => x === e);
+    const hallado = ESTADOS_MANUALES.find(x => x === e);
     return hallado ?? 'invalido';
 }
 
@@ -155,7 +155,7 @@ export function ventasDeFilas(filas: Record<string, any>[]): LecturaDeFilas {
         const fecha = leerFechaManual(f.fecha);
         if (fecha === 'invalida') return falla('la fecha debe ser AAAA-MM-DD (por ejemplo 2026-10-25).');
         const estado = leerEstadoManual(f.estado);
-        if (estado === 'invalido') return falla(`el estado debe ser uno de: ${ESTADOS_DE_VENTA.join(', ')}.`);
+        if (estado === 'invalido') return falla(`el estado debe ser uno de: ${ESTADOS_MANUALES.join(', ')}.`);
         const envio = numero(f.envio) ?? 0;
         if (envio < 0) return falla('el envío no puede ser negativo.');
         const envioCubierto = numero(f.envio_cubierto) ?? 0;
@@ -217,11 +217,11 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
     // Listas desplegables (primeras 1000 filas): canal (se puede escribir otro) y estado.
     const listas = libro.addWorksheet('Listas', { state: 'veryHidden' });
     CANALES_SUGERIDOS.forEach((c, i) => { listas.getCell(`A${i + 1}`).value = c.nombre; });
-    ESTADOS_DE_VENTA.forEach((e, i) => { listas.getCell(`B${i + 1}`).value = e; });
+    ESTADOS_MANUALES.forEach((e, i) => { listas.getCell(`B${i + 1}`).value = e; });
     ['SI', 'NO'].forEach((v, i) => { listas.getCell(`C${i + 1}`).value = v; });
     for (let fila = 2; fila <= 1001; fila++) {
         hoja.getCell(`${letra('canal')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$A$1:$A$${CANALES_SUGERIDOS.length}`], showErrorMessage: false };
-        hoja.getCell(`${letra('estado')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$B$1:$B$${ESTADOS_DE_VENTA.length}`], showErrorMessage: true, errorTitle: 'Estado', error: `Usa: ${ESTADOS_DE_VENTA.join(', ')}.` };
+        hoja.getCell(`${letra('estado')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Listas!$B$1:$B$${ESTADOS_MANUALES.length}`], showErrorMessage: true, errorTitle: 'Estado', error: `Usa: ${ESTADOS_MANUALES.join(', ')}.` };
         hoja.getCell(`${letra('descontar_stock')}${fila}`).dataValidation = { type: 'list', allowBlank: true, formulae: ['Listas!$C$1:$C$2'], showErrorMessage: true, errorTitle: 'Descontar stock', error: 'Usa SI o NO.' };
     }
 
@@ -243,7 +243,7 @@ export async function plantillaDeVentas(tienda: string): Promise<Buffer> {
         'precio_unitario: lo que pagó el cliente por UNA unidad, sin el envío. Si lo dejas vacío se usa el precio actual del producto en el catálogo.',
         'envio: lo que el cliente pagó por el envío. Se suma a lo que pagó el cliente en Analíticas, pero NO cuenta para la comisión de la agencia.',
         'envio_cubierto: lo que cubriste tú cuando el envío fue gratis para el cliente (es un costo tuyo; no se suma a lo que pagó el cliente).',
-        `estado: ${ESTADOS_DE_VENTA.join(', ')}. Vacío = entregado. Cancelado y devuelto no cuentan como venta ni descuentan stock.`,
+        `estado: ${ESTADOS_MANUALES.join(', ')}. Vacío = entregado. Cancelado y devuelto no cuentan como venta ni descuentan stock.`,
         'descontar_stock: SI (por defecto) baja el stock del producto y lo actualiza en los canales conectados. NO deja el stock como está',
         '     (úsalo para ventas antiguas que ya están reflejadas en tu stock actual).',
         'moneda: PEN por defecto.',

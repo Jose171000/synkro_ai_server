@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { DeepPartial, IsNull, Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../redis/redis.module';
 import { MarketplaceConnection } from '../entities/marketplace-connection.entity';
@@ -692,8 +692,8 @@ export class EcommerceSyncService implements OnModuleInit {
     /**
      * Registra una venta confirmada y, salvo en el historial, descuenta el stock
      * del producto de cada línea y lo manda a los demás canales. Devuelve true
-     * si era nueva. Una venta no pagada o cancelada no se registra todavía: si
-     * se paga después, la consulta periódica la verá ya confirmada.
+     * si era nueva. Una venta no pagada o cancelada solo se guarda si el canal lo
+     * pide (`registrarSinPago`): se ve en Ventas, sin stock ni avisos, hasta que se pague.
      */
     async aplicarVenta(
         connection: MarketplaceConnection,
@@ -709,40 +709,23 @@ export class EcommerceSyncService implements OnModuleInit {
         if (orden.saleState) {
             const registrada = await this.orders.findOne({ where: { marketplace: canal, externalId, connection: { id: connection.id } } });
             if (registrada) {
+                const sinAplicar = !!(registrada.details as any)?.noAplicada;
+                if (sinAplicar && orden.paid) return this.confirmarPago(connection, registrada, orden, options);
+                // Una venta que ya descontó stock no vuelve a «sin pagar» porque la tienda la ponga en espera.
+                if (!sinAplicar && orden.saleState === 'sin_pagar') return false;
                 await this.reflejarEstado(registrada, orden);
                 return false;
             }
         }
-        if (!orden.paid) return false;
+        if (!orden.paid) return orden.registrarSinPago ? this.guardarSinPago(connection, externalId, orden) : false;
 
         const dedupeKey = `${canal}:order-applied:${connection.id}:${orden.externalId}`;
         const primeraVez = await this.redis.set(dedupeKey, '1', 'EX', ORDER_KEY_TTL_SECONDS, 'NX');
         if (!primeraVez) return false;
 
-        const userId = connection.owner.id;
-        const norm = orden.normalized;
         let guardada: MarketplaceOrder | null = null;
         try {
-            guardada = await this.orders.save(this.orders.create({
-                marketplace: canal,
-                externalId,
-                owner: { id: userId } as any,
-                store: connection.store ? ({ id: connection.store.id } as any) : null,
-                connection: { id: connection.id } as any,
-                totalAmount: orden.totalAmount,
-                productsAmount: importeDeProductos(norm.lines, orden.totalAmount),
-                currency: resolverMoneda(orden.currency, connection.currency),
-                itemsCount: norm.lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0) || 1,
-                items: norm.lines as any,
-                orderNumber: norm.orderNumber,
-                customerName: norm.customerName,
-                shipByDate: norm.shipByDate,
-                details: norm.details as any,
-                status: orden.channelStatus.slice(0, 30),
-                ...(orden.saleState ? { saleState: orden.saleState } : {}),
-                ...(norm.costs ?? {}),
-                orderDate: orden.orderDate,
-            }));
+            guardada = await this.orders.save(this.orders.create(this.datosDeVenta(connection, externalId, orden) as DeepPartial<MarketplaceOrder>));
         } catch (error: any) {
             console.warn(`[Sync] Venta ${externalId} de ${NOMBRES[canal]} no persistida: ${error?.message}`);
             // Si el fallo no es «ya existe», se libera la marca para reintentar en la próxima consulta.
@@ -753,6 +736,78 @@ export class EcommerceSyncService implements OnModuleInit {
         }
         // Una venta de antes de conectar la cuenta es historia: ni correo, ni aviso, ni stock.
         if (options.soloRegistro || ventaAnteriorALaConexion(connection, orden.orderDate)) return true;
+        await this.aplicarEfectos(connection, externalId, orden, guardada);
+        return true;
+    }
+
+    private datosDeVenta(connection: MarketplaceConnection, externalId: string, orden: ChannelOrder): any {
+        const norm = orden.normalized;
+        return {
+            marketplace: connection.marketplace,
+            externalId,
+            owner: { id: connection.owner.id } as any,
+            store: connection.store ? ({ id: connection.store.id } as any) : null,
+            connection: { id: connection.id } as any,
+            totalAmount: orden.totalAmount,
+            productsAmount: importeDeProductos(norm.lines, orden.totalAmount),
+            currency: resolverMoneda(orden.currency, connection.currency),
+            itemsCount: norm.lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0) || 1,
+            items: norm.lines as any,
+            orderNumber: norm.orderNumber,
+            customerName: norm.customerName,
+            shipByDate: norm.shipByDate,
+            details: norm.details as any,
+            status: orden.channelStatus.slice(0, 30),
+            ...(orden.saleState ? { saleState: orden.saleState } : {}),
+            ...(norm.costs ?? {}),
+            orderDate: orden.orderDate,
+        };
+    }
+
+    /** Un pedido sin pago confirmado (o cancelado o fallido): queda a la vista en Ventas, sin tocar stock ni avisar. */
+    private async guardarSinPago(connection: MarketplaceConnection, externalId: string, orden: ChannelOrder): Promise<boolean> {
+        try {
+            const datos = this.datosDeVenta(connection, externalId, orden);
+            await this.orders.save(this.orders.create({ ...datos, details: { ...datos.details, noAplicada: true } } as DeepPartial<MarketplaceOrder>));
+            return true;
+        } catch (error: any) {
+            if (error?.code !== '23505') console.warn(`[Sync] Pedido ${externalId} sin pagar no persistido: ${error?.message}`);
+            return false;
+        }
+    }
+
+    /** Un pedido que estaba guardado sin pago ya se pagó: ahora es una venta, con su aviso y su descuento de stock. */
+    private async confirmarPago(
+        connection: MarketplaceConnection,
+        registrada: MarketplaceOrder,
+        orden: ChannelOrder,
+        options: { soloRegistro: boolean },
+    ): Promise<boolean> {
+        const anterior = ventaAnteriorALaConexion(connection, orden.orderDate);
+        // El historial nunca mueve stock: una venta en curso la confirma la consulta periódica, que sí lo descuenta.
+        if (options.soloRegistro && !anterior) return false;
+
+        const dedupeKey = `${connection.marketplace}:order-applied:${connection.id}:${orden.externalId}`;
+        const primeraVez = await this.redis.set(dedupeKey, '1', 'EX', ORDER_KEY_TTL_SECONDS, 'NX');
+        if (!primeraVez) return false;
+
+        const { owner, store, connection: cuenta, orderDate, externalId, marketplace, ...cambios } = this.datosDeVenta(connection, registrada.externalId, orden);
+        try {
+            await this.orders.update(registrada.id, cambios);
+        } catch (error: any) {
+            console.warn(`[Sync] Pago de ${registrada.externalId} no guardado: ${error?.message}`);
+            await this.redis.del(dedupeKey);
+            return false;
+        }
+        if (!anterior) await this.aplicarEfectos(connection, registrada.externalId, orden, { ...registrada, ...cambios } as MarketplaceOrder);
+        return true;
+    }
+
+    /** El correo, los avisos y el descuento de stock de una venta recién confirmada. */
+    private async aplicarEfectos(connection: MarketplaceConnection, externalId: string, orden: ChannelOrder, guardada: MarketplaceOrder | null): Promise<void> {
+        const canal = connection.marketplace as EcommerceChannel;
+        const userId = connection.owner.id;
+        const norm = orden.normalized;
         if (guardada) void this.saleAlerts.notificar(guardada, NOMBRES[canal]);
 
         const efectos: Record<number, { productId: string; stockBefore: number; stockAfter: number }> = {};
@@ -783,7 +838,6 @@ export class EcommerceSyncService implements OnModuleInit {
                 items: norm.lines.map((l, i) => (efectos[i] ? { ...l, ...efectos[i] } : l)) as any,
             });
         }
-        return true;
     }
 
     /**

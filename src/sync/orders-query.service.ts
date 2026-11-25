@@ -20,7 +20,7 @@ export interface OrdersQuery {
     marketplace?: string;
     connectionId?: string;
     search?: string;
-    /** Estados a mostrar, separados por coma: pendiente, enviado, entregado, cancelado, devuelto. Vacío = todos. */
+    /** Estados a mostrar, separados por coma: sin_pagar, pendiente, enviado, entregado, cancelado, devuelto. Vacío = todos. */
     status?: string;
     /** Cómo se pagó el envío, separados por coma: comprador, gratis, retiro, sin_dato. Vacío = todos. */
     shipping?: string;

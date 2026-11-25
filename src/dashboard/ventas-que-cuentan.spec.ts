@@ -21,7 +21,7 @@ describe('las ventas canceladas y devueltas no cuentan para el cobro ni para los
         expect(importe).toBe(100);
         const filtro = condiciones.find(c => c.sql.includes('saleState'));
         expect(filtro?.sql).toContain('NOT IN');
-        expect(filtro?.params.fuera).toEqual(['cancelado', 'devuelto']);
+        expect(filtro?.params.fuera).toEqual(['sin_pagar', 'cancelado', 'devuelto']);
     });
 
     it('los pedidos e importe del mes de una tienda también los dejan fuera', async () => {
@@ -29,6 +29,6 @@ describe('las ventas canceladas y devueltas no cuentan para el cobro ni para los
         const servicio: any = Object.create(DashboardService.prototype);
         servicio.orders = { createQueryBuilder: () => qb };
         await servicio.sumarVentas('t1', new Date('2026-10-01'));
-        expect(condiciones.find(c => c.sql.includes('saleState'))?.params.fuera).toEqual(['cancelado', 'devuelto']);
+        expect(condiciones.find(c => c.sql.includes('saleState'))?.params.fuera).toEqual(['sin_pagar', 'cancelado', 'devuelto']);
     });
 });

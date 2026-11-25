@@ -1,14 +1,18 @@
 /**
  * Estado de una venta, igual para todos los canales. Cada canal usa sus propias palabras
  * (Falabella: pending, ready_to_ship, shipped, delivered, canceled, returned…; Mercado Libre: paid + el estado del envío),
- * así que se reducen a cinco para poder filtrar y contar sin saber de qué canal viene.
+ * así que se reducen a cinco para poder filtrar y contar sin saber de qué canal viene. El sexto, «sin_pagar», es un pedido de
+ * una tienda propia (WooCommerce) cuyo pago aún no se confirma: se ve en Ventas pero todavía no es una venta.
  */
-export type EstadoDeVenta = 'pendiente' | 'enviado' | 'entregado' | 'cancelado' | 'devuelto';
+export type EstadoDeVenta = 'sin_pagar' | 'pendiente' | 'enviado' | 'entregado' | 'cancelado' | 'devuelto';
 
-export const ESTADOS_DE_VENTA: EstadoDeVenta[] = ['pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto'];
+export const ESTADOS_DE_VENTA: EstadoDeVenta[] = ['sin_pagar', 'pendiente', 'enviado', 'entregado', 'cancelado', 'devuelto'];
 
-/** Estados que NO cuentan como venta en los totales ni en el cobro a los clientes: la venta no se concretó o se devolvió. */
-export const ESTADOS_QUE_NO_CUENTAN: EstadoDeVenta[] = ['cancelado', 'devuelto'];
+/** Los que se pueden elegir al registrar una venta a mano o por Excel. */
+export const ESTADOS_MANUALES: EstadoDeVenta[] = ESTADOS_DE_VENTA.filter((e) => e !== 'sin_pagar');
+
+/** Estados que NO cuentan como venta en los totales ni en el cobro a los clientes: la venta no se pagó, no se concretó o se devolvió. */
+export const ESTADOS_QUE_NO_CUENTAN: EstadoDeVenta[] = ['sin_pagar', 'cancelado', 'devuelto'];
 
 /** Estados de los que una venta ya no suele salir: no vale la pena volver a consultarla al canal. */
 export const ESTADOS_FINALES: EstadoDeVenta[] = ['entregado', 'cancelado', 'devuelto'];
@@ -31,7 +35,7 @@ function deUnaPalabra(p: string): EstadoDeVenta {
 }
 
 /** Cuánto ha avanzado cada estado: una venta con artículos en estados distintos cuenta como la parte menos avanzada. */
-const AVANCE: Record<EstadoDeVenta, number> = { pendiente: 0, enviado: 1, entregado: 2, cancelado: -1, devuelto: -1 };
+const AVANCE: Record<EstadoDeVenta, number> = { sin_pagar: -1, pendiente: 0, enviado: 1, entregado: 2, cancelado: -1, devuelto: -1 };
 
 /**
  * Resume en un estado lo que dice el canal. Acepta varias palabras (Falabella manda una por artículo: «pending, shipped»).

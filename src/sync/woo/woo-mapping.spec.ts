@@ -1,3 +1,4 @@
+import { normalizarPedidoWoo as pedidoWooPorEstado } from './woo-mapping';
 import { filasDeProductoWoo, normalizarPedidoWoo } from './woo-mapping';
 
 /**
@@ -241,5 +242,14 @@ describe('precio pagado por los productos (base de la comisión)', () => {
     it('con precios sin impuesto, el impuesto no cuenta como precio del producto', () => {
         const o = normalizarPedidoWoo(pedido({ prices_include_tax: false }));
         expect(o.normalized.lines[0].unitPrice).toBeCloseTo(42.375, 3);
+    });
+});
+
+describe('estado de un pedido de WooCommerce', () => {
+    it('los pedidos sin pago se registran como «sin pagar» o «cancelado»; el borrador del carrito no', () => {
+        const estado = (status: string) => pedidoWooPorEstado({ id: 1, status }).saleState;
+        expect([estado('pending'), estado('on-hold'), estado('processing'), estado('completed'), estado('cancelled'), estado('failed'), estado('refunded')])
+            .toEqual(['sin_pagar', 'sin_pagar', 'pendiente', 'entregado', 'cancelado', 'cancelado', 'devuelto']);
+        expect(pedidoWooPorEstado({ id: 1, status: 'checkout-draft' }).registrarSinPago).toBeUndefined();
     });
 });

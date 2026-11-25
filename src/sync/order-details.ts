@@ -43,6 +43,8 @@ export interface OrderLine {
 }
 
 export interface OrderDetails {
+    /** Se guardó sin pago confirmado: nunca descontó stock ni avisó. Se quita al confirmarse el pago. */
+    noAplicada?: boolean;
     customer: {
         name: string | null;
         email: string | null;

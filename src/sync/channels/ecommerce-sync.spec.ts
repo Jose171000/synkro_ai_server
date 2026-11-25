@@ -465,6 +465,54 @@ describe('ventas', () => {
     });
 });
 
+describe('WooCommerce: pedidos sin pago confirmado', () => {
+    const sinPagar = (over: Partial<ChannelOrder> = {}) =>
+        venta({ paid: false, channelStatus: 'pending', saleState: 'sin_pagar', registrarSinPago: true, ...over });
+    const preparar = () => {
+        const productos = [{ id: 'p1', sku: 'REL-01', name: 'Reloj', stock: 10, store: { id: 't1' }, owner: { id: 'u1' } }];
+        return { ...construir({ productos, conexiones: [cuenta()] }), productos };
+    };
+
+    it('se ven en Ventas, sin descontar stock ni avisar, y no se duplican', async () => {
+        const { service, ventas, avisos, productos } = preparar();
+        expect(await service.aplicarVenta(cuenta() as any, sinPagar(), { soloRegistro: false })).toBe(true);
+        expect(await service.aplicarVenta(cuenta() as any, sinPagar(), { soloRegistro: false })).toBe(false);
+        expect(ventas).toHaveLength(1);
+        expect(ventas[0].saleState).toBe('sin_pagar');
+        expect(productos[0].stock).toBe(10);
+        expect(avisos).toHaveLength(0);
+
+        await service.aplicarVenta(cuenta() as any, sinPagar({ channelStatus: 'cancelled', saleState: 'cancelado' }), { soloRegistro: false });
+        expect(ventas[0].saleState).toBe('cancelado');
+        expect(productos[0].stock).toBe(10);
+    });
+
+    it('al confirmarse el pago pasan a venta: descuentan stock y avisan una sola vez', async () => {
+        const { service, ventas, avisos, productos } = preparar();
+        await service.aplicarVenta(cuenta() as any, sinPagar(), { soloRegistro: false });
+        const pagada = venta({ saleState: 'pendiente', registrarSinPago: true });
+
+        // El historial no mueve stock: la deja para la consulta periódica.
+        expect(await service.aplicarVenta(cuenta() as any, pagada, { soloRegistro: true })).toBe(false);
+        expect(await service.aplicarVenta(cuenta() as any, pagada, { soloRegistro: false })).toBe(true);
+        await service.aplicarVenta(cuenta() as any, pagada, { soloRegistro: false });
+
+        expect(ventas).toHaveLength(1);
+        expect(ventas[0].saleState).toBe('pendiente');
+        expect(ventas[0].details.noAplicada).toBeUndefined();
+        expect(productos[0].stock).toBe(8);
+        expect(avisos.length).toBeGreaterThan(0);
+    });
+
+    it('una venta ya pagada no vuelve a «sin pagar» porque la tienda la ponga en espera', async () => {
+        const { service, ventas, productos } = preparar();
+        await service.aplicarVenta(cuenta() as any, venta({ saleState: 'pendiente', registrarSinPago: true }), { soloRegistro: false });
+        await service.aplicarVenta(cuenta() as any, sinPagar({ channelStatus: 'on-hold' }), { soloRegistro: false });
+        expect(ventas[0].saleState).toBe('pendiente');
+        expect(productos[0].stock).toBe(8);
+    });
+});
+
 describe('registro en SyncService', () => {
     it('se da de alta para los tres canales al arrancar', () => {
         const { service, sync } = construir();

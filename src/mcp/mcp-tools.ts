@@ -44,7 +44,7 @@ export const MAX_CARACTERES = 60_000;
 export const MAX_POR_PAGINA = 50;
 
 const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa el formato AAAA-MM-DD').optional();
-const estadoDeVenta = z.string().max(80).optional().describe('pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.');
+const estadoDeVenta = z.string().max(80).optional().describe('sin_pagar, pendiente, enviado, entregado, cancelado o devuelto (varios, separados por coma). Sin valor, todas.');
 const tope = (por: number) => z.number().int().min(1).max(MAX_POR_PAGINA).optional().describe(`Cuántos devolver (máximo ${MAX_POR_PAGINA}, por defecto ${por}).`);
 
 const acceso = (a: AccesoMcp) => ({ role: a.role, permissions: a.permissions });

@@ -124,7 +124,7 @@ describe('filtro por estado de la venta', () => {
     it('devuelve cuántas ventas hay en cada estado (con los demás filtros) y el estado de cada venta', async () => {
         const { service } = construir([{ ...ORDEN, saleState: 'enviado' }]);
         const r = await service.list('t1', 'owner', {});
-        expect(r.porEstado).toEqual({ pendiente: 3, enviado: 2, entregado: 0, cancelado: 0, devuelto: 0 });
+        expect(r.porEstado).toEqual({ sin_pagar: 0, pendiente: 3, enviado: 2, entregado: 0, cancelado: 0, devuelto: 0 });
         expect(r.items[0].saleState).toBe('enviado');
     });
 });

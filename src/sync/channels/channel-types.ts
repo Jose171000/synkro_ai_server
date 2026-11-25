@@ -82,6 +82,8 @@ export interface ChannelOrder {
      * guarda su estado y los cambios de estado de una venta ya registrada se reflejan en cada consulta.
      */
     saleState?: EstadoDeVenta;
+    /** El pedido se guarda aunque no esté pagado (para verlo en Ventas), sin stock ni avisos hasta que se confirme el pago. */
+    registrarSinPago?: boolean;
     /** Envío y cupones de la venta, si el canal los informa. */
     costs?: CostosDeVenta;
     totalAmount: number;
