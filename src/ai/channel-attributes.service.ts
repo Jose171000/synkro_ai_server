@@ -4,7 +4,7 @@ import { In, Repository } from 'typeorm';
 import { CategoryAttribute, MarketplaceCategory } from '../categories/entities/marketplace-category.entity';
 import { MarketplaceValueList } from '../categories/entities/marketplace-value-list.entity';
 import { CategorySeederService } from '../categories/category-seeder.service';
-import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, esAtributoDeSistema, limiteDeLongitud } from '../sync/falabella/falabella-fields';
 import { MeliApiService } from '../sync/meli/meli-api.service';
 import { FalabellaApiService, FalabellaCredentials } from '../sync/falabella/falabella-api.service';
 import { SyncService } from '../sync/sync.service';
@@ -37,6 +37,7 @@ export function atributosDeMeli(crudos: any[], maxOpcionales = MAX_OPCIONALES): 
     const mapear = (a: any): CategoryAttribute => {
         const opciones = Array.isArray(a.values) ? a.values.map((v: any) => v?.name).filter(Boolean).slice(0, MAX_OPCIONES) : [];
         const unidades = Array.isArray(a.allowed_units) ? a.allowed_units.map((u: any) => u?.name).filter(Boolean) : [];
+        const maximo = !opciones.length && a.value_type !== 'number' ? Number(a.value_max_length) || 0 : 0;
         const partes = [a.name, a.hint, unidades.length ? `unidades: ${unidades.join('/')}` : null, a.value_type === 'number' ? 'responde SOLO con un número, sin texto ni unidad' : null].filter(Boolean);
         return {
             name: a.id,
@@ -44,6 +45,7 @@ export function atributosDeMeli(crudos: any[], maxOpcionales = MAX_OPCIONALES): 
             example: opciones[0] ?? '',
             isRequired: !!a.tags?.required,
             ...(a.value_type ? { valueType: String(a.value_type) } : {}),
+            ...(maximo > 0 ? { maxLength: maximo } : {}),
             ...(opciones.length ? { options: opciones } : {}),
         };
     };
@@ -225,6 +227,7 @@ export class ChannelAttributesService {
                         example: a.options?.[0] ?? '',
                         isRequired: !!a.isMandatory,
                         ...(a.options?.length ? { options: a.options.slice(0, MAX_OPCIONES_FALABELLA) } : {}),
+                        ...(!a.options?.length && limiteDeLongitud(a, null) ? { maxLength: limiteDeLongitud(a, null) } : {}),
                     }));
                 return lista.length ? lista : null;
             }

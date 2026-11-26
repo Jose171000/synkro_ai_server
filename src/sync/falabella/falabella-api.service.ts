@@ -66,6 +66,8 @@ export interface FalabellaAttribute {
     options: string[];
     /** Explicación que Falabella da del atributo (unidades, formato…); ayuda a llenarlo bien. */
     description: string;
+    /** Máximo de caracteres, si Falabella lo declara. */
+    maxLength?: number;
 }
 
 export interface FalabellaOrderItem {
@@ -624,6 +626,7 @@ export class FalabellaApiService {
             description: String(a.Description ?? a.Tooltip ?? a.Help ?? a.HelpText ?? '').trim(),
             isMandatory: String(a.isMandatory ?? a.IsMandatory ?? '0') === '1',
             inputType: a.InputType ?? '',
+            ...(Number(a.MaxLength) > 0 ? { maxLength: Number(a.MaxLength) } : {}),
             options: [].concat(a.Options?.Option ?? [])
                 .filter(Boolean)
                 .map((o: any) => o?.Name ?? o?.GlobalIdentifier)

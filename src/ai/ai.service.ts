@@ -1,3 +1,4 @@
+import { acortarALoPermitido, notaDeLargo } from './largos-de-atributos';
 import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { GenerateListingsDto } from './dto/generate-listings.dto';
 import { MARKETPLACE_PROMPT_RULES } from './marketplace.constants';
@@ -242,6 +243,8 @@ export class AiService {
           { role: 'user', content: generationPrompt }
         ]
       }));
+
+      for (const [canal, requisitos] of Object.entries(categoryRequirements)) acortarALoPermitido(finalJson?.[canal]?.attributes, requisitos);
 
       // Ripley solo acepta EXACTAMENTE uno de los valores de sus listas: lo que escribió la IA se lleva a uno de ellos, y lo que no
       // tiene equivalente se quita para que quede como dato faltante (no se manda un valor que Ripley rechazaría).
@@ -841,7 +844,7 @@ Responde solo un JSON: { "consultas": ["...", "..."] }`,
     // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
     if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[], error: undefined as string | undefined };
     try {
-      const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ${a.options.length > 120 ? 'LISTA CERRADA (algunas opciones): ' + a.options.slice(0, 120).join(' | ') + ' … Escribe el valor más cercano; se ajustará a la lista.' : 'ELIGE EXACTAMENTE UNO DE: ' + a.options.join(' | ')}` : ''}`).join('\n');
+      const lista = atributos.map(a => `- "${a.name}" (${a.isRequired ? 'OBLIGATORIO' : 'opcional'}): ${a.description}${a.options?.length ? ` — ${a.options.length > 120 ? 'LISTA CERRADA (algunas opciones): ' + a.options.slice(0, 120).join(' | ') + ' … Escribe el valor más cercano; se ajustará a la lista.' : 'ELIGE EXACTAMENTE UNO DE: ' + a.options.join(' | ')}` : ''}${notaDeLargo(a)}`).join('\n');
       const r = await this.openai.chat.completions.create({
         model: modeloDeepseek(),
         response_format: { type: 'json_object' },
@@ -896,6 +899,7 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
           values[a.name] = String(v);
         }
       }
+      acortarALoPermitido(values, atributos);
       // Cero datos puede ser normal (lo que queda son garantías o certificaciones que no se deducen): no se trata como fallo.
       return { values, estimated, error: undefined as string | undefined };
     } catch (error: any) {
@@ -1089,13 +1093,13 @@ ${extractedAttributes ? '- Atributos extraídos: ' + JSON.stringify(extractedAtt
               ? '[OBLIGATORIOS — complétalos SIEMPRE. Si no se deduce del producto, ESTIMA el valor más probable (si hay lista de opciones, la más cercana; si no, un valor genérico típico) y añade el nombre de ese atributo a "_estimated"]'
               : '[OBLIGATORIOS — complétalos con la información del producto. Si NO se puede deducir con certeza, devuelve null: NUNCA inventes un valor]'}:\n`;
             attributeBlock += required.map((a: CategoryAttribute) =>
-              `      • "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}`
+              `      • "${a.name}": ${a.description}${a.options?.length ? ` — ELIGE EXACTAMENTE UNO DE: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}${notaDeLargo(a)}`
             ).join('\n');
           }
           if (optional.length > 0) {
             attributeBlock += `\n    [OPCIONALES — completa si puedes inferirlos del producto]:\n`;
             attributeBlock += optional.map((a: CategoryAttribute) =>
-              `      ◦ "${a.name}": ${a.description}${a.options?.length ? ` — si lo completas, elige uno de: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}`
+              `      ◦ "${a.name}": ${a.description}${a.options?.length ? ` — si lo completas, elige uno de: ${a.options.join(' | ')}` : ` (ejemplo: "${a.example}")`}${notaDeLargo(a)}`
             ).join('\n');
           }
 

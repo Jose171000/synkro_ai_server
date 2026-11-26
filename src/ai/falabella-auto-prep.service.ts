@@ -13,7 +13,7 @@ import { FalabellaApiService } from '../sync/falabella/falabella-api.service';
 import { AiService } from './ai.service';
 import { ChannelAttributesService } from './channel-attributes.service';
 import { MAX_IMAGES, ProductVision, ProductVisionService } from './product-vision.service';
-import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema } from '../sync/falabella/falabella-fields';
+import { ATRIBUTOS_DE_SISTEMA, claveDeAtributo, esAtributoDeSistema, limiteDeLongitud } from '../sync/falabella/falabella-fields';
 import { extraerUrlsDeImagen, quitarUrls } from './description-html';
 import { huellaDeFotos, necesitaVision } from './vision-fotos';
 import { marcaMasUsada } from '../products/contenido-de-grupo';
@@ -460,6 +460,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
                 example: a.options?.[0] ?? '',
                 isRequired: a.isMandatory,
                 ...(a.options?.length ? { options: a.options } : {}),
+                ...(!a.options?.length && limiteDeLongitud(a, attrs) ? { maxLength: limiteDeLongitud(a, attrs) } : {}),
             });
         }
 

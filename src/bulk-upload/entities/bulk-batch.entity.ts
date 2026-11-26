@@ -16,6 +16,10 @@ export class BulkBatch {
     @Column('uuid', { nullable: true })
     storeId: string | null;
 
+    /** Nombre del Excel que se subió (las cargas antiguas no lo tienen). */
+    @Column({ type: 'varchar', length: 200, nullable: true })
+    fileName: string | null;
+
     /** Productos que entraron a la cola (no cuenta las filas rechazadas). */
     @Column('int', { default: 0 })
     total: number;

@@ -1,7 +1,7 @@
 import {
     Controller, Post, Get,
     UseInterceptors, UploadedFile, UploadedFiles, Res,
-    BadRequestException, NotFoundException, Param,
+    BadRequestException, NotFoundException, Param, ParseUUIDPipe,
     HttpCode, HttpStatus, UseGuards, Req,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/platform-express';
@@ -10,7 +10,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import type { Response } from 'express';
 import { leerPrimeraHoja, escribirHoja } from '../common/excel/excel';
-import { COLUMNAS, MAX_FOTOS, claveDeRuta, esJpg, esUrl, fotosDeCarpeta, leerFecha, leerPrecio, leerStock, partirLista } from './bulk-products';
+import { COLUMNAS, MAX_FOTOS, claveDeRuta, esJpg, esUrl, esUrlSinExtension, fotosDeCarpeta, leerFecha, leerPrecio, leerStock, partirLista } from './bulk-products';
 import * as AdmZip from 'adm-zip';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -57,6 +57,13 @@ function renglonesDelTrabajo(trabajo: any): { sku: string; payload: Record<strin
 
 /** Cuántos productos lleva un trabajo (un grupo cuenta cada variante). */
 const productosDelTrabajo = (trabajo: any): number => (trabajo?.tipo === 'grupo' ? trabajo.variants.length : 1);
+
+/** El nombre del archivo subido: multer lo entrega como latin1 y las tildes llegan rotas. */
+function nombreDelExcel(original: string | undefined): string {
+    const crudo = String(original ?? '');
+    const utf8 = Buffer.from(crudo, 'latin1').toString('utf8');
+    return utf8.includes('\uFFFD') ? crudo : utf8;
+}
 
 @ApiTags('bulk-upload')
 @ApiBearerAuth()
@@ -111,6 +118,11 @@ export class BulkUploadController {
 
         const urls: string[] = [];
         for (const ruta of lista) {
+            // Un enlace sin extensión no dice su formato: se abre y, si es JPG, se guarda una copia propia terminada en .jpg.
+            if (esUrlSinExtension(ruta)) {
+                urls.push(await this.uploadService.copiarJpgExterno(ruta.trim()));
+                continue;
+            }
             if (!esJpg(ruta)) throw new Error(`la foto "${ruta}" no es JPG: solo se aceptan .jpg o .jpeg`);
             if (esUrl(ruta)) {
                 urls.push(await this.uploadService.validateExternalUrl(ruta.trim()));
@@ -243,6 +255,8 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             // 1) Datos de cada fila. Cada SKU es único: se descartan los repetidos dentro del Excel y los que ya existen.
             const skusDelExcel = rows.map((row: any) => this.getVal(row, COLUMNAS.sku) ?? '');
             const existentes = await this.productsService.skusExistentes(scope, skusDelExcel);
+            // Los que otra carga aún no terminó de crear tampoco están libres.
+            const enCola = await this.bulkBatch.skusEnCola(req.user.id, storeId);
             const otrosSkus = new Set(skusDelExcel.map(x => claveDeRuta(x)).filter(Boolean));
             const vistos = new Map<string, number>();
             type Fila = { i: number; grupo: string; sku: string; precio: number; precioDescuento: number | null; desde: string | null; hasta: string | null; stock: number; nombre: string; descripcion: string; fotos?: string; canales: string[]; ejes: { nombre: string; valor: string }[] };
@@ -254,6 +268,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 if (sku) {
                     const clave = sku.toLowerCase();
                     if (existentes.has(clave)) return rechazar(i, `el SKU ${sku} ya existe en tus productos`);
+                    if (enCola.has(clave)) return rechazar(i, `el SKU ${sku} está en una carga que todavía se está procesando`);
                     if (vistos.has(clave)) return rechazar(i, `el SKU ${sku} está repetido en el Excel (también en la fila ${vistos.get(clave)! + 2})`);
                     vistos.set(clave, i);
                 }
@@ -306,6 +321,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 if (caidas.length) motivo = `el producto con variantes ${g.codigo} no se creó porque ${caidas.length === 1 ? 'la fila' : 'las filas'} ${caidas.map((i) => i + 2).join(', ')} ${caidas.length === 1 ? 'tiene' : 'tienen'} un error (se crea completo o no se crea)`;
                 else if (!storeId) motivo = `el producto con variantes ${g.codigo} necesita una tienda activa`;
                 else if (skusEscritos.has(codigo)) motivo = `el sku_padre ${g.codigo} es también el SKU de una fila del Excel: el código del grupo debe ser distinto de los SKU de las variantes`;
+                else if (enCola.has(codigo)) motivo = `el sku_padre ${g.codigo} está en una carga que todavía se está procesando`;
                 else if (codigosOcupados.has(codigo)) motivo = `el sku_padre ${g.codigo} ya existe en tu tienda (como SKU de un producto o código de otro grupo): usa otro código`;
                 if (motivo) descartar(filas, motivo);
                 return !motivo;
@@ -315,12 +331,12 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const sinSku = sueltas.filter((f) => !f.sku);
             const skusGenerados: { fila: number; sku: string }[] = [];
             if (sinSku.length) {
-                const nuevos = await this.skuGenerator.siguientes(scope, sinSku.length, new Set([...vistos.keys(), ...grupos.map((g) => g.codigo.toLowerCase())]));
+                const nuevos = await this.skuGenerator.siguientes(scope, sinSku.length, new Set([...vistos.keys(), ...grupos.map((g) => g.codigo.toLowerCase()), ...enCola]));
                 sinSku.forEach((f, k) => { f.sku = nuevos[k]; skusGenerados.push({ fila: f.i + 2, sku: nuevos[k] }); });
             }
 
             // Las variantes sin SKU reciben uno con el código del grupo y sus valores (GOLDEN-PREM-QUEEN), como al crearlas en la app.
-            const ocupados = new Set<string>([...vistos.keys(), ...sueltas.map((f) => f.sku.toLowerCase()), ...grupos.map((g) => g.codigo.toLowerCase())]);
+            const ocupados = new Set<string>([...vistos.keys(), ...sueltas.map((f) => f.sku.toLowerCase()), ...grupos.map((g) => g.codigo.toLowerCase()), ...enCola]);
             for (const g of [...grupos]) {
                 try {
                     const skus = await this.skusDeVariantes(g, ocupados, scope);
@@ -407,7 +423,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
                 });
             }
             // El lote queda anotado en la base (con lo necesario para reintentar cada producto) antes de encolar.
-            if (batchTotal) await this.bulkBatch.crear(batchId, req.user.id, storeId, trabajos.flatMap(renglonesDelTrabajo), rechazos);
+            if (batchTotal) await this.bulkBatch.crear(batchId, req.user.id, storeId, trabajos.flatMap(renglonesDelTrabajo), rechazos, nombreDelExcel(excelFile.originalname));
             for (const trabajo of trabajos) {
                 await this.listingsQueue.add(trabajo.tipo === 'grupo' ? 'process-group' : 'process-product', trabajo, OPCIONES_DE_TRABAJO);
             }
@@ -431,6 +447,24 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
     // ─────────────────────────────────────────────────────────────
     // POST /bulk-upload/products/edit — Bulk EDIT own products
     // ─────────────────────────────────────────────────────────────
+    @Get('products/batches')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @ApiOperation({ summary: 'Historial de las cargas masivas que subiste en la tienda, con cómo va cada una' })
+    async historialDeCargas(@Req() req) {
+        return { cargas: await this.bulkBatch.historial(req.user.id, req.store?.storeId) };
+    }
+
+    @Get('products/batches/:batchId')
+    @UseGuards(StoreAccessGuard)
+    @RequirePermission('productos.editar')
+    @ApiOperation({ summary: 'Los productos de una carga masiva, uno por uno' })
+    async productosDeUnaCarga(@Param('batchId', ParseUUIDPipe) batchId: string, @Req() req) {
+        const productos = await this.bulkBatch.productosDeLaCarga(batchId, req.user.id);
+        if (!productos) throw new NotFoundException('No se encontró esa carga.');
+        return { productos };
+    }
+
     @Get('products/progress/:batchId')
     @UseGuards(StoreAccessGuard)
     @RequirePermission('productos.editar')
@@ -469,7 +503,7 @@ fotos: rutas dentro del ZIP o direcciones web, separadas por coma. Si va vacía,
             const total = completos.reduce((n, { payload }) => n + productosDelTrabajo(payload), 0);
             await this.batchNotification.iniciar(nuevoLote, total, req.user.id);
             const trabajos: any[] = completos.map(({ payload }) => ({ ...payload, batchId: nuevoLote, batchTotal: total, reintento: true }));
-            await this.bulkBatch.crear(nuevoLote, req.user.id, lote.storeId ?? undefined, trabajos.flatMap(renglonesDelTrabajo));
+            await this.bulkBatch.crear(nuevoLote, req.user.id, lote.storeId ?? undefined, trabajos.flatMap(renglonesDelTrabajo), [], lote.archivo ? `Reintento de ${lote.archivo.replace(/^Reintento de /, '')}` : 'Reintento');
             for (const trabajo of trabajos) {
                 await this.listingsQueue.add(trabajo.tipo === 'grupo' ? 'process-group' : 'process-product', trabajo, OPCIONES_DE_TRABAJO);
             }

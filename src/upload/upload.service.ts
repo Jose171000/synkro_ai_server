@@ -62,7 +62,22 @@ export class UploadService {
     // Throws BadRequestException if invalid.
     // ─────────────────────────────────────────────────────────────
     async validateExternalUrl(url: string): Promise<string> {
-        let buffer: Buffer;
+        this.validateDimensions(await this.descargarJpg(url), url);
+        return url; // URL is valid — return it as-is
+    }
+
+    /**
+     * Un enlace sin extensión (p. ej. `…/52e2aec9?x=.jpg`): se descarga y, si de verdad es JPG, se guarda una copia propia cuya
+     * dirección sí termina en .jpg (algunos canales rechazan la original).
+     */
+    async copiarJpgExterno(url: string): Promise<string> {
+        const buffer = await this.descargarJpg(url);
+        if (buffer[0] !== 0xff || buffer[1] !== 0xd8) throw new BadRequestException('La URL no apunta a una imagen JPG/JPEG.');
+        this.validateDimensions(buffer, url);
+        return (await this.streamUpload(buffer, 'products')).secureUrl;
+    }
+
+    private async descargarJpg(url: string): Promise<Buffer> {
         try {
             const response = await axios.get(url, {
                 responseType: 'arraybuffer',
@@ -77,14 +92,11 @@ export class UploadService {
                 );
             }
 
-            buffer = Buffer.from(response.data);
+            return Buffer.from(response.data);
         } catch (err) {
             if (err instanceof BadRequestException) throw err;
             throw new BadRequestException(`No se pudo acceder a la imagen en la URL proporcionada: ${err.message}`);
         }
-
-        this.validateDimensions(buffer, url);
-        return url; // URL is valid — return it as-is
     }
 
     // ─────────────────────────────────────────────────────────────

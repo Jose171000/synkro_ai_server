@@ -130,21 +130,27 @@ export function atributosObligatoriosAprendidos(aiAttributes: Record<string, any
 
 /**
  * Límites de longitud de atributos de texto que Falabella rechaza al pasarse («'…' is more than 172 characters long»).
- * Se conocen algunos de antemano y el resto se aprende del mensaje de error (ver leerLimitesDeLongitud).
+ * Manda, en este orden: lo aprendido de un rechazo, lo que declare Falabella para el atributo, los conocidos y, para un campo
+ * de texto de una línea («textfield»), 172. El resto se aprende del mensaje de error (ver leerLimitesDeLongitud).
  */
+export const MAX_TEXTO_CORTO_FALABELLA = 172;
+
 const LIMITES_CONOCIDOS: { patron: RegExp; max: number }[] = [
     { patron: /contenidodelpaquete|packagecontent|contentofpackage|contenidopaquete/, max: 172 },
 ];
 
 /** Máximo de caracteres de un atributo: el aprendido de un rechazo anterior o el conocido; undefined si no hay límite. */
 export function limiteDeLongitud(
-    atributo: { name?: string; feedName?: string; label?: string },
+    atributo: { name?: string; feedName?: string; label?: string; inputType?: string; maxLength?: number; options?: string[] },
     aiAttributes: Record<string, any> | null | undefined,
 ): number | undefined {
     const claves = [atributo.name, atributo.feedName, atributo.label].map(x => claveDeAtributo(x ?? '')).filter(Boolean);
     const aprendidos = (aiAttributes as any)?._maxLen as Record<string, number> | undefined;
     for (const c of claves) if (aprendidos && Number(aprendidos[c]) > 0) return Number(aprendidos[c]);
-    return LIMITES_CONOCIDOS.find(l => claves.some(c => l.patron.test(c)))?.max;
+    if (Number(atributo.maxLength) > 0) return Number(atributo.maxLength);
+    const conocido = LIMITES_CONOCIDOS.find(l => claves.some(c => l.patron.test(c)))?.max;
+    if (conocido) return conocido;
+    return /^text(field)?$/i.test(String(atributo.inputType ?? '')) && !atributo.options?.length ? MAX_TEXTO_CORTO_FALABELLA : undefined;
 }
 
 /** De «0: 'Set de…' is more than 172 characters long» → [{ valor: 'Set de…', max: 172 }]. */

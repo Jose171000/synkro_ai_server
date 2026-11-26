@@ -8,6 +8,7 @@ export interface CategoryAttribute {
     isRequired: boolean;  // true = obligatorio en el listing, false = recomendado/opcional
     options?: string[];   // valores admitidos por el canal, si es una lista cerrada
     valueType?: string;   // tipo de dato del canal (Mercado Libre): 'number' pide solo un número, sin texto ni unidad
+    maxLength?: number;   // máximo de caracteres de un texto libre, cuando se conoce
     listCode?: string;    // Ripley: código de la lista cerrada de valores (guardada una sola vez en marketplace_value_lists)
     isVariant?: boolean;  // Ripley: el atributo define la variante (el color)
     level?: string;       // Ripley: REQUIRED / RECOMMENDED / OPTIONAL

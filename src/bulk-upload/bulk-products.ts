@@ -37,6 +37,13 @@ export function esJpg(ruta: string): boolean {
     return /\.jpe?g$/i.test(String(ruta).split(/[?#]/)[0].trim());
 }
 
+/** Un enlace cuyo último tramo no trae extensión: su formato solo se sabe abriéndolo. */
+export function esUrlSinExtension(ruta: string): boolean {
+    if (!esUrl(ruta)) return false;
+    const tramo = ruta.trim().split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/i, '').split('/').pop() ?? '';
+    return !/\.[a-z0-9]{2,5}$/i.test(tramo);
+}
+
 export function esUrl(ruta: string): boolean {
     return /^https?:\/\//i.test(ruta.trim());
 }

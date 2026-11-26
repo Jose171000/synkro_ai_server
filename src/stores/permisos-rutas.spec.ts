@@ -172,6 +172,8 @@ const TABLA: Record<string, string> = {
     'Products POST /products/bulk-delete': 'productos.eliminar',
     'BulkUpload GET /bulk-upload/products/template': 'productos.editar',
     'BulkUpload POST /bulk-upload/products': 'productos.editar',
+    'BulkUpload GET /bulk-upload/products/batches': 'productos.editar',
+    'BulkUpload GET /bulk-upload/products/batches/:batchId': 'productos.editar',
     'BulkUpload GET /bulk-upload/products/progress/:batchId': 'productos.editar',
     'BulkUpload POST /bulk-upload/products/retry/:batchId': 'productos.editar',
     'BulkUpload GET /bulk-upload/products/bulk-edit/template': 'productos.editar',
