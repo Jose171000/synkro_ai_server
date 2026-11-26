@@ -114,6 +114,7 @@ const TABLA: Record<string, string> = {
     'Sync GET /sync/change-requests': 'canales.ver',
     'Sync GET /sync/change-requests/history': 'canales.ver',
     'Sync POST /sync/change-requests/retry-rate-limited': 'cambios.aprobar',
+    'Sync POST /sync/change-requests/retry-errors': 'cambios.aprobar',
     'Sync POST /sync/change-requests/:id/approve': 'cambios.aprobar',
     'Sync POST /sync/change-requests/:id/reject': 'cambios.aprobar',
     'Sync GET /sync/settings': 'canales.ver',

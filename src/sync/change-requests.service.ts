@@ -9,7 +9,7 @@ import { Store } from '../stores/entities/store.entity';
 import { ChangeRequestStatus, SyncChangeRequest } from './entities/sync-change-request.entity';
 import { MarketplaceConnection } from './entities/marketplace-connection.entity';
 import { ListingLink } from './entities/listing-link.entity';
-import { descuentoDeValor } from './ripley/ripley-oferta';
+import { descuentoDeValor, valorDeDescuento } from './ripley/ripley-oferta';
 
 /** Cuántas pendientes y cuántas ya resueltas devuelve la lista. */
 const MAX_PENDIENTES = 2000;
@@ -467,6 +467,92 @@ export class ChangeRequestsService {
         await this.repository.update({ id: In(limitadas.map((r) => r.id)) }, { status: 'approved', resultMessage: null, resolvedAt: null as any });
         for (const c of new Set(limitadas.map((r) => r.connection!.id))) await this.programarLoteFalabella(c);
         return { reintentadas: limitadas.length };
+    }
+
+    /** Tope de envíos que se rehacen de una vez. */
+    static readonly MAX_REENVIOS_DE_ERRORES = 200;
+
+    /**
+     * Vuelve a mandar lo que terminó con error (una fila, o todos los que coinciden con los filtros del historial). Se manda el valor
+     * que Synkro tiene AHORA, nunca el de la solicitud antigua, y una sola vez por producto, cuenta y campo. Lo que ya salió bien o
+     * está en camino se omite. Con el modo revisión quedan pendientes de aprobar; sin él se aprueban y envían de una.
+     */
+    async reenviarErrores(scope: ChangeScope, filtro: { ids?: string[]; field?: string; q?: string } = {}) {
+        const qb = this.repository.createQueryBuilder('r')
+            .leftJoinAndSelect('r.product', 'p')
+            .leftJoinAndSelect('r.connection', 'c')
+            .where(new Brackets((b) => b
+                .where('r."storeId" = :storeId', { storeId: scope.storeId })
+                .orWhere('(r."storeId" IS NULL AND r."requestedById" = :userId)', { userId: scope.userId })))
+            .andWhere("r.status = 'error'");
+        if (filtro.ids?.length) qb.andWhere('r.id IN (:...ids)', { ids: filtro.ids });
+        if (filtro.field) qb.andWhere('r.field = :field', { field: filtro.field });
+        const texto = (filtro.q ?? '').trim();
+        if (texto) qb.andWhere('(p.sku ILIKE :q OR p.name ILIKE :q)', { q: `%${texto.replace(/[\\%_]/g, (c) => '\\' + c)}%` });
+        const errores = await qb.orderBy('r.createdAt', 'DESC').take(2000).getMany();
+
+        const clave = (r: SyncChangeRequest) => `${r.product?.id}|${r.connection?.id}|${r.field}`;
+        const omitidas: { sku: string; motivo: string }[] = [];
+        const porEnviar = new Map<string, SyncChangeRequest>();
+        for (const r of errores) {
+            if (!r.product?.id || !r.connection?.id) { omitidas.push({ sku: r.product?.sku ?? '—', motivo: 'El producto o la cuenta del canal ya no existe.' }); continue; }
+            if (!porEnviar.has(clave(r))) porEnviar.set(clave(r), r);
+        }
+
+        // Lo último que se pidió de cada producto, cuenta y campo: si fue posterior y salió bien (o va en camino), no se repite.
+        const productIds = [...new Set([...porEnviar.values()].map((r) => r.product.id))];
+        const todas = productIds.length
+            ? await this.repository.find({ where: { product: { id: In(productIds) } }, relations: { product: true, connection: true }, order: { createdAt: 'DESC' } })
+            : [];
+        const ultima = new Map<string, SyncChangeRequest>();
+        for (const r of todas) if (!ultima.has(clave(r))) ultima.set(clave(r), r);
+        for (const [k, r] of porEnviar) {
+            const despues = ultima.get(k);
+            if (!despues || despues.id === r.id || !(despues.createdAt > r.createdAt)) continue;
+            if (['sent', 'pending', 'approved', 'skipped'].includes(despues.status)) {
+                porEnviar.delete(k);
+                omitidas.push({ sku: r.product.sku, motivo: despues.status === 'sent' ? 'Ya se envió después.' : 'Ya hay un envío posterior.' });
+            }
+        }
+
+        const revision = await this.isReviewMode(scope.storeId);
+        const elegidas = [...porEnviar.values()].slice(0, ChangeRequestsService.MAX_REENVIOS_DE_ERRORES);
+        let reenviadas = 0;
+        for (const error of elegidas) {
+            try {
+                const actual = await this.valorActual(error);
+                if (actual === null) { omitidas.push({ sku: error.product.sku, motivo: 'Synkro ya no tiene un valor para enviar.' }); continue; }
+                const destino = { marketplace: error.marketplace, connectionId: error.connection!.id };
+                const creada = error.field === 'promo'
+                    ? await this.createPromoRequest(scope, error.product, { ...destino, previous: error.previousValue ?? '', next: actual })
+                    : await this.createResend(scope, error.product, error.field as 'stock' | 'price', destino, error.previousValue === '' ? null : Number(error.previousValue), actual);
+                if (!revision) await this.approve(creada.id, scope);
+                reenviadas++;
+            } catch (e: any) {
+                omitidas.push({ sku: error.product.sku, motivo: String(e?.message ?? 'No se pudo reenviar.').slice(0, 200) });
+            }
+        }
+        return { reenviadas, enRevision: revision, omitidas, restantes: porEnviar.size - elegidas.length };
+    }
+
+    /** Lo que hoy habría que mandar para esa solicitud; null si ya no hay nada. */
+    private async valorActual(error: SyncChangeRequest): Promise<string | null> {
+        const producto = error.product;
+        if (error.field === 'stock') return producto.stock === null || producto.stock === undefined ? null : String(producto.stock);
+        if (error.field === 'price') return producto.price === null || producto.price === undefined ? null : String(producto.price);
+
+        const { valor, general } = sinMarcaGeneral(error.newValue);
+        const enlace = general ? null : await this.listingLinkRepository?.findOne({ where: { product: { id: producto.id }, connection: { id: error.connection!.id } } });
+        const precio = general ? producto.salePrice : enlace?.salePriceOverride;
+        const dia = (v: unknown) => (v ? new Date(v as any).toISOString().slice(0, 10) : null);
+        const marca = (texto: string) => (general ? conMarcaGeneral(texto) : texto);
+        // Sin descuento hoy: solo tiene sentido si lo que falló fue justamente quitarlo.
+        if (precio === null || precio === undefined) return descuentoDeValor(valor)?.precio === null ? marca('quitar') : null;
+        return marca(valorDeDescuento({
+            precio: Number(precio),
+            desde: dia(general ? producto.saleStartDate : enlace?.saleStartOverride),
+            hasta: dia(general ? producto.saleEndDate : enlace?.saleEndOverride),
+        }));
     }
 
     /** Lo llama el worker cuando el canal responde: cierra la solicitud. */

@@ -36,6 +36,7 @@ import { ManualVariantGroupDto } from './dto/manual-variant-group.dto';
 import { ImportFalabellaDto } from './dto/import-falabella.dto';
 import { SugerirColoresDto } from './dto/sugerir-colores.dto';
 import { ResendStockMasivoDto } from './dto/resend-stock-masivo.dto';
+import { ReenviarErroresDto } from './dto/reenviar-errores.dto';
 import { ListingPromoDto } from './dto/listing-promo.dto';
 import { ChangeRequestIdsDto } from './dto/change-request-ids.dto';
 import { GroupPriceDto } from './dto/group-price.dto';
@@ -1100,6 +1101,16 @@ export class SyncController {
     @ApiOperation({ summary: 'Reenvía por lotes a Falabella las solicitudes que rechazó por pedir esperar (429 Too many attempts)' })
     retryRateLimitedChangeRequests(@Req() req) {
         return this.changeRequests.reintentarLimitadasDeFalabella(scopeOf(req));
+    }
+
+    @Post('change-requests/retry-errors')
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiBearerAuth()
+    @UseGuards(JwtAuthGuard, SectionAccessGuard, StoreAccessGuard)
+    @RequirePermission('cambios.aprobar')
+    @ApiOperation({ summary: 'Reenvía los envíos con error con el valor actual de Synkro (una fila, o todos los que coinciden con los filtros), hasta 200' })
+    retryFailedChangeRequests(@Body() dto: ReenviarErroresDto, @Req() req) {
+        return this.changeRequests.reenviarErrores(scopeOf(req), dto);
     }
 
     @Post('change-requests/reject-many')
