@@ -57,6 +57,9 @@ export interface ChannelListingRow {
     groupKey?: string | null;
     /** Código del producto en el catálogo del canal (Ripley: «PMP20001695273-5»), para pedirle sus fotos. */
     productSku?: string | null;
+    /** Categoría del producto en el canal, si la oferta la trae (Ripley). */
+    categoryCode?: string | null;
+    categoryLabel?: string | null;
 }
 
 export interface ChannelListingsResult {

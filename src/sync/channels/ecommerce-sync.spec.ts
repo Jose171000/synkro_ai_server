@@ -807,6 +807,23 @@ describe('Ripley: por ahora solo se lee', () => {
     });
 });
 
+describe('Ripley: categoría al importar', () => {
+    it('guarda la de la oferta solo donde el producto no tiene una', async () => {
+        const productos = [
+            { id: 'p1', sku: '100507', name: 'Proyector', stock: 1, price: 10, marketplaceIds: { falabella_category_id: '9' }, store: { id: 't1' } },
+            { id: 'p2', sku: '100508', name: 'Laptop', stock: 1, price: 10, marketplaceIds: { ripley_category_id: 'R1' }, store: { id: 't1' } },
+        ];
+        const { service, cliente } = construir({ conexiones: [cuentaRipley()], productos });
+        const oferta = (sku: string) => fila({ sku, externalId: sku, categoryCode: 'R140100', categoryLabel: 'Proyectores' });
+        cliente.listListings.mockResolvedValue({ rows: [oferta('100507'), oferta('100508')], sinSku: 0, productos: 2, incompleto: false });
+
+        await service.importListings(SCOPE, 'ripley', undefined, {});
+
+        expect(productos[0].marketplaceIds).toEqual({ falabella_category_id: '9', ripley_category_id: 'R140100', ripley_category_path: 'Proyectores' });
+        expect(productos[1].marketplaceIds).toEqual({ ripley_category_id: 'R1' });
+    });
+});
+
 describe('Ripley: variantes al importar', () => {
     const ofertaDe = (sku: string, titulo: string, grupo: string | null, over: Partial<ChannelListingRow> = {}) =>
         fila({ sku, externalId: sku, title: titulo, groupKey: grupo, ...over });

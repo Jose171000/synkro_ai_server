@@ -276,5 +276,6 @@ export function filaDeOfertaRipley(oferta: any, monedaDeLaCuenta?: string | null
         // «PMP20001695273-5»: la base es la familia de variantes.
         ...(familiaDeProducto(oferta?.product_sku) ? { groupKey: familiaDeProducto(oferta?.product_sku)!.base } : {}),
         ...(texto(oferta?.product_sku) ? { productSku: texto(oferta?.product_sku) } : {}),
+        ...(texto(oferta?.category_code) ? { categoryCode: texto(oferta?.category_code), categoryLabel: texto(oferta?.category_label) } : {}),
     };
 }
