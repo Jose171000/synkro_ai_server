@@ -366,7 +366,7 @@ export class ProductLaunchService {
                 product.aiDescription || product.description || product.name,
                 faltantes,
                 { marca: attrs.brand, color: attrs.color },
-                { textoCliente: quitarUrls(product.description), vision: attrs.vision, medidas, sku: product.sku },
+                { textoCliente: quitarUrls(product.description), vision: attrs.vision, medidas },
             );
             nuevos = r.values;
             estimados = r.estimated;

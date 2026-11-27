@@ -52,12 +52,13 @@ describe('sugerir los atributos de una categoría de Falabella', () => {
         expect(r).toMatchObject({ filled: 3, total: 5 });
     });
 
-    it('le pasa a la IA todo el contexto: texto del cliente sin enlaces y el texto ya guardado, fotos, medidas y SKU', async () => {
+    it('le pasa a la IA todo el contexto: texto del cliente sin enlaces y el texto ya guardado, fotos, medidas, sin el SKU', async () => {
         const { service, ai } = construir(producto());
         await service.sugerirAtributos({ userId: 'u', storeId: 's' }, 'p1', '956');
 
         const contexto = ai.completarAtributos.mock.calls[0][4];
-        expect(contexto).toMatchObject({ textoCliente: 'Torre de madera de pino, color azul\n\ndesc', sku: 'MK-TOR-004', medidas: '45 x 40 x 90 cm, 9 kg' });
+        expect(contexto).toMatchObject({ textoCliente: 'Torre de madera de pino, color azul\n\ndesc', medidas: '45 x 40 x 90 cm, 9 kg' });
+        expect(JSON.stringify(contexto)).not.toContain('MK-TOR-004');
         expect(contexto.vision).toMatchObject({ productType: 'torre de aprendizaje' });
     });
 

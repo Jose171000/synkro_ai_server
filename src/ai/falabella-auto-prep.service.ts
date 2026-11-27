@@ -424,7 +424,7 @@ export class FalabellaAutoPrepService implements OnModuleInit {
         const medidas = [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
             ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg`
             : undefined;
-        return { textoCliente: this.textoConocido(product), vision, medidas, sku: product.sku };
+        return { textoCliente: this.textoConocido(product), vision, medidas };
     }
 
     /**

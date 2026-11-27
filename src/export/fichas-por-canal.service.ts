@@ -24,7 +24,7 @@ const PREFIJO: Record<CanalDeFicha, string> = { falabella: 'Falabella', mercadol
 const SIN_CATEGORIA = 'Sin categoría';
 /** Claves de la ficha que no son atributos de categoría (solo importa cuando Falabella no devuelve la lista de campos). */
 const NO_SON_ATRIBUTOS = new Set(['descriptionHtml', 'brand', 'falabella_category_id', 'mercadolibre_category_id', 'ripley_category_id']);
-const MELI_APARTE = new Set(['BRAND', 'MODEL', 'SELLER_SKU']);
+const MELI_APARTE = new Set(['BRAND', 'SELLER_SKU']);
 
 const COLUMNAS_COMUNES = ['SKU', 'Nombre', 'Código de grupo', 'Variante', 'Estado en el canal', 'Motivo de error', 'Marca', 'Precio', 'Stock', 'Largo (cm)', 'Ancho (cm)', 'Alto (cm)', 'Peso (kg)'];
 

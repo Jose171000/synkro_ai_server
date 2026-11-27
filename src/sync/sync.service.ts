@@ -1,3 +1,4 @@
+import { modeloParaMeli } from './meli/modelo-meli';
 import { BadRequestException, ConflictException, HttpException, HttpStatus, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -1533,7 +1534,8 @@ export class SyncService implements OnModuleInit {
         // Solo los atributos que cambian: reenviar los que la publicación ya tiene hace que Mercado Libre la vea como un producto repetido.
         const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
         const tiene = new Map<string, string>((item.attributes ?? []).map((a: any) => [String(a?.id), norm(a?.value_name)]));
-        const distintos = this.atributosParaMeli(product).filter((a) => tiene.get(a.id) !== norm(a.value_name));
+        // El modelo de una publicación que ya existe no se cambia aquí (Mercado Libre podría verla como otro producto).
+        const distintos = this.atributosParaMeli(product).filter((a) => !(a.id === 'MODEL' && tiene.get('MODEL')) && tiene.get(a.id) !== norm(a.value_name));
         if (distintos.length) await intentar('atributos', () => this.meliApi.updateItemAttributes(token, itemId, distintos));
         if (!(item.variations?.length)) {
             await intentar('stock y precio', () => this.meliApi.updateItem(token, itemId, { available_quantity: product.stock, price: Number(product.price) }));
@@ -1681,7 +1683,7 @@ export class SyncService implements OnModuleInit {
         const delCanal = atributosConVariante((((product.aiAttributes as any)?.mercadolibre_attributes ?? {}) as Record<string, unknown>), product.variantValues);
         return [
             { id: 'BRAND', value_name: brand },
-            { id: 'MODEL', value_name: product.group?.parentSku || product.sku },
+            { id: 'MODEL', value_name: modeloParaMeli(product, delCanal) },
             // El SKU viaja en la publicación, como dato del producto.
             { id: 'SELLER_SKU', value_name: product.sku },
             ...Object.entries(delCanal)

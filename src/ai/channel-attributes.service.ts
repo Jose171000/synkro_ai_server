@@ -26,7 +26,7 @@ const MAX_LABEL = 500;
 const YA_CUBIERTOS_FALABELLA = ATRIBUTOS_DE_SISTEMA;
 
 /** Atributos de Mercado Libre que se resuelven aparte (marca y modelo ya van en la publicación). */
-const YA_CUBIERTOS_MELI = new Set(['BRAND', 'MODEL']);
+const YA_CUBIERTOS_MELI = new Set(['BRAND']);
 
 /** Atributos de una categoría de Mercado Libre → lo que entiende el prompt y lo que se guarda. */
 export function atributosDeMeli(crudos: any[], maxOpcionales = MAX_OPCIONALES): CategoryAttribute[] {

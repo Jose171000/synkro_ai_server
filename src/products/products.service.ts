@@ -359,7 +359,6 @@ export class ProductsService {
             textoCliente: product.description,
             medidas: [product.packageWidth, product.packageLength, product.packageHeight].every((v) => v != null)
                 ? `${product.packageWidth} x ${product.packageLength} x ${product.packageHeight} cm, ${product.packageWeight ?? '?'} kg` : undefined,
-            sku: product.sku,
             marca: attrs.ripley?.brand ?? attrs.brand,
             color: attrs.color,
         });

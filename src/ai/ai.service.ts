@@ -1,3 +1,4 @@
+import { fichaSinSku, porSku } from './fichas-sin-sku';
 import { acortarALoPermitido, notaDeLargo } from './largos-de-atributos';
 import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { GenerateListingsDto } from './dto/generate-listings.dto';
@@ -724,13 +725,14 @@ Responde solo JSON: {"category_id": "<ID de la lista o null>", "confidence": <n�
    */
   /**
    * Propone en qué se diferencian las fichas de una familia de variantes (color, talla, plazas…) y el valor de cada SKU,
-   * leyendo títulos, atributos y SKU. Solo lo que esté escrito: si no hay certeza devuelve confianza «baja». El llamador
+   * leyendo títulos y atributos (el SKU no se le manda). Solo lo que esté escrito: si no hay certeza devuelve confianza «baja». El llamador
    * comprueba cada valor contra los datos de la ficha antes de usarlo.
    */
   public async proponerEjesDeVariacion(fichas: { sellerSku: string; nombre: string; variation: string | null; atributos: Record<string, string> }[]) {
     if (fichas.length < 2) return null;
     try {
-      const lista = fichas.slice(0, 60).map((f) => `- SKU "${f.sellerSku}" | título: ${f.nombre.slice(0, 160)} | variación: ${f.variation ?? '-'} | atributos: ${JSON.stringify(f.atributos)}`).join('\n');
+      const enviadas = fichas.slice(0, 60);
+      const lista = enviadas.map((f, i) => fichaSinSku(f, `F${i + 1}`)).join('\n');
       const r = await this.openai.chat.completions.create({
         model: modeloDeepseek(),
         response_format: { type: 'json_object' },
@@ -739,18 +741,18 @@ Responde solo JSON: {"category_id": "<ID de la lista o null>", "confidence": <n�
           { role: 'system', content: 'You are an AI that STRICTLY outputs valid JSON only.' },
           {
             role: 'user',
-            content: `Estas fichas de un marketplace son variantes de un mismo producto. Indica en qué se diferencian (los ejes de variación: Color, Talla, Plazas, Tamaño, Modelo…) y el valor de cada SKU.
+            content: `Estas fichas de un marketplace son variantes de un mismo producto. Indica en qué se diferencian (los ejes de variación: Color, Talla, Plazas, Tamaño, Modelo…) y el valor de cada ficha (F1, F2…).
 
 ${lista}
 
 Reglas estrictas:
-- Usa SOLO lo que está escrito en el título, la variación, los atributos o el propio SKU. No inventes.
-- El valor de cada SKU debe aparecer escrito en SU ficha (título, variación, atributo o SKU). Escribe los valores como palabras normales («Azul acero», «Beige claro»), no como códigos pegados. Si un código del SKU no se puede traducir con certeza (por ejemplo «PP» o «TU»), NO lo traduzcas ni lo adivines: devuelve confianza "baja".
-- Los atributos que empiezan por «pagina_» son lo que muestra la página pública del marketplace para ESE SKU (talla, color…): son la mejor evidencia.
-- Un título que lista varios colores ("BLANCO / NEGRO / BEIGE") es el mismo para todas: no sirve por sí solo para asignar un color a un SKU.
-- Entre 1 y 3 ejes. Todos los SKU deben tener valor en todos los ejes y las combinaciones no pueden repetirse.
+- Usa SOLO lo que está escrito en el título, la variación o los atributos. No inventes.
+- El valor de cada ficha debe aparecer escrito en ELLA (título, variación o atributo). Escribe los valores como palabras normales («Azul acero», «Beige claro»), no como códigos pegados. Si un código no se puede traducir con certeza (por ejemplo «PP» o «TU»), NO lo traduzcas ni lo adivines: devuelve confianza "baja".
+- Los atributos que empiezan por «pagina_» son lo que muestra la página pública del marketplace para ESA ficha (talla, color…): son la mejor evidencia.
+- Un título que lista varios colores ("BLANCO / NEGRO / BEIGE") es el mismo para todas: no sirve por sí solo para asignar un color a una ficha.
+- Entre 1 y 3 ejes. Todas las fichas deben tener valor en todos los ejes y las combinaciones no pueden repetirse.
 - Si no hay certeza: confianza "baja" y explica por qué en "motivo".
-Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde sale" }], "valores": { "<SKU>": { "<nombre del eje>": "valor" } }, "confianza": "alta" | "media" | "baja", "motivo": "…" }`,
+Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde sale" }], "valores": { "<F1, F2…>": { "<nombre del eje>": "valor" } }, "confianza": "alta" | "media" | "baja", "motivo": "…" }`,
           },
         ],
       });
@@ -758,7 +760,7 @@ Responde solo un JSON: { "ejes": [{ "nombre": "Color", "evidencia": "de dónde s
       const confianza = ['alta', 'media', 'baja'].includes(j.confianza) ? j.confianza : 'baja';
       return {
         ejes: Array.isArray(j.ejes) ? j.ejes.map((e: any) => ({ nombre: String(e?.nombre ?? ''), evidencia: e?.evidencia ? String(e.evidencia) : undefined })) : [],
-        valores: j.valores && typeof j.valores === 'object' ? (j.valores as Record<string, Record<string, string>>) : {},
+        valores: porSku(j.valores && typeof j.valores === 'object' ? (j.valores as Record<string, Record<string, string>>) : {}, enviadas),
         confianza: confianza as 'alta' | 'media' | 'baja',
         motivo: j.motivo ? String(j.motivo) : undefined,
       };
@@ -838,8 +840,8 @@ Responde solo un JSON: { "consultas": ["...", "..."] }`,
     descripcion: string,
     atributos: CategoryAttribute[],
     conocidos: Record<string, any> = {},
-    /** Todo lo que se sabe del producto: lo que escribió el cliente, lo que se ve en las fotos, las medidas y el SKU. */
-    contexto: { textoCliente?: string; vision?: any; medidas?: string; sku?: string } = {},
+    /** Todo lo que se sabe del producto: lo que escribió el cliente, lo que se ve en las fotos y las medidas. El SKU es de manejo interno y nunca va a la IA. */
+    contexto: { textoCliente?: string; vision?: any; medidas?: string } = {},
   ) {
     // Los obligatorios se estiman si hace falta; los opcionales solo se llenan si el producto lo dice o se ve (suben la calidad de la ficha).
     if (!atributos.length) return { values: {} as Record<string, string>, estimated: [] as string[], error: undefined as string | undefined };
@@ -858,7 +860,6 @@ Texto que escribió el cliente: ${contexto.textoCliente || '(ninguno)'}
 Descripción redactada: ${descripcion}
 Lo que se ve en las fotos: ${contexto.vision ? JSON.stringify(contexto.vision) : '(sin fotos analizadas)'}
 Medidas y peso del paquete: ${contexto.medidas || 'no indicados'}
-SKU: ${contexto.sku || '-'}
 Datos ya conocidos: ${JSON.stringify(conocidos)}
 
 Datos a completar:
@@ -933,7 +934,6 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
     datos?: Record<string, string>;
     textoCliente?: string;
     medidas?: string;
-    sku?: string;
     marca?: string;
     color?: string;
   }): Promise<{ values: Record<string, string>; estimated: string[]; filled: number; total: number; sinEquivalente: string[]; sinValor: string[] }> {
@@ -952,7 +952,7 @@ Responde solo un JSON: { "<nombre>": "valor", ..., "_estimated": ["nombre", ...]
     const r = await this.completarAtributos(
       e.nombre, descripcion, vacios,
       { marca: e.marca, color: e.color },
-      { textoCliente: e.textoCliente, vision, medidas: e.medidas, sku: e.sku },
+      { textoCliente: e.textoCliente, vision, medidas: e.medidas },
     );
     const ajuste = ajustarAtributosDeRipley(r.values, conOpciones, listas);
     // Solo se devuelven los que estaban vacíos (nunca uno que ya tenía valor).

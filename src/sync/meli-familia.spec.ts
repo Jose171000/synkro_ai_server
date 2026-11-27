@@ -21,17 +21,20 @@ describe('familias de Mercado Libre', () => {
         expect(b.family_name).toBe(a.family_name);
     });
 
-    it('cada variante lleva su propio color, su SKU y el modelo del grupo', () => {
+    it('cada variante lleva su propio color, su SKU y un modelo común', () => {
         const negro = idsDe(variante('OG144', 'Negro'));
         const celeste = idsDe(variante('OG146', 'Celeste'));
-        expect(negro).toMatchObject({ COLOR: 'Negro', MAIN_COLOR: 'Negro', SELLER_SKU: 'OG144', MODEL: 'PERCHERO-METAL', MATERIAL: 'Metal' });
-        expect(celeste).toMatchObject({ COLOR: 'Celeste', MAIN_COLOR: 'Celeste', SELLER_SKU: 'OG146', MODEL: 'PERCHERO-METAL' });
+        expect(negro).toMatchObject({ COLOR: 'Negro', MAIN_COLOR: 'Negro', SELLER_SKU: 'OG144', MATERIAL: 'Metal' });
+        expect(celeste).toMatchObject({ COLOR: 'Celeste', MAIN_COLOR: 'Celeste', SELLER_SKU: 'OG146' });
+        // El mismo modelo en toda la familia, sin colores y nunca el código interno.
+        expect(negro.MODEL).toBe(celeste.MODEL);
+        expect(negro.MODEL).not.toMatch(/PERCHERO-METAL|OG14|Negro|Celeste/);
     });
 
     it('un producto sin grupo se publica como siempre', () => {
         const simple = { sku: 'KI-1', name: 'Taza', aiTitle: 'Taza de cerámica azul', price: 10, stock: 3, images: [], group: null, variantValues: null, aiAttributes: { brand: 'X', mercadolibre_attributes: { COLOR: 'Azul' } } };
         expect(payloadDe(simple).family_name).toBe('Taza de cerámica azul');
-        expect(idsDe(simple)).toMatchObject({ COLOR: 'Azul', MODEL: 'KI-1', SELLER_SKU: 'KI-1' });
+        expect(idsDe(simple)).toMatchObject({ COLOR: 'Azul', MODEL: 'Taza de cerámica azul', SELLER_SKU: 'KI-1' });
     });
 });
 
