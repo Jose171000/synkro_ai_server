@@ -824,6 +824,23 @@ describe('Ripley: categoría al importar', () => {
     });
 });
 
+describe('Ripley: nombre, marca y descripción al importar', () => {
+    it('se guardan como datos de Ripley, sin pisar lo escrito ni el contenido general', async () => {
+        const productos = [
+            { id: 'p1', sku: 'A-1', name: 'Mi nombre', description: 'La mía', stock: 1, price: 10, aiAttributes: { brand: 'EPSON' }, store: { id: 't1' } },
+            { id: 'p2', sku: 'A-2', name: 'Otro', stock: 1, price: 10, aiAttributes: { ripley: { name: 'Escrito en Synkro' } }, store: { id: 't1' } },
+        ];
+        const { service, cliente } = construir({ conexiones: [cuentaRipley()], productos });
+        const oferta = (sku: string) => fila({ sku, externalId: sku, title: 'PROYECTOR EPSON 119W', brand: 'Epson', productDescription: 'Proyector WXGA' });
+        cliente.listListings.mockResolvedValue({ rows: [oferta('A-1'), oferta('A-2')], sinSku: 0, productos: 2, incompleto: false });
+
+        await service.importListings(SCOPE, 'ripley', undefined, {});
+
+        expect(productos[0]).toMatchObject({ name: 'Mi nombre', description: 'La mía', aiAttributes: { brand: 'EPSON', ripley: { name: 'PROYECTOR EPSON 119W', brand: 'Epson', description: 'Proyector WXGA' } } });
+        expect((productos[1] as any).aiAttributes.ripley).toEqual({ name: 'Escrito en Synkro', brand: 'Epson', description: 'Proyector WXGA' });
+    });
+});
+
 describe('Ripley: variantes al importar', () => {
     const ofertaDe = (sku: string, titulo: string, grupo: string | null, over: Partial<ChannelListingRow> = {}) =>
         fila({ sku, externalId: sku, title: titulo, groupKey: grupo, ...over });

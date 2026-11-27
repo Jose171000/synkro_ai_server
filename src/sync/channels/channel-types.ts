@@ -60,6 +60,9 @@ export interface ChannelListingRow {
     /** Categoría del producto en el canal, si la oferta la trae (Ripley). */
     categoryCode?: string | null;
     categoryLabel?: string | null;
+    /** Marca y descripción del producto en el canal, si la oferta las trae (Ripley). */
+    brand?: string | null;
+    productDescription?: string | null;
 }
 
 export interface ChannelListingsResult {

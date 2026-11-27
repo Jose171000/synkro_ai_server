@@ -359,7 +359,7 @@ export class EcommerceSyncService implements OnModuleInit {
                 }));
             }
             await this.guardarEnlace(connection, product, fila);
-            if (marketplace === 'ripley') await this.guardarCategoriaDeRipley(product, fila);
+            if (marketplace === 'ripley') await this.guardarDatosDeRipley(product, fila);
             vinculados.set(fila.sku, product);
             resumen.enlazadas++;
         }
@@ -399,19 +399,35 @@ export class EcommerceSyncService implements OnModuleInit {
         const fila = filaDeOfertaRipley(oferta, (connection as any).currency ?? null);
         if (!fila || fila.sku !== product.sku) throw new BadRequestException(`La oferta de Ripley no corresponde al SKU «${product.sku}».`);
         await this.guardarEnlace(connection, product, fila);
-        await this.guardarCategoriaDeRipley(product, fila);
+        await this.guardarDatosDeRipley(product, fila);
         return { enlazado: true, sku: product.sku, offerId: fila.externalId, estado: fila.status, stock: fila.stock, precio: fila.regularPrice };
     }
 
-    /** La categoría que la oferta ya tiene en Ripley, solo si el producto todavía no tiene una (lo elegido en Synkro manda). */
-    private async guardarCategoriaDeRipley(product: Product, fila: ChannelListingRow): Promise<void> {
+    /**
+     * Lo que la oferta de Ripley dice del producto (categoría, nombre, marca y descripción), solo donde Synkro todavía no tiene ese
+     * dato: lo elegido o escrito en Synkro manda. Va a los datos propios de Ripley; el contenido general del producto no se toca.
+     * Sus atributos no se pueden importar: la API de Ripley no los entrega.
+     */
+    private async guardarDatosDeRipley(product: Product, fila: ChannelListingRow): Promise<void> {
+        const cambios: Record<string, any> = {};
+
         const ids: Record<string, any> = (product.marketplaceIds as any) || {};
-        if (!fila.categoryCode || ids.ripley_category_id) return;
-        // La ruta completa sale del catálogo importado; si el código no está en él, se muestra el nombre que da la oferta.
-        const ruta = await this.ripleyCatalogo?.rutaDe(fila.categoryCode).catch(() => null);
-        const marketplaceIds = { ...ids, ripley_category_id: fila.categoryCode, ripley_category_path: ruta ?? fila.categoryLabel ?? fila.categoryCode };
-        await this.products.update(product.id, { marketplaceIds } as any);
-        product.marketplaceIds = marketplaceIds as any;
+        if (fila.categoryCode && !ids.ripley_category_id) {
+            // La ruta completa sale del catálogo importado; si el código no está en él, se muestra el nombre que da la oferta.
+            const ruta = await this.ripleyCatalogo?.rutaDe(fila.categoryCode).catch(() => null);
+            cambios.marketplaceIds = { ...ids, ripley_category_id: fila.categoryCode, ripley_category_path: ruta ?? fila.categoryLabel ?? fila.categoryCode };
+        }
+
+        const attrs: Record<string, any> = (product.aiAttributes as any) || {};
+        const previos: Record<string, any> = attrs.ripley ?? {};
+        // Sin título en la oferta, `title` es el SKU: eso no es un nombre.
+        const delCanal = { name: fila.title === fila.sku ? null : fila.title, brand: fila.brand, description: fila.productDescription };
+        const nuevos = Object.fromEntries(Object.entries(delCanal).filter(([k, v]) => !!v && !String(previos[k] ?? '').trim()));
+        if (Object.keys(nuevos).length) cambios.aiAttributes = { ...attrs, ripley: { ...previos, ...nuevos } };
+
+        if (!Object.keys(cambios).length) return;
+        await this.products.update(product.id, cambios as any);
+        Object.assign(product, cambios);
     }
 
     private async guardarEnlace(connection: MarketplaceConnection, product: Product, fila: ChannelListingRow): Promise<void> {
