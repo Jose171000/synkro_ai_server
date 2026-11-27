@@ -195,7 +195,13 @@ export class ChannelAttributesService {
         return aprendidos ? this.paraElCanal(marketplace, aprendidos, opciones.todos) : null;
     }
 
-    private paraElCanal(marketplace: string, atributos: CategoryAttribute[], todos = false): CategoryAttribute[] {
+    private paraElCanal(marketplace: string, guardados: CategoryAttribute[], todos = false): CategoryAttribute[] {
+        const atributos = marketplace === 'falabella'
+            ? guardados.map((a) => {
+                const maximo = limiteDeLongitud(a, null);
+                return maximo ? { ...a, maxLength: maximo } : a;
+            })
+            : guardados;
         // Falabella rechaza el lote si falta un obligatorio; los opcionales suben la calidad del contenido (hasta 40).
         if (marketplace === 'falabella') {
             return todos

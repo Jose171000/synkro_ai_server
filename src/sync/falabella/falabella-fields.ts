@@ -129,28 +129,23 @@ export function atributosObligatoriosAprendidos(aiAttributes: Record<string, any
 }
 
 /**
- * Límites de longitud de atributos de texto que Falabella rechaza al pasarse («'…' is more than 172 characters long»).
- * Manda, en este orden: lo aprendido de un rechazo, lo que declare Falabella para el atributo, los conocidos y, para un campo
- * de texto de una línea («textfield»), 172. El resto se aprende del mensaje de error (ver leerLimitesDeLongitud).
+ * Falabella no admite más de 172 caracteres en un atributo de texto («'…' is more than 172 characters long»), salvo en las
+ * descripciones. Si declara un máximo menor, o ya rechazó este producto con uno menor, manda ese. Las listas cerradas y los
+ * números no se recortan.
  */
-export const MAX_TEXTO_CORTO_FALABELLA = 172;
+export const MAX_TEXTO_FALABELLA = 172;
 
-const LIMITES_CONOCIDOS: { patron: RegExp; max: number }[] = [
-    { patron: /contenidodelpaquete|packagecontent|contentofpackage|contenidopaquete/, max: 172 },
-];
-
-/** Máximo de caracteres de un atributo: el aprendido de un rechazo anterior o el conocido; undefined si no hay límite. */
+/** Máximo de caracteres de un atributo; undefined si no se debe recortar (descripciones, listas, números). */
 export function limiteDeLongitud(
     atributo: { name?: string; feedName?: string; label?: string; inputType?: string; maxLength?: number; options?: string[] },
     aiAttributes: Record<string, any> | null | undefined,
 ): number | undefined {
     const claves = [atributo.name, atributo.feedName, atributo.label].map(x => claveDeAtributo(x ?? '')).filter(Boolean);
     const aprendidos = (aiAttributes as any)?._maxLen as Record<string, number> | undefined;
-    for (const c of claves) if (aprendidos && Number(aprendidos[c]) > 0) return Number(aprendidos[c]);
-    if (Number(atributo.maxLength) > 0) return Number(atributo.maxLength);
-    const conocido = LIMITES_CONOCIDOS.find(l => claves.some(c => l.patron.test(c)))?.max;
-    if (conocido) return conocido;
-    return /^text(field)?$/i.test(String(atributo.inputType ?? '')) && !atributo.options?.length ? MAX_TEXTO_CORTO_FALABELLA : undefined;
+    const aprendido = claves.map(c => Number(aprendidos?.[c])).find(n => n > 0);
+    const libre = !atributo.options?.length && !esCampoNumerico(atributo.inputType) && !claves.some(c => /descripcion|description/.test(c));
+    if (!libre) return aprendido;
+    return Math.min(MAX_TEXTO_FALABELLA, aprendido ?? MAX_TEXTO_FALABELLA, Number(atributo.maxLength) > 0 ? Number(atributo.maxLength) : MAX_TEXTO_FALABELLA);
 }
 
 /** De «0: 'Set de…' is more than 172 characters long» → [{ valor: 'Set de…', max: 172 }]. */
@@ -169,6 +164,9 @@ export function leerLimitesDeLongitud(mensaje: string | null | undefined): { val
 export function recortarTexto(texto: string, max: number): string {
     let t = String(texto ?? '').trim();
     if (t.length <= max) return t;
+    // En un texto de varias frases es mejor quedarse con las frases completas que caben que cortar una a la mitad.
+    const frases = t.slice(0, max + 1).match(/^[\s\S]*[.!?](?=\s)/)?.[0];
+    if (frases && frases.length >= max * 0.5) return frases;
     for (let tope = max; tope > 0; tope--) {
         let c = t.slice(0, tope);
         // Si no cortamos justo en un límite de palabra, se vuelve a la última coma o espacio.

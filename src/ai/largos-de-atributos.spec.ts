@@ -3,12 +3,13 @@ import { limiteDeLongitud } from '../sync/falabella/falabella-fields';
 import { atributosDeMeli } from './channel-attributes.service';
 
 describe('máximo de caracteres de los atributos', () => {
-    it('Falabella: manda lo aprendido, luego lo declarado y, en un texto de una línea, 172', () => {
+    it('Falabella: 172 como tope, o menos si lo declaró o lo rechazó antes', () => {
         const campo = { name: 'composicion', feedName: 'Composicion', label: 'Composición', inputType: 'textfield' };
         expect(limiteDeLongitud(campo, null)).toBe(172);
-        expect(limiteDeLongitud({ ...campo, maxLength: 255 }, null)).toBe(255);
+        expect(limiteDeLongitud({ ...campo, maxLength: 255 }, null)).toBe(172);
+        expect(limiteDeLongitud({ ...campo, maxLength: 60 }, null)).toBe(60);
         expect(limiteDeLongitud({ ...campo, maxLength: 255 }, { _maxLen: { composicion: 90 } })).toBe(90);
-        expect(limiteDeLongitud({ ...campo, inputType: 'textarea' }, null)).toBeUndefined();
+        expect(limiteDeLongitud({ ...campo, inputType: 'textarea' }, null)).toBe(172);
         expect(limiteDeLongitud({ ...campo, inputType: 'numberfield' }, null)).toBeUndefined();
         expect(limiteDeLongitud({ ...campo, options: ['A'] }, null)).toBeUndefined();
     });

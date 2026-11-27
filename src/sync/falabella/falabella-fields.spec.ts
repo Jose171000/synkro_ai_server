@@ -35,9 +35,17 @@ import { leerLimitesDeLongitud, limiteDeLongitud, recortarTexto } from './falabe
 describe('límites de longitud de atributos de Falabella', () => {
     const largo = 'Set de utensilios de cocina Kasari (espátulas, cucharas y cucharones, cuchara para espaguetis, brocha de cocina, batidor manual, pinzas para alimentos) + soporte organizador';
 
-    it('conoce el límite de «Contenido del paquete» (172)', () => {
+    it('ningún atributo de texto pasa de 172, salvo las descripciones', () => {
         expect(limiteDeLongitud({ name: 'Contenido del paquete', feedName: 'PackageContent' }, null)).toBe(172);
-        expect(limiteDeLongitud({ name: 'Color', feedName: 'Color' }, null)).toBeUndefined();
+        expect(limiteDeLongitud({ name: 'Modo de uso', feedName: 'ModoDeUso', inputType: 'textarea', maxLength: 500 }, null)).toBe(172);
+        expect(limiteDeLongitud({ name: 'Descripción corta', feedName: 'ShortDescription' }, null)).toBeUndefined();
+        expect(limiteDeLongitud({ name: 'Color', options: ['Rojo'] }, null)).toBeUndefined();
+        expect(limiteDeLongitud({ name: 'Peso', inputType: 'numberfield' }, null)).toBeUndefined();
+    });
+
+    it('un texto de varias frases se queda con las que caben completas', () => {
+        const texto = 'Ideal para gatos curiosos que se acercan al caño y simplifica la rutina diaria de alimentación. Permite ubicar el comedero y la fuente en distintos rincones de la casa, según el espacio que tengas disponible.';
+        expect(recortarTexto(texto, 172)).toBe('Ideal para gatos curiosos que se acercan al caño y simplifica la rutina diaria de alimentación.');
     });
 
     it('usa el límite aprendido de un rechazo anterior', () => {
